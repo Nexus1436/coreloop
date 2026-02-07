@@ -33,21 +33,23 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
           }}
           initial={{ scale: 0.2, opacity: 0.1, filter: "blur(4px)", borderRadius: "50%" }}
           animate={{ 
-            scale: [0.2, 1.5, 0.2], // Contracted (0.2) -> Expanded beyond logo (1.5) -> Contracted
-            opacity: [0.35, 0.1, 0.35], // Small=More visible (35%), Large=Less visible (10%)
-            filter: ["blur(4px)", "blur(32px)", "blur(4px)"], // Blur increases with expansion
+            scale: [0.2, 0.2, 0.2, 1.5, 0.2], // Pause (0.2) -> Reappear -> Expand -> Contract
+            opacity: [0, 0, 0.35, 0.1, 0], // Invisible -> Invisible -> Appear Softly -> Dissipate -> Fade out completely
+            filter: ["blur(4px)", "blur(4px)", "blur(4px)", "blur(32px)", "blur(4px)"], 
             borderRadius: [
-                "40% 60% 45% 55% / 55% 45% 60% 40%", // Irregular start
-                "50%", // Perfect circle at peak expansion
-                "55% 45% 60% 40% / 40% 60% 45% 55%"  // Different irregular end for entropy
+                "50%", // Clean during pause
+                "50%", 
+                "40% 60% 45% 55% / 55% 45% 60% 40%", // Irregular appearance
+                "50%", // Perfect circle at peak
+                "55% 45% 60% 40% / 40% 60% 45% 55%"  // Entropic collapse
             ],
-            rotate: [0, 0, 90] // Subtle rotation adds to the entropy during contraction
+            rotate: [0, 0, 0, 0, 90] 
           }}
           transition={{
             duration: 9.5,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.58, 1] // Inhale ~5.5s, Exhale ~4s
+            times: [0, 0.05, 0.15, 0.6, 1] // Pause (0-5%), Appear (15%), Expand (60%), Contract (100%)
           }}
         />
         
@@ -60,21 +62,23 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
           }}
           initial={{ scale: 0.25, opacity: 0, filter: "blur(8px)", borderRadius: "50%" }}
           animate={{ 
-            scale: [0.25, 1.4, 0.25],
-            opacity: [0.2, 0.05, 0.2],
-            filter: ["blur(8px)", "blur(40px)", "blur(8px)"],
+            scale: [0.25, 0.25, 0.25, 1.4, 0.25],
+            opacity: [0, 0, 0.2, 0.05, 0],
+            filter: ["blur(8px)", "blur(8px)", "blur(8px)", "blur(40px)", "blur(8px)"],
             borderRadius: [
-                "60% 40% 55% 45% / 45% 55% 40% 60%", // Irregular start (offset from layer 1)
-                "50%", // Perfect circle at peak
-                "45% 55% 40% 60% / 60% 40% 55% 45%"  // Irregular end
+                "50%", 
+                "50%",
+                "60% 40% 55% 45% / 45% 55% 40% 60%", 
+                "50%", 
+                "45% 55% 40% 60% / 60% 40% 55% 45%"
             ],
-            rotate: [0, 0, -45] // Counter-rotation
+            rotate: [0, 0, 0, 0, -45] 
           }}
           transition={{
             duration: 9.5,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.58, 1],
+            times: [0, 0.05, 0.15, 0.6, 1],
             delay: 0.1 // Slight offset for organic feel
           }}
         />
