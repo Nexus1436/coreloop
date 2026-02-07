@@ -33,8 +33,11 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
           }}
           initial={{ scale: 0.2, opacity: 0.1, filter: "blur(4px)", borderRadius: "50%" }}
           animate={{ 
-            // Cycle: Full Breath (7.5s)
+            // Cycle: Full Breath (12s)
             // Start (Full Expansion) -> Inhale (Contract) -> Smallest Point -> Exhale (Expand) -> End (Full Expansion)
+            // Inhale: 3.5s / 12s = 0.29
+            // Pause: 0.5s / 12s = 0.04 -> End at 0.33
+            // Exhale: 8s / 12s = 0.67 -> End at 1.0
             
             scale: [0.95, 0.25, 0.25, 0.95], 
             opacity: [0.55, 0.05, 0.05, 0.55], // Visible at full size, Fades to near-zero at center
@@ -48,10 +51,10 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             rotate: [0, 90, 90, 0] 
           }}
           transition={{
-            duration: 7.5,
+            duration: 12,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.5, 0.55, 1] // Inhale takes first half, brief turnaround, Exhale returns
+            times: [0, 0.29, 0.33, 1] // Inhale(3.5s), Pause(0.5s), Exhale(8s)
           }}
         />
         
@@ -76,10 +79,10 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             rotate: [0, -45, -45, 0] 
           }}
           transition={{
-            duration: 7.5,
+            duration: 12,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.5, 0.55, 1],
+            times: [0, 0.29, 0.33, 1],
             delay: 0.1 
           }}
         />
@@ -105,10 +108,10 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             rotate: [0, -45, -45, 0] 
           }}
           transition={{
-            duration: 7.5,
+            duration: 12,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.5, 0.55, 1],
+            times: [0, 0.29, 0.33, 1],
             delay: 0.1 
           }}
         />
