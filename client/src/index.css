@@ -4,11 +4,10 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: 'Inter', sans-serif; /* Switching to Inter for pure neutrality */
+  --font-sans: 'Inter', sans-serif;
   
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
-  --color-subtle: hsl(var(--subtle));
   
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -16,20 +15,15 @@
 }
 
 :root {
-  /* Piano-lacquer black aesthetic */
-  /* True black #000000 or very near it */
+  /* True piano-lacquer black */
   --background: 0 0% 0%; 
   
-  /* Graphite/Charcoal text - Soft contrast */
-  /* #737373 is Neutral-500. #525252 is Neutral-600. */
-  --foreground: 0 0% 40%; 
+  /* Charcoal / graphite text */
+  /* #525252 is Neutral-600. */
+  --foreground: 0 0% 32%; 
   
-  /* Even subtler for inactive elements */
-  --subtle: 0 0% 20%;
-
-  /* No stark white anywhere */
-  --card: 0 0% 3%;
-  --card-foreground: 0 0% 40%;
+  --card: 0 0% 0%;
+  --card-foreground: 0 0% 32%;
   
   --primary: 0 0% 20%;
   --primary-foreground: 0 0% 60%;
@@ -43,22 +37,12 @@
 
 body {
   @apply bg-background text-foreground font-sans antialiased;
-  /* Subtle sheen hint without obvious gradient */
-  background-image: radial-gradient(circle at 50% 50%, #0a0a0a 0%, #000000 60%);
+  /* Pure black, no gradients */
+  background-color: black;
   min-height: 100vh;
 }
 
-/* Custom "Breathing" Animation */
-@keyframes breathe-slow {
-  0%, 100% { opacity: 0.3; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(1.02); }
-}
-
-.animate-breathe-slow {
-  animation: breathe-slow 8s ease-in-out infinite;
-}
-
-/* Remove scrollbars for full immersion */
+/* Remove scrollbars */
 ::-webkit-scrollbar {
   display: none;
 }
