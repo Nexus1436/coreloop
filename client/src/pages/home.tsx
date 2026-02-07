@@ -96,13 +96,13 @@ export default function Home() {
         {showTypeOption && mode === 'voice' && (
           <motion.div
             initial={{ opacity: 0 }}
-            animate={{ opacity: 0.7 }}
+            animate={{ opacity: 0.85 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 1.5, ease: "easeInOut" }}
             className="absolute bottom-12 md:bottom-16 pointer-events-auto"
             onClick={handleTextMode}
           >
-            <p className="text-sm font-light text-[#525252] hover:text-[#737373] transition-colors duration-300">
+            <p className="text-lg font-medium text-[#858585] leading-relaxed hover:text-[#a3a3a3] transition-colors duration-300">
               Prefer typing?
             </p>
           </motion.div>
