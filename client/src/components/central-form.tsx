@@ -38,10 +38,10 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             filter: ["blur(4px)", "blur(32px)", "blur(4px)"] // Blur increases with expansion
           }}
           transition={{
-            duration: 6.5,
+            duration: 9.5,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.58, 1] // Inhale ~3.8s (58%), Exhale ~2.7s (42%)
+            times: [0, 0.58, 1] // Inhale ~5.5s, Exhale ~4s (approx ratio maintained)
           }}
         />
         
@@ -59,7 +59,7 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             filter: ["blur(8px)", "blur(40px)", "blur(8px)"]
           }}
           transition={{
-            duration: 6.5,
+            duration: 9.5,
             repeat: Infinity,
             ease: "easeInOut",
             times: [0, 0.58, 1],
