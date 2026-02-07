@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 
-export function CentralForm({ isActive = false }: { isActive?: boolean }) {
+export function CentralForm({ isActive = false, isDimmed = false }: { isActive?: boolean; isDimmed?: boolean }) {
   // INTERLOOP — BREATH / PULSE CANONICAL SPEC
   // Core Principle: Pulse represents breath and attention. Biological, non-mechanical.
   
@@ -18,7 +18,10 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
   // - Must not resolve into a clean circle at minimum size.
   
   return (
-    <div className="relative flex items-center justify-center w-[600px] h-[600px] pointer-events-none">
+    <div 
+        className="relative flex items-center justify-center w-[600px] h-[600px] pointer-events-none transition-opacity duration-1000 ease-in-out"
+        style={{ opacity: isDimmed ? 0.3 : 1 }}
+    >
       
       {/* --- LAYER 1: PULSE (BREATH) --- */}
       {/* Exists behind and through the logo. Never clipped. */}
