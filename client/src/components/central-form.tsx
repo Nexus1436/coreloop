@@ -39,23 +39,25 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             // Pause (0.5s): 0.53 -> 0.59
             // Exhale (3.5s): 0.59 -> 1.0
             
-            scale: [0.95, 0.25, 0.25, 0.95], 
-            opacity: [0, 0.60, 0.35, 0.35, 0], // Expanded(0) -> Contracting(0.60) -> Small(0.35) -> Pause(0.35) -> Expanded(0)
-            filter: ["blur(40px)", "blur(20px)", "blur(35px)", "blur(35px)", "blur(40px)"],
+            // Added keyframe at 0.85 (approx 60% of exhale) to hold opacity
+            scale: [0.95, 0.60, 0.25, 0.25, 0.70, 0.95], 
+            opacity: [0, 0.60, 0.35, 0.45, 0.45, 0], // Rise to 0.45 at start of exhale, hold until 0.85
+            filter: ["blur(40px)", "blur(30px)", "blur(20px)", "blur(35px)", "blur(38px)", "blur(40px)"],
             borderRadius: [
                 "45% 55% 40% 60% / 60% 40% 55% 45%", // Dispersed shape
                 "50% 50% 50% 50% / 50% 50% 50% 50%", // Gathering
                 "60% 40% 30% 70% / 50% 60% 30% 40%", // Cloud-like collapse
                 "60% 40% 30% 70% / 50% 60% 30% 40%", // Hold
+                "55% 45% 50% 50% / 50% 55% 45% 50%", // Exhaling shape
                 "45% 55% 40% 60% / 60% 40% 55% 45%"  // Dispersed
             ],
-            rotate: [0, 0, 45, 45, 0] 
+            rotate: [0, 0, 45, 45, 20, 0] 
           }}
           transition={{
             duration: 8.5,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.25, 0.53, 0.59, 1] 
+            times: [0, 0.25, 0.53, 0.59, 0.85, 1] 
           }}
         />
         
@@ -68,23 +70,24 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
           }}
           initial={{ scale: 1.0, opacity: 0, filter: "blur(40px)", borderRadius: "50%" }}
           animate={{ 
-            scale: [1.0, 0.3, 0.3, 1.0],
-            opacity: [0, 0.50, 0.30, 0.30, 0],
-            filter: ["blur(45px)", "blur(25px)", "blur(40px)", "blur(40px)", "blur(45px)"],
+            scale: [1.0, 0.65, 0.3, 0.3, 0.75, 1.0],
+            opacity: [0, 0.50, 0.30, 0.40, 0.40, 0], // Rise to 0.40 and hold
+            filter: ["blur(45px)", "blur(35px)", "blur(25px)", "blur(40px)", "blur(42px)", "blur(45px)"],
             borderRadius: [
                 "55% 45% 60% 40% / 40% 60% 45% 55%", 
                 "45% 55% 45% 55% / 55% 45% 55% 45%",
                 "40% 60% 70% 30% / 60% 30% 70% 40%", 
                 "40% 60% 70% 30% / 60% 30% 70% 40%",
+                "50% 50% 50% 50% / 50% 50% 50% 50%",
                 "55% 45% 60% 40% / 40% 60% 45% 55%"
             ],
-            rotate: [0, 0, -30, -30, 0] 
+            rotate: [0, 0, -30, -30, -15, 0] 
           }}
           transition={{
             duration: 8.5,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.25, 0.53, 0.59, 1],
+            times: [0, 0.25, 0.53, 0.59, 0.85, 1],
             delay: 0.15 
           }}
         />
