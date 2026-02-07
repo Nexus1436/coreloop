@@ -1,0 +1,105 @@
+INTERLOOP — BREATH / PULSE CANONICAL SPEC
+
+Core Principle
+The pulse represents breath and attention, not activity or status.
+It must feel biological, inevitable, and non-mechanical.
+
+⸻
+
+Timing
+	•	Total cycle: 6.5 seconds
+	•	Inhale (expansion): ~3.8s
+	•	Exhale (contraction): ~2.7s
+	•	Easing: slow ease-in, long ease-out
+	•	No sharp peaks, no snapping
+
+⸻
+
+Contraction (Exhale)
+	•	The pulse contracts toward the center until it becomes nearly a point
+	•	Minimum scale: 0.15 – 0.2
+	•	Opacity during contraction:
+	•	Starts very low
+	•	Never exceeds 40%
+	•	The center should feel empty, not solid
+	•	No visible “ball” formation
+
+If it ever looks like a dot, circle, or orb → it’s wrong.
+
+⸻
+
+Expansion (Inhale)
+	•	The pulse expands through and beyond the logo
+	•	Maximum scale: 1.3 – 1.5× the logo diameter
+	•	As it expands:
+	•	Opacity decreases, not increases
+	•	Edges become diffuse
+	•	The pulse should feel like pressure dissipating
+	•	By the time it reaches logo edges:
+	•	Opacity should be < 25%
+	•	Blur should be increased
+	•	Past the logo:
+	•	Pulse fades naturally into black
+	•	No hard boundary
+
+⸻
+
+Opacity Curve (Critical)
+	•	Inverse relationship to size
+	•	Small = slightly visible
+	•	Large = barely visible
+
+Absolutely no moment where:
+	•	Large = opaque
+	•	Small = solid
+
+⸻
+
+Blur / Softness
+	•	Blur increases with expansion
+	•	Blur decreases with contraction
+	•	Blur should never fully disappear
+	•	No glow, shimmer, halo, or neon effects
+
+⸻
+
+Color
+	•	Pulse color: charcoal / graphite
+	•	Base: rgba(58, 58, 58)
+	•	Never pure white
+	•	Never high contrast
+
+⸻
+
+Logo Layer
+	•	Logo is static
+	•	Color: charcoal
+	•	Opacity: ~85–90%
+	•	Position: centered
+	•	The pulse exists behind and through the logo
+	•	The logo must never clip, mask, or suppress the pulse
+
+If removing the logo causes the pulse to change behavior → layering is wrong.
+
+⸻
+
+Intro Text (“I hear you.”)
+	•	Appears centered on first load
+	•	Opacity: soft (≈50–60%)
+	•	Text floats above both pulse and logo
+	•	On first tap:
+	•	Text fades out only
+	•	Pulse and logo remain untouched
+	•	The pulse must never reduce text legibility
+
+⸻
+
+Explicit Failure Conditions
+
+If any of the following happen, the implementation is incorrect:
+	•	The pulse looks like a circle
+	•	The pulse gets more opaque as it expands
+	•	The pulse stops at the logo edge
+	•	The center ever looks filled or solid
+	•	The logo masks or clips the pulse
+	•	The pulse disappears when text fades
