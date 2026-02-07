@@ -80,8 +80,49 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
         />
       </div>
 
+      {/* --- FILTER DEFINITION --- */}
+      {/* SVG Filter for "Beveled Charcoal" Effect */}
+      {/* Creates a matte, pressed-in look with graphite tones and soft inner shadows */}
+      <svg width="0" height="0" className="absolute">
+        <filter id="pressed-charcoal" x="-50%" y="-50%" width="200%" height="200%">
+          
+          {/* 1. Base Alpha Map (Preserves texture) */}
+          <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0" result="alphaMap"/>
+
+          {/* 2. Inner Shadow Construction (For "Pressed" depth) */}
+          <feGaussianBlur in="alphaMap" stdDeviation="1.5" result="blurredAlpha"/>
+          <feOffset in="blurredAlpha" dx="1" dy="2" result="offsetBlurredAlpha"/>
+          
+          {/* Create the inner rim by cutting out the offset blur from the sharp alpha */}
+          <feComposite operator="out" in="alphaMap" in2="offsetBlurredAlpha" result="innerShadowMask"/>
+          
+          {/* Colorize Inner Shadow (Darker Graphite) */}
+          <feFlood flood-color="#2d2d2d" result="shadowColor"/>
+          <feComposite operator="in" in="shadowColor" in2="innerShadowMask" result="innerShadow"/>
+
+          {/* 3. Base Fill (Soft Charcoal #555555) */}
+          <feFlood flood-color="#555555" result="baseColor"/>
+          <feComposite operator="in" in="baseColor" in2="alphaMap" result="flatBase"/>
+
+          {/* 4. Highlight (Subtle bottom-right inner highlight for matte tactility) */}
+          <feOffset in="blurredAlpha" dx="-1" dy="-2" result="offsetHighlight"/>
+          <feComposite operator="out" in="alphaMap" in2="offsetHighlight" result="highlightMask"/>
+          <feFlood flood-color="#6a6a6a" result="highlightColor"/>
+          <feComposite operator="in" in="highlightColor" in2="highlightMask" result="innerHighlight"/>
+
+          {/* 5. Composite Layers */}
+          {/* Base -> Inner Shadow -> Inner Highlight */}
+          <feMerge>
+            <feMergeNode in="flatBase"/>
+            <feMergeNode in="innerShadow"/>
+            <feMergeNode in="innerHighlight"/>
+          </feMerge>
+        </filter>
+      </svg>
+
       {/* --- LAYER 2: LOGO LAYER (STATIC) --- */}
       {/* Static. Charcoal. Opacity ~85-90%. */}
+      {/* Uses the custom SVG filter for the pressed charcoal look. */}
       <div 
         className="relative z-10 w-64 h-64 md:w-80 md:h-80 flex items-center justify-center"
       >
@@ -91,8 +132,8 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
            className="w-full h-full object-contain"
            style={{ 
              opacity: 0.88,
-             filter: "grayscale(100%) brightness(0.8)", 
-             mixBlendMode: "screen" 
+             filter: "url(#pressed-charcoal)",
+             // Removed mixBlendMode and previous filters to rely entirely on the SVG filter
            }} 
          />
       </div>
