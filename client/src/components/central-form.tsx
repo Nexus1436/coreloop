@@ -34,15 +34,18 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
           initial={{ scale: 0.2, opacity: 0.1, filter: "blur(4px)", borderRadius: "50%" }}
           animate={{ 
             // Cycle: Inhale (Contract) -> Pause -> Exhale (Expand)
-            // Times: 0 -> 0.55 (Inhale) -> 0.60 (Pause) -> 1.0 (Exhale)
+            // Total: 8.5s
+            // Inhale (4.5s): 0 -> 0.53
+            // Pause (0.5s): 0.53 -> 0.59
+            // Exhale (3.5s): 0.59 -> 1.0
             
-            scale: [1.5, 0.35, 0.35, 1.5], 
-            opacity: [0, 0.3, 0.05, 0.05, 0], // Start Inhale(0) -> Mid Inhale(0.3) -> End Inhale(0.05) -> Pause(0.05) -> End Exhale(0)
-            filter: ["blur(30px)", "blur(15px)", "blur(25px)", "blur(25px)", "blur(40px)"],
+            scale: [0.95, 0.25, 0.25, 0.95], 
+            opacity: [0, 0.35, 0.1, 0.1, 0], // Expanded(0) -> Contracting(0.35) -> Small(0.1) -> Pause(0.1) -> Expanded(0)
+            filter: ["blur(40px)", "blur(20px)", "blur(35px)", "blur(35px)", "blur(40px)"],
             borderRadius: [
                 "45% 55% 40% 60% / 60% 40% 55% 45%", // Dispersed shape
-                "50% 50% 50% 50% / 50% 50% 50% 50%", // Gathering (Mid-inhale)
-                "60% 40% 30% 70% / 50% 60% 30% 40%", // Cloud-like collapse (End-inhale)
+                "50% 50% 50% 50% / 50% 50% 50% 50%", // Gathering
+                "60% 40% 30% 70% / 50% 60% 30% 40%", // Cloud-like collapse
                 "60% 40% 30% 70% / 50% 60% 30% 40%", // Hold
                 "45% 55% 40% 60% / 60% 40% 55% 45%"  // Dispersed
             ],
@@ -52,7 +55,7 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             duration: 8.5,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.25, 0.55, 0.60, 1] // Keyframes mapped to phases
+            times: [0, 0.25, 0.53, 0.59, 1] 
           }}
         />
         
@@ -63,11 +66,11 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             width: "250px",
             height: "250px",
           }}
-          initial={{ scale: 1.4, opacity: 0, filter: "blur(40px)", borderRadius: "50%" }}
+          initial={{ scale: 1.0, opacity: 0, filter: "blur(40px)", borderRadius: "50%" }}
           animate={{ 
-            scale: [1.4, 0.4, 0.4, 1.4],
-            opacity: [0, 0.2, 0.02, 0.02, 0],
-            filter: ["blur(40px)", "blur(20px)", "blur(30px)", "blur(30px)", "blur(50px)"],
+            scale: [1.0, 0.3, 0.3, 1.0],
+            opacity: [0, 0.25, 0.05, 0.05, 0],
+            filter: ["blur(45px)", "blur(25px)", "blur(40px)", "blur(40px)", "blur(45px)"],
             borderRadius: [
                 "55% 45% 60% 40% / 40% 60% 45% 55%", 
                 "45% 55% 45% 55% / 55% 45% 55% 45%",
@@ -81,7 +84,7 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             duration: 8.5,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.25, 0.55, 0.60, 1],
+            times: [0, 0.25, 0.53, 0.59, 1],
             delay: 0.15 
           }}
         />

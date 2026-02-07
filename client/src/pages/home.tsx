@@ -33,12 +33,12 @@ export default function Home() {
           {!hasStarted && (
             <motion.div
               initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0, transition: { duration: 1.5, ease: "easeOut" } }}
+              animate={{ opacity: 0.75 }}
+              exit={{ opacity: 0, transition: { duration: 0.6, ease: "easeOut" } }}
               transition={{ duration: 2, delay: 0.5 }}
               className="absolute pointer-events-none"
             >
-              <p className="text-sm md:text-base font-medium text-[rgba(58,58,58,1)] tracking-wide text-center">
+              <p className="text-sm md:text-base font-light text-[#EFEFEF] tracking-wide text-center">
                 I hear you.
               </p>
             </motion.div>

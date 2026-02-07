@@ -1,0 +1,74 @@
+PULSE / BREATH TIMING INSTRUCTIONS
+
+Overall rhythm
+	•	Full breath cycle: 8.5 seconds total
+	•	Inhale (contracting): 4.5 seconds
+	•	Pause at smallest point: 0.5 seconds
+	•	Exhale (expanding): 3.5 seconds
+
+Inhale behavior (orb contracting)
+	•	Orb contracts slowly and continuously
+	•	Density increases as it gets smaller
+	•	Structure becomes less defined, not more
+	•	Never becomes a hard-edged circle
+	•	Opacity increases slightly, but stays soft (fog-like)
+	•	At the smallest point:
+	•	Orb briefly nearly disappears (not fully gone)
+	•	No sharp dot, no circle
+
+Exhale behavior (orb expanding)
+	•	Orb expands smoothly to the inner edge of the logo
+	•	As it expands:
+	•	Opacity decreases
+	•	Texture becomes more diffuse
+	•	Edges soften and feather
+	•	Orb should touch the logo boundary but never pass outside it
+	•	Orb fades gently near full expansion, not abruptly
+
+Critical constraints
+	•	Orb is always constrained inside the logo
+	•	Orb never becomes a perfect circle at any size
+	•	No speed changes mid-cycle
+	•	No pulsing acceleration
+	•	Breath > heartbeat (calm, slow, inevitable)
+
+⸻
+
+LOGO OPACITY RULE
+	•	Logo opacity is fixed
+	•	Logo does not change opacity with the pulse
+	•	Logo does not react to orb brightness
+	•	Logo remains constant visual anchor
+
+⸻
+
+“I HEAR YOU” TEXT INSTRUCTIONS
+
+Initial state
+	•	Text appears centered, above or slightly overlapping the orb
+	•	Text color: soft off-white (not pure white)
+	•	Opacity: 70–75%
+	•	Font weight: light / regular (never bold)
+
+Behavior
+	•	Text remains visible during idle breathing
+	•	Text does not pulse
+	•	Text does not animate with the orb
+	•	Text fades out only after first tap
+	•	Fade duration: 600ms
+	•	Ease: gentle ease-out
+	•	Once faded, text does not return unless app is restarted
+
+Readability rule
+	•	Text must remain readable on both phone and desktop
+	•	If contrast drops, increase text opacity slightly — never brighten background
+
+⸻
+
+WHAT NOT TO DO (IMPORTANT)
+	•	Do not sync text to breath
+	•	Do not speed up pulse on interaction
+	•	Do not shrink orb into a dot
+	•	Do not let orb disappear entirely
+	•	Do not let logo brightness change
+	•	Do not add secondary animations
