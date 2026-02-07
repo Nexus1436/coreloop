@@ -61,8 +61,9 @@ export default function Home() {
 
   const handleBackToVoice = () => {
     setMode("voice");
-    setIsActive(true);
-    setShowTypeOption(false);
+    setHasStarted(false);
+    setIsActive(false);
+    setShowTypeOption(true);
   };
 
   if (mode === "text") {
@@ -89,13 +90,13 @@ export default function Home() {
           {!hasStarted && (
             <motion.div
               initial={{ opacity: 0 }}
-              animate={{ opacity: 0.75 }}
+              animate={{ opacity: 0.65 }}
               exit={{ opacity: 0, transition: { duration: 0.6, ease: "easeOut" } }}
-              transition={{ duration: 2, delay: 0.5 }}
+              transition={{ duration: 1.2 }}
               className="absolute pointer-events-none"
             >
-              <p className="text-sm md:text-base font-light text-[#EFEFEF] tracking-wide text-center">
-                I hear you.
+              <p className="text-sm md:text-base font-light text-[#b0b0b0] tracking-wide text-center">
+                Press here
               </p>
             </motion.div>
           )}
