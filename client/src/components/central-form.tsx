@@ -40,7 +40,7 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
             // Exhale (3.5s): 0.59 -> 1.0
             
             scale: [0.95, 0.25, 0.25, 0.95], 
-            opacity: [0, 0.35, 0.1, 0.1, 0], // Expanded(0) -> Contracting(0.35) -> Small(0.1) -> Pause(0.1) -> Expanded(0)
+            opacity: [0, 0.60, 0.35, 0.35, 0], // Expanded(0) -> Contracting(0.60) -> Small(0.35) -> Pause(0.35) -> Expanded(0)
             filter: ["blur(40px)", "blur(20px)", "blur(35px)", "blur(35px)", "blur(40px)"],
             borderRadius: [
                 "45% 55% 40% 60% / 60% 40% 55% 45%", // Dispersed shape
@@ -69,7 +69,7 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
           initial={{ scale: 1.0, opacity: 0, filter: "blur(40px)", borderRadius: "50%" }}
           animate={{ 
             scale: [1.0, 0.3, 0.3, 1.0],
-            opacity: [0, 0.25, 0.05, 0.05, 0],
+            opacity: [0, 0.50, 0.30, 0.30, 0],
             filter: ["blur(45px)", "blur(25px)", "blur(40px)", "blur(40px)", "blur(45px)"],
             borderRadius: [
                 "55% 45% 60% 40% / 40% 60% 45% 55%", 
