@@ -1,0 +1,92 @@
+INTERLOOP — VIEW B (TEXT MODE) INSTRUCTIONS
+
+Purpose
+View B is the text-first interaction mode for Interloop.
+It provides a familiar, readable interface for users who prefer typing or who are in public environments, while preserving the same intelligence, session continuity, and base narrative as View A.
+
+View B does NOT alter the intelligence, base narrative, or conversation logic.
+It is a visual and interaction-layer change only.
+
+Activation
+View B is entered when the user taps “Prefer typing?” from View A.
+The session, memory, and conversation thread remain continuous.
+
+Layout Structure
+
+Top Area
+	•	Display the Interloop logo centered at the top.
+	•	Logo uses the existing charcoal/graphite treatment.
+	•	No pulse animation in View B.
+	•	Background remains piano lacquer black.
+
+Main Conversation Area
+	•	Scrollable message thread.
+	•	Messages appear in a calm, readable format.
+	•	Assistant messages:
+	•	White or near-white text
+	•	Left-aligned
+	•	User messages:
+	•	Slightly dimmer text
+	•	Right-aligned
+	•	No timestamps unless explicitly needed later.
+	•	Conversation history persists when switching between View A and View B.
+
+Input Area (Bottom)
+
+Text Input Box
+	•	Single multiline text box.
+	•	Cursor automatically focused when View B loads.
+	•	Placeholder text:
+“Type what you’re noticing in your body…”
+	•	Pressing Enter sends the message.
+	•	Shift + Enter creates a new line.
+
+Buttons Adjacent to Text Box
+
+Microphone Button
+	•	Icon only (no label).
+	•	Indicates audio input availability.
+	•	For now:
+	•	Button is visible
+	•	Button is inactive or placeholder
+	•	Does not override text input behavior
+
+Speaker Button
+	•	Icon only (no label).
+	•	When tapped:
+	•	Reads the most recent assistant response aloud
+	•	For now:
+	•	Button is visible
+	•	Button may be inactive or placeholder
+
+Behavior Rules
+	•	View B uses the same onboarding sequence defined in the Base Narrative.
+	•	The first onboarding question must still be:
+“What would you like me to call you?”
+	•	Do not skip onboarding steps.
+	•	Ask one question at a time.
+	•	No internal system states or labels should be shown (no “listening,” “processing,” “pattern recognized,” etc.).
+
+Mode Switching
+	•	Switching between View A and View B does not:
+	•	reset the conversation
+	•	restart onboarding
+	•	lose context
+	•	All prior messages remain visible.
+	•	View switching is reversible at any time.
+
+Tone & Pacing
+	•	Responses should feel immediate and calm.
+	•	Avoid long artificial delays.
+	•	No loading spinners unless truly necessary.
+
+Non-Goals
+	•	View B does NOT teach movements.
+	•	View B does NOT provide videos or diagrams.
+	•	View B does NOT explain system mechanics.
+	•	View B does NOT introduce surveys or feedback prompts.
+
+Authority
+All interpretive behavior, response structure, throttling, and resolution rules remain governed exclusively by the Base Narrative file.
+
+View B exists only to change how the conversation is seen and entered — not how it thinks.
