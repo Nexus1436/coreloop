@@ -33,53 +33,56 @@ export function CentralForm({ isActive = false }: { isActive?: boolean }) {
           }}
           initial={{ scale: 0.2, opacity: 0.1, filter: "blur(4px)", borderRadius: "50%" }}
           animate={{ 
-            scale: [0.2, 0.2, 0.2, 1.5, 0.2], // Pause (0.2) -> Reappear -> Expand -> Contract
-            opacity: [0, 0, 0.35, 0.1, 0], // Invisible -> Invisible -> Appear Softly -> Dissipate -> Fade out completely
-            filter: ["blur(4px)", "blur(4px)", "blur(4px)", "blur(32px)", "blur(4px)"], 
+            // Cycle: Inhale (Contract) -> Pause -> Exhale (Expand)
+            // Times: 0 -> 0.55 (Inhale) -> 0.60 (Pause) -> 1.0 (Exhale)
+            
+            scale: [1.5, 0.35, 0.35, 1.5], 
+            opacity: [0, 0.3, 0.05, 0.05, 0], // Start Inhale(0) -> Mid Inhale(0.3) -> End Inhale(0.05) -> Pause(0.05) -> End Exhale(0)
+            filter: ["blur(30px)", "blur(15px)", "blur(25px)", "blur(25px)", "blur(40px)"],
             borderRadius: [
-                "50%", // Clean during pause
-                "50%", 
-                "40% 60% 45% 55% / 55% 45% 60% 40%", // Irregular appearance
-                "50%", // Perfect circle at peak
-                "55% 45% 60% 40% / 40% 60% 45% 55%"  // Entropic collapse
+                "45% 55% 40% 60% / 60% 40% 55% 45%", // Dispersed shape
+                "50% 50% 50% 50% / 50% 50% 50% 50%", // Gathering (Mid-inhale)
+                "60% 40% 30% 70% / 50% 60% 30% 40%", // Cloud-like collapse (End-inhale)
+                "60% 40% 30% 70% / 50% 60% 30% 40%", // Hold
+                "45% 55% 40% 60% / 60% 40% 55% 45%"  // Dispersed
             ],
-            rotate: [0, 0, 0, 0, 90] 
+            rotate: [0, 0, 45, 45, 0] 
           }}
           transition={{
-            duration: 9.5,
+            duration: 8.5,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.05, 0.15, 0.6, 1] // Pause (0-5%), Appear (15%), Expand (60%), Contract (100%)
+            times: [0, 0.25, 0.55, 0.60, 1] // Keyframes mapped to phases
           }}
         />
         
-        {/* Secondary Diffusion Layer - To ensure no "ball" look and softer edges */}
+        {/* Secondary Diffusion Layer - Adds complexity and entropy */}
         <motion.div
           className="absolute bg-[rgba(58,58,58,1)]"
           style={{ 
             width: "250px",
             height: "250px",
           }}
-          initial={{ scale: 0.25, opacity: 0, filter: "blur(8px)", borderRadius: "50%" }}
+          initial={{ scale: 1.4, opacity: 0, filter: "blur(40px)", borderRadius: "50%" }}
           animate={{ 
-            scale: [0.25, 0.25, 0.25, 1.4, 0.25],
-            opacity: [0, 0, 0.2, 0.05, 0],
-            filter: ["blur(8px)", "blur(8px)", "blur(8px)", "blur(40px)", "blur(8px)"],
+            scale: [1.4, 0.4, 0.4, 1.4],
+            opacity: [0, 0.2, 0.02, 0.02, 0],
+            filter: ["blur(40px)", "blur(20px)", "blur(30px)", "blur(30px)", "blur(50px)"],
             borderRadius: [
-                "50%", 
-                "50%",
-                "60% 40% 55% 45% / 45% 55% 40% 60%", 
-                "50%", 
-                "45% 55% 40% 60% / 60% 40% 55% 45%"
+                "55% 45% 60% 40% / 40% 60% 45% 55%", 
+                "45% 55% 45% 55% / 55% 45% 55% 45%",
+                "40% 60% 70% 30% / 60% 30% 70% 40%", 
+                "40% 60% 70% 30% / 60% 30% 70% 40%",
+                "55% 45% 60% 40% / 40% 60% 45% 55%"
             ],
-            rotate: [0, 0, 0, 0, -45] 
+            rotate: [0, 0, -30, -30, 0] 
           }}
           transition={{
-            duration: 9.5,
+            duration: 8.5,
             repeat: Infinity,
             ease: "easeInOut",
-            times: [0, 0.05, 0.15, 0.6, 1],
-            delay: 0.1 // Slight offset for organic feel
+            times: [0, 0.25, 0.55, 0.60, 1],
+            delay: 0.15 
           }}
         />
       </div>
