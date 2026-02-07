@@ -4,10 +4,16 @@ import { CentralForm } from "@/components/central-form";
 
 export default function Home() {
   const [hasStarted, setHasStarted] = useState(false);
+  const [isActive, setIsActive] = useState(false);
 
   const handleInteraction = () => {
     if (!hasStarted) {
       setHasStarted(true);
+      // First tap activates "listening/recording" state for the orb
+      setIsActive(true);
+    } else {
+      // Toggle active state for demo purposes (or keep it active if it's a listening session)
+      setIsActive(!isActive);
     }
   };
 
@@ -17,10 +23,12 @@ export default function Home() {
       onClick={handleInteraction}
     >
       {/* Central Focal Element (Logo + Pulse) - Always visible */}
+      {/* Passing active state to control breath intensity */}
       <div className="flex-1 flex flex-col items-center justify-center relative w-full">
-        <CentralForm />
+        <CentralForm isActive={isActive} />
 
         {/* "I hear you." - Initial state only */}
+        {/* Same charcoal tone as pulse: rgba(58,58,58) */}
         <AnimatePresence>
           {!hasStarted && (
             <motion.div
@@ -30,7 +38,7 @@ export default function Home() {
               transition={{ duration: 2, delay: 0.5 }}
               className="absolute pointer-events-none"
             >
-              <p className="text-sm md:text-base font-medium text-[#525252] tracking-wide text-center">
+              <p className="text-sm md:text-base font-medium text-[rgba(58,58,58,1)] tracking-wide text-center">
                 I hear you.
               </p>
             </motion.div>
