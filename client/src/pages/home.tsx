@@ -42,92 +42,106 @@ export default function Home() {
     return conv.id;
   }, [conversationId]);
 
-  const startRecording = useCallback(async () => {
-    setIsRecording(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-      mediaRecorderRef.current = recorder;
-      chunksRef.current = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      recorder.start(100);
-    } catch (err) {
-      console.error("Microphone access denied:", err);
-      setIsRecording(false);
-    }
-  }, []);
-
-  const stopRecordingAndSend = useCallback(async () => {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state !== "recording") return;
-
-    const blob = await new Promise<Blob>((resolve) => {
-      recorder.onstop = () => {
-        const b = new Blob(chunksRef.current, { type: "audio/webm" });
-        recorder.stream.getTracks().forEach((t) => t.stop());
-        resolve(b);
-      };
-      recorder.stop();
-    });
-
-    setIsRecording(false);
-    setIsProcessing(true);
-
-    try {
-      const convId = await ensureConversation();
-
-      let assistantText = "";
-      const assistantMsgId = nextId();
-
-      await sendVoiceMessage(convId, blob, {
-        onUserTranscript: (text) => {
-          setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
-        },
-        onTranscript: (chunk) => {
-          assistantText += chunk;
-          setMessages((prev) => {
-            const existing = prev.find((m) => m.id === assistantMsgId);
-            if (existing) {
-              return prev.map((m) => m.id === assistantMsgId ? { ...m, text: assistantText } : m);
-            }
-            return [...prev, { id: assistantMsgId, role: "assistant", text: assistantText }];
-          });
-        },
-        onDone: async (transcript) => {
-          if (!transcript || !transcript.trim()) return;
-          await playback.init();
-          playback.clear();
-          await streamTTS(transcript, (audioChunk) => {
-            playback.pushAudio(audioChunk);
-          });
-          playback.signalComplete();
-        },
-      });
-    } catch (err) {
-      console.error("Voice message error:", err);
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [ensureConversation, playback]);
-
-  const handleScreenTap = useCallback(async () => {
+  const handleScreenTap = async () => {
     if (!hasPressed) {
       setHasPressed(true);
+      setIsRecording(true);
+
+      const micPromise = navigator.mediaDevices.getUserMedia({ audio: true });
+
+      micPromise.then((stream) => {
+        const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+        mediaRecorderRef.current = recorder;
+        chunksRef.current = [];
+
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunksRef.current.push(e.data);
+        };
+
+        recorder.start(100);
+      }).catch((err) => {
+        console.error("Microphone access denied:", err);
+        setIsRecording(false);
+        setHasPressed(false);
+      });
+
       return;
     }
 
     if (isProcessing) return;
 
     if (isRecording) {
-      await stopRecordingAndSend();
+      const recorder = mediaRecorderRef.current;
+      if (!recorder || recorder.state !== "recording") return;
+
+      const blob = await new Promise<Blob>((resolve) => {
+        recorder.onstop = () => {
+          const b = new Blob(chunksRef.current, { type: "audio/webm" });
+          recorder.stream.getTracks().forEach((t) => t.stop());
+          resolve(b);
+        };
+        recorder.stop();
+      });
+
+      setIsRecording(false);
+      setIsProcessing(true);
+
+      try {
+        const convId = await ensureConversation();
+
+        let assistantText = "";
+        const assistantMsgId = nextId();
+
+        await sendVoiceMessage(convId, blob, {
+          onUserTranscript: (text) => {
+            setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
+          },
+          onTranscript: (chunk) => {
+            assistantText += chunk;
+            setMessages((prev) => {
+              const existing = prev.find((m) => m.id === assistantMsgId);
+              if (existing) {
+                return prev.map((m) => m.id === assistantMsgId ? { ...m, text: assistantText } : m);
+              }
+              return [...prev, { id: assistantMsgId, role: "assistant", text: assistantText }];
+            });
+          },
+          onDone: async (transcript) => {
+            if (!transcript || !transcript.trim()) return;
+            await playback.init();
+            playback.clear();
+            await streamTTS(transcript, (audioChunk) => {
+              playback.pushAudio(audioChunk);
+            });
+            playback.signalComplete();
+          },
+        });
+      } catch (err) {
+        console.error("Voice message error:", err);
+      } finally {
+        setIsProcessing(false);
+      }
     } else {
-      await startRecording();
+      setIsRecording(true);
+
+      const micPromise = navigator.mediaDevices.getUserMedia({ audio: true });
+
+      micPromise.then((stream) => {
+        const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+        mediaRecorderRef.current = recorder;
+        chunksRef.current = [];
+
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunksRef.current.push(e.data);
+        };
+
+        recorder.start(100);
+      }).catch((err) => {
+        console.error("Microphone access denied:", err);
+        setIsRecording(false);
+      });
     }
-  }, [hasPressed, isRecording, isProcessing, startRecording, stopRecordingAndSend]);
+  };
 
   const handleSwitchToB = (e: React.MouseEvent) => {
     e.stopPropagation();
