@@ -1,7 +1,15 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CentralForm } from "@/components/central-form";
-import { ChatView, type Message } from "@/components/chat-view";
+import { ChatView } from "@/components/chat-view";
+import { createConversation, sendVoiceMessage, streamTTS } from "@/lib/api";
+import { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
+
+export interface ChatMessage {
+  id: string;
+  role: "assistant" | "user";
+  text: string;
+}
 
 let messageCounter = 0;
 function nextId() {
@@ -11,8 +19,14 @@ function nextId() {
 export default function Home() {
   const [mode, setMode] = useState<"A" | "B">("A");
   const [hasPressed, setHasPressed] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversationId, setConversationId] = useState<number | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [replayText, setReplayText] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const playback = useAudioPlayback();
 
   const lastResponse = useMemo(() => {
     const assistantMessages = messages.filter((m) => m.role === "assistant");
@@ -21,11 +35,97 @@ export default function Home() {
       : null;
   }, [messages]);
 
-  const handleScreenTap = () => {
+  const ensureConversation = useCallback(async () => {
+    if (conversationId) return conversationId;
+    const conv = await createConversation();
+    setConversationId(conv.id);
+    return conv.id;
+  }, [conversationId]);
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+      mediaRecorderRef.current = recorder;
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.start(100);
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+    }
+  }, []);
+
+  const stopRecordingAndSend = useCallback(async () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== "recording") return;
+
+    const blob = await new Promise<Blob>((resolve) => {
+      recorder.onstop = () => {
+        const b = new Blob(chunksRef.current, { type: "audio/webm" });
+        recorder.stream.getTracks().forEach((t) => t.stop());
+        resolve(b);
+      };
+      recorder.stop();
+    });
+
+    setIsRecording(false);
+    setIsProcessing(true);
+
+    try {
+      const convId = await ensureConversation();
+
+      let assistantText = "";
+      const assistantMsgId = nextId();
+
+      await sendVoiceMessage(convId, blob, {
+        onUserTranscript: (text) => {
+          setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
+        },
+        onTranscript: (chunk) => {
+          assistantText += chunk;
+          setMessages((prev) => {
+            const existing = prev.find((m) => m.id === assistantMsgId);
+            if (existing) {
+              return prev.map((m) => m.id === assistantMsgId ? { ...m, text: assistantText } : m);
+            }
+            return [...prev, { id: assistantMsgId, role: "assistant", text: assistantText }];
+          });
+        },
+        onDone: async (transcript) => {
+          await playback.init();
+          playback.clear();
+          await streamTTS(transcript, (audioChunk) => {
+            playback.pushAudio(audioChunk);
+          });
+          playback.signalComplete();
+        },
+      });
+    } catch (err) {
+      console.error("Voice message error:", err);
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [ensureConversation, playback]);
+
+  const handleScreenTap = useCallback(async () => {
     if (!hasPressed) {
       setHasPressed(true);
+      return;
     }
-  };
+
+    if (isProcessing) return;
+
+    if (isRecording) {
+      await stopRecordingAndSend();
+    } else {
+      await startRecording();
+    }
+  }, [hasPressed, isRecording, isProcessing, startRecording, stopRecordingAndSend]);
 
   const handleSwitchToB = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -37,22 +137,29 @@ export default function Home() {
     setHasPressed(false);
   };
 
-  const handleSendMessage = (text: string) => {
-    setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
-  };
-
-  const handleRepeatResponse = (e: React.MouseEvent) => {
+  const handleRepeatResponse = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!lastResponse) return;
+
     setReplayText(lastResponse);
+
+    await playback.init();
+    playback.clear();
+    await streamTTS(lastResponse, (audioChunk) => {
+      playback.pushAudio(audioChunk);
+    });
+    playback.signalComplete();
+
     setTimeout(() => setReplayText(null), 4000);
-  };
+  }, [lastResponse, playback]);
 
   if (mode === "B") {
     return (
       <ChatView
         messages={messages}
-        onSendMessage={handleSendMessage}
+        setMessages={setMessages}
+        conversationId={conversationId}
+        ensureConversation={ensureConversation}
         onBack={handleSwitchToA}
       />
     );
@@ -77,6 +184,22 @@ export default function Home() {
             >
               <p className="text-sm md:text-base font-light text-[#b0b0b0] tracking-wide text-center">
                 Press here
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {isRecording && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.6 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.4 }}
+              className="absolute pointer-events-none mt-48"
+            >
+              <p className="text-xs font-light text-[#858585] tracking-widest uppercase">
+                listening
               </p>
             </motion.div>
           )}

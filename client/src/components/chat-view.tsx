@@ -1,23 +1,29 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, type Dispatch, type SetStateAction } from "react";
 import { motion } from "framer-motion";
 import { Mic, Volume2 } from "lucide-react";
-
-export interface Message {
-  id: string;
-  role: "assistant" | "user";
-  text: string;
-}
+import { type ChatMessage } from "@/pages/home";
+import { sendMessage, streamTTS } from "@/lib/api";
+import { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
 
 interface ChatViewProps {
-  messages: Message[];
-  onSendMessage: (text: string) => void;
+  messages: ChatMessage[];
+  setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
+  conversationId: number | null;
+  ensureConversation: () => Promise<number>;
   onBack?: () => void;
 }
 
-export function ChatView({ messages, onSendMessage, onBack }: ChatViewProps) {
+let msgCounter = 1000;
+function nextChatId() {
+  return String(++msgCounter);
+}
+
+export function ChatView({ messages, setMessages, conversationId, ensureConversation, onBack }: ChatViewProps) {
   const [inputValue, setInputValue] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const playback = useAudioPlayback();
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -31,13 +37,37 @@ export function ChatView({ messages, onSendMessage, onBack }: ChatViewProps) {
     textareaRef.current?.focus();
   }, []);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const trimmed = inputValue.trim();
-    if (!trimmed) return;
-    onSendMessage(trimmed);
+    if (!trimmed || isStreaming) return;
+
     setInputValue("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+
+    const userMsgId = nextChatId();
+    setMessages((prev) => [...prev, { id: userMsgId, role: "user", text: trimmed }]);
+
+    setIsStreaming(true);
+    const assistantMsgId = nextChatId();
+    let assistantText = "";
+
+    try {
+      const convId = await ensureConversation();
+
+      await sendMessage(convId, trimmed, (chunk) => {
+        assistantText += chunk;
+        setMessages((prev) => {
+          const existing = prev.find((m) => m.id === assistantMsgId);
+          if (existing) {
+            return prev.map((m) => m.id === assistantMsgId ? { ...m, text: assistantText } : m);
+          }
+          return [...prev, { id: assistantMsgId, role: "assistant", text: assistantText }];
+        });
+      });
+    } catch (err) {
+      console.error("Send error:", err);
+    } finally {
+      setIsStreaming(false);
     }
   };
 
@@ -54,6 +84,18 @@ export function ChatView({ messages, onSendMessage, onBack }: ChatViewProps) {
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
   };
+
+  const handleReadAloud = useCallback(async () => {
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+
+    await playback.init();
+    playback.clear();
+    await streamTTS(lastAssistant.text, (audioChunk) => {
+      playback.pushAudio(audioChunk);
+    });
+    playback.signalComplete();
+  }, [messages, playback]);
 
   return (
     <motion.div
@@ -84,7 +126,7 @@ export function ChatView({ messages, onSendMessage, onBack }: ChatViewProps) {
               data-testid={`message-${msg.role}-${msg.id}`}
             >
               <p
-                className={`text-base md:text-lg font-light leading-relaxed max-w-[85%] ${
+                className={`text-base md:text-lg font-light leading-relaxed max-w-[85%] whitespace-pre-wrap ${
                   msg.role === "assistant"
                     ? "text-[#e0e0e0]"
                     : "text-[#999999]"
@@ -125,10 +167,11 @@ export function ChatView({ messages, onSendMessage, onBack }: ChatViewProps) {
           </div>
 
           <button
-            className="flex-shrink-0 p-2.5 rounded-full transition-colors duration-200"
+            className="flex-shrink-0 p-2.5 rounded-full transition-colors duration-200 hover:text-[#858585]"
             style={{ color: "#555555" }}
-            disabled
-            aria-label="Read aloud (coming soon)"
+            onClick={handleReadAloud}
+            disabled={!messages.some((m) => m.role === "assistant")}
+            aria-label="Read aloud"
             data-testid="button-speaker"
           >
             <Volume2 size={20} />
