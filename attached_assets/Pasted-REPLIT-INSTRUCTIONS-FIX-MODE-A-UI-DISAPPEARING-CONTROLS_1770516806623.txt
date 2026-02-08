@@ -1,0 +1,93 @@
+REPLIT INSTRUCTIONS — FIX MODE A UI DISAPPEARING CONTROLS
+
+PROBLEM
+When switching from Mode B (Typing) back to Mode A (Listening), the bottom controls disappear. Specifically:
+	•	“Prefer typing?” disappears
+	•	“Repeat response” disappears
+	•	Mode A loads with only the logo and pulse
+
+This is incorrect behavior.
+
+CORE RULE
+Mode A must always render its full UI whenever it is active, regardless of how the user arrived there.
+
+MODE A — REQUIRED ELEMENTS (ALWAYS PRESENT)
+
+Whenever Mode A is active, the following elements must be visible:
+
+CENTER:
+	•	Interloop logo
+	•	Pulse animation
+	•	Center text: “Press here”
+
+BOTTOM LEFT:
+	•	Text: “Prefer typing?”
+	•	Visible
+	•	Clickable
+	•	Same opacity as originally designed
+
+BOTTOM RIGHT:
+	•	Text: “Repeat response”
+	•	Visible only if at least one response exists
+	•	Disabled or hidden if no response exists
+
+These elements must appear:
+	•	On first load
+	•	After switching from Mode B to Mode A
+	•	After repeating a response
+	•	After idle time
+	•	After pulse cycles
+	•	After any interaction
+
+MODE SWITCHING RULES (CRITICAL)
+
+Switching modes is a VIEW CHANGE, not a RESET.
+
+When the user taps “Prefer speaking?” in Mode B:
+	1.	Switch to Mode A
+	2.	Re-render the full Mode A layout
+	3.	Do NOT clear UI state
+	4.	Do NOT hide bottom controls
+	5.	Do NOT depend on animation state for visibility
+
+STATE MANAGEMENT RULE
+
+There must be an explicit mode state:
+
+currentMode = “A” or “B”
+
+Rendering logic must follow this rule:
+
+If currentMode is A:
+	•	Render full Mode A layout including controls
+
+If currentMode is B:
+	•	Render full Mode B layout including controls
+
+Do not conditionally hide controls based on:
+	•	Pulse animation
+	•	First tap
+	•	Previous mode
+	•	Whether text faded earlier
+	•	Idle timing
+
+RENDERING RULE (IMPORTANT)
+
+When switching modes:
+	•	Tear down the previous mode’s UI
+	•	Render the target mode’s UI from scratch
+
+Do NOT partially update or reuse the previous DOM.
+
+FAILURE CONDITIONS (DO NOT ALLOW)
+
+The implementation is incorrect if:
+	•	Mode A shows only the logo and pulse
+	•	Bottom controls vanish after a mode switch
+	•	Controls appear only on first load
+	•	Controls depend on pulse timing
+	•	Controls disappear after “Repeat response”
+
+ONE-SENTENCE DIRECTIVE FOR THE AGENT
+
+Mode A must always re-render its complete UI (logo, pulse, “Press here”, “Prefer typing?”, and “Repeat response”) whenever it becomes active, regardless of prior state.

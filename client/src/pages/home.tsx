@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CentralForm } from "@/components/central-form";
 import { ChatView, type Message } from "@/components/chat-view";
@@ -9,10 +9,8 @@ function nextId() {
 }
 
 export default function Home() {
-  const [hasStarted, setHasStarted] = useState(false);
-  const [isActive, setIsActive] = useState(false);
-  const [mode, setMode] = useState<"voice" | "text">("voice");
-  const [showTypeOption, setShowTypeOption] = useState(false);
+  const [mode, setMode] = useState<"A" | "B">("A");
+  const [hasPressed, setHasPressed] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [replayText, setReplayText] = useState<string | null>(null);
 
@@ -23,42 +21,24 @@ export default function Home() {
       : null;
   }, [messages]);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowTypeOption(true);
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const handleInteraction = () => {
-    if (mode === "text") return;
-
-    if (!hasStarted) {
-      setHasStarted(true);
-      setIsActive(true);
-      setShowTypeOption(false);
-    } else {
-      setIsActive(!isActive);
+  const handleScreenTap = () => {
+    if (!hasPressed) {
+      setHasPressed(true);
     }
   };
 
-  const handleTextMode = (e: React.MouseEvent) => {
+  const handleSwitchToB = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setMode("text");
-    setIsActive(false);
-    setHasStarted(true);
-    setShowTypeOption(false);
+    setMode("B");
+  };
+
+  const handleSwitchToA = () => {
+    setMode("A");
+    setHasPressed(false);
   };
 
   const handleSendMessage = (text: string) => {
     setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
-  };
-
-  const handleBackToVoice = () => {
-    setMode("voice");
-    setHasStarted(false);
-    setIsActive(false);
-    setShowTypeOption(true);
   };
 
   const handleRepeatResponse = (e: React.MouseEvent) => {
@@ -68,12 +48,12 @@ export default function Home() {
     setTimeout(() => setReplayText(null), 4000);
   };
 
-  if (mode === "text") {
+  if (mode === "B") {
     return (
       <ChatView
         messages={messages}
         onSendMessage={handleSendMessage}
-        onBack={handleBackToVoice}
+        onBack={handleSwitchToA}
       />
     );
   }
@@ -81,15 +61,13 @@ export default function Home() {
   return (
     <div
       className="min-h-screen w-full flex flex-col items-center justify-center overflow-hidden cursor-pointer select-none bg-black relative"
-      onClick={handleInteraction}
+      onClick={handleScreenTap}
     >
-      <div
-        className="flex-1 flex flex-col items-center justify-center relative w-full transition-all duration-1000"
-      >
-        <CentralForm isActive={isActive} isDimmed={false} />
+      <div className="flex-1 flex flex-col items-center justify-center relative w-full">
+        <CentralForm isActive={hasPressed} isDimmed={false} />
 
         <AnimatePresence>
-          {!hasStarted && (
+          {!hasPressed && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 0.65 }}
@@ -122,27 +100,20 @@ export default function Home() {
       </div>
 
       <div className="absolute bottom-12 md:bottom-16 left-0 right-0 flex justify-between items-baseline px-8 md:px-12 pointer-events-none">
-        <AnimatePresence>
-          {showTypeOption && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 0.85 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 1.5, ease: "easeInOut" }}
-              className="pointer-events-auto"
-              onClick={handleTextMode}
-            >
-              <p
-                className="text-lg font-medium text-[#858585] leading-relaxed hover:text-[#a3a3a3] transition-colors duration-300"
-                data-testid="link-prefer-typing"
-              >
-                Prefer typing?
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <div
+          className="pointer-events-auto"
+          onClick={handleSwitchToB}
+        >
+          <p
+            className="text-lg font-medium text-[#858585] leading-relaxed hover:text-[#a3a3a3] transition-colors duration-300"
+            style={{ opacity: 0.85 }}
+            data-testid="link-prefer-typing"
+          >
+            Prefer typing?
+          </p>
+        </div>
 
-        {lastResponse && (
+        {lastResponse ? (
           <div
             className="pointer-events-auto"
             onClick={handleRepeatResponse}
@@ -155,6 +126,8 @@ export default function Home() {
               Repeat response
             </p>
           </div>
+        ) : (
+          <div />
         )}
       </div>
     </div>
