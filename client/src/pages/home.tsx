@@ -189,6 +189,8 @@ export default function Home() {
         conversationId={conversationId}
         ensureConversation={ensureConversation}
         onBack={handleSwitchToA}
+        playback={playback}
+        lastAudioChunksRef={lastAudioChunksRef}
       />
     );
   }

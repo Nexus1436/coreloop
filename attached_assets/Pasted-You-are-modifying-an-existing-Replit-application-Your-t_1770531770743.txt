@@ -1,0 +1,70 @@
+You are modifying an existing Replit application.
+
+Your task is to fix two specific issues in the app:
+	1.	The microphone button in Mode B (Preferred Typing view) does not activate the microphone or request permissions.
+	2.	There is an excessive delay (5–15 seconds) before audio playback when:
+	•	a response finishes after listening
+	•	the “Repeat response” control is pressed
+
+You are NOT working on Mode A listening. Mode A already works correctly.
+
+You must apply fixes only where necessary and must NOT redesign UI or add new features.
+
+REQUIRED FIXES:
+
+FIX 1 — MODE B MICROPHONE (CRITICAL)
+The microphone icon next to the “Type here” input in Mode B must:
+
+• Immediately request microphone permissions when tapped
+• Start recording without requiring a second tap
+• Use the same audio recording pipeline as Mode A
+• Send recorded audio to the existing speech-to-text endpoint
+• Append the resulting transcript as a user message in the shared conversation state
+
+Ensure the Mode B mic is not a dummy control. It must actively call the audio recording logic.
+
+If Mode B uses a separate handler or component, it must be wired to the same recording/start/stop logic used in Mode A.
+
+FIX 2 — AUDIO RESPONSE DELAY (CRITICAL)
+The delay before audio playback must be reduced to near-instant.
+
+Specifically:
+
+• Audio playback should begin immediately once text-to-speech audio data is available
+• Do NOT wait for UI transitions, mode changes, or state resets before playback
+• “Repeat response” must replay cached audio immediately without re-requesting TTS
+• Cache the last generated audio buffer and reuse it for repeat playback
+
+If audio is being re-fetched or regenerated on repeat, stop doing that.
+
+PERMISSION REQUIREMENTS:
+
+• The app must explicitly request microphone permission on first use in Mode B
+• Do not rely on permissions granted in Mode A carrying over automatically
+• If permission is denied, fail gracefully without freezing the UI
+
+STATE REQUIREMENTS:
+
+• User messages created via Mode B microphone must appear when switching back to Mode A
+• Assistant responses must remain consistent across modes
+• No messages should disappear when switching modes
+
+DO NOT:
+
+• Add onboarding prompts
+• Add new narration or personality text
+• Reference time, date, time of day, or location
+• Add logging, analytics, or debug UI
+• Change visual design
+
+EXPECTED RESULT AFTER FIXES:
+
+• Mode B mic works on first tap and records immediately
+• Microphone permission prompt appears correctly
+• Audio playback delay is reduced to ~1 second or less
+• “Repeat response” plays instantly
+• Mode A and Mode B remain in sync
+• App feels responsive and alive
+
+THIS IS A FIX PASS, NOT A REFACTOR.
+MAKE THE MINIMUM CHANGES REQUIRED.

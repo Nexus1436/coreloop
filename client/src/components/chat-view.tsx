@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect, useCallback, type Dispatch, type SetStateAction } from "react";
+import { useState, useRef, useEffect, useCallback, type Dispatch, type SetStateAction, type MutableRefObject } from "react";
 import { motion } from "framer-motion";
-import { Mic, Volume2 } from "lucide-react";
+import { Mic, Square, Volume2 } from "lucide-react";
 import { type ChatMessage } from "@/pages/home";
-import { sendMessage, streamTTS } from "@/lib/api";
-import { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
+import { sendMessage, sendVoiceMessage, streamTTS } from "@/lib/api";
+import type { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
 
 interface ChatViewProps {
   messages: ChatMessage[];
@@ -11,6 +11,8 @@ interface ChatViewProps {
   conversationId: number | null;
   ensureConversation: () => Promise<number>;
   onBack?: () => void;
+  playback: ReturnType<typeof useAudioPlayback>;
+  lastAudioChunksRef: MutableRefObject<string[]>;
 }
 
 let msgCounter = 1000;
@@ -18,12 +20,15 @@ function nextChatId() {
   return String(++msgCounter);
 }
 
-export function ChatView({ messages, setMessages, conversationId, ensureConversation, onBack }: ChatViewProps) {
+export function ChatView({ messages, setMessages, conversationId, ensureConversation, onBack, playback, lastAudioChunksRef }: ChatViewProps) {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isMicRecording, setIsMicRecording] = useState(false);
+  const [isMicProcessing, setIsMicProcessing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const playback = useAudioPlayback();
+  const micRecorderRef = useRef<MediaRecorder | null>(null);
+  const micChunksRef = useRef<Blob[]>([]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -85,17 +90,94 @@ export function ChatView({ messages, setMessages, conversationId, ensureConversa
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
   };
 
+  const handleMicTap = async () => {
+    if (isMicProcessing) return;
+
+    if (isMicRecording) {
+      const recorder = micRecorderRef.current;
+      if (!recorder || recorder.state !== "recording") return;
+
+      const blob = await new Promise<Blob>((resolve) => {
+        recorder.onstop = () => {
+          const b = new Blob(micChunksRef.current, { type: "audio/webm" });
+          recorder.stream.getTracks().forEach((t) => t.stop());
+          resolve(b);
+        };
+        recorder.stop();
+      });
+
+      setIsMicRecording(false);
+      setIsMicProcessing(true);
+
+      try {
+        const convId = await ensureConversation();
+        const assistantMsgId = nextChatId();
+        let assistantText = "";
+
+        await sendVoiceMessage(convId, blob, {
+          onUserTranscript: (text) => {
+            setMessages((prev) => [...prev, { id: nextChatId(), role: "user", text }]);
+          },
+          onTranscript: (chunk) => {
+            assistantText += chunk;
+            setMessages((prev) => {
+              const existing = prev.find((m) => m.id === assistantMsgId);
+              if (existing) {
+                return prev.map((m) => m.id === assistantMsgId ? { ...m, text: assistantText } : m);
+              }
+              return [...prev, { id: assistantMsgId, role: "assistant", text: assistantText }];
+            });
+          },
+          onDone: async () => {},
+        });
+      } catch (err) {
+        console.error("Voice message error:", err);
+      } finally {
+        setIsMicProcessing(false);
+      }
+    } else {
+      setIsMicRecording(true);
+
+      navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+        const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+        micRecorderRef.current = recorder;
+        micChunksRef.current = [];
+
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) micChunksRef.current.push(e.data);
+        };
+
+        recorder.start(100);
+      }).catch((err) => {
+        console.error("Microphone access denied:", err);
+        setIsMicRecording(false);
+      });
+    }
+  };
+
   const handleReadAloud = useCallback(async () => {
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
     if (!lastAssistant) return;
 
     await playback.init();
     playback.clear();
-    await streamTTS(lastAssistant.text, (audioChunk) => {
-      playback.pushAudio(audioChunk);
-    });
-    playback.signalComplete();
-  }, [messages, playback]);
+
+    const cached = lastAudioChunksRef.current;
+    if (cached.length > 0) {
+      for (const chunk of cached) {
+        playback.pushAudio(chunk);
+      }
+      playback.signalComplete();
+    } else {
+      const audioCache: string[] = [];
+      await streamTTS(lastAssistant.text, (audioChunk) => {
+        audioCache.push(audioChunk);
+        playback.pushAudio(audioChunk);
+      });
+      playback.signalComplete();
+      lastAudioChunksRef.current = audioCache;
+    }
+  }, [messages, playback, lastAudioChunksRef]);
 
   return (
     <motion.div
@@ -143,13 +225,14 @@ export function ChatView({ messages, setMessages, conversationId, ensureConversa
       <div className="border-t border-[#1a1a1a] px-4 md:px-6 py-4">
         <div className="max-w-xl mx-auto flex items-end gap-3">
           <button
-            className="flex-shrink-0 p-2.5 rounded-full transition-colors duration-200"
-            style={{ color: "#555555" }}
-            disabled
-            aria-label="Microphone (coming soon)"
+            className={`flex-shrink-0 p-2.5 rounded-full transition-colors duration-200 ${isMicRecording ? "text-[#e0e0e0]" : "hover:text-[#858585]"}`}
+            style={{ color: isMicRecording ? "#e0e0e0" : "#555555" }}
+            onClick={handleMicTap}
+            disabled={isMicProcessing || isStreaming}
+            aria-label={isMicRecording ? "Stop recording" : "Start recording"}
             data-testid="button-mic"
           >
-            <Mic size={20} />
+            {isMicRecording ? <Square size={20} /> : <Mic size={20} />}
           </button>
 
           <div className="flex-1 relative">
