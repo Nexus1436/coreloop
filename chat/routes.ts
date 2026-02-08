@@ -76,7 +76,7 @@ router.post("/text-to-speech", async (req, res) => {
       },
       body: JSON.stringify({
         model: "gpt-4o-mini-tts",
-        voice: "verse",
+        voice: "narrator",
         input: text,
       }),
     });
