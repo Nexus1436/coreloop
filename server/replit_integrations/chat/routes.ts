@@ -4,38 +4,34 @@ import { chatStorage } from "./storage";
 import fs from "fs";
 import path from "path";
 
-/**
- * OpenAI client
- */
+// -----------------------------------------------------------------------------
+// LOAD BASE NARRATIVE (ONCE, AT SERVER START)
+// -----------------------------------------------------------------------------
+
+const BASE_NARRATIVE_PATH = path.join(
+  __dirname,
+  "INTERLOOP_BASE_NARATIVE.md"
+);
+
+const BASE_NARRATIVE = fs.readFileSync(BASE_NARRATIVE_PATH, "utf-8");
+
+// -----------------------------------------------------------------------------
+// OPENAI CLIENT
+// -----------------------------------------------------------------------------
+
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
-/**
- * Load BASE NARRATIVE once at startup
- * File lives in: /shared/INTERLOOP_BASE_NARRATIVE.MD
- */
-const BASE_NARRATIVE_PATH = path.join(
-  process.cwd(),
-  "shared",
-  "INTERLOOP_BASE_NARRATIVE.MD"
-);
+// -----------------------------------------------------------------------------
+// ROUTES
+// -----------------------------------------------------------------------------
 
-let BASE_NARRATIVE = "";
-try {
-  BASE_NARRATIVE = fs.readFileSync(BASE_NARRATIVE_PATH, "utf-8");
-} catch {
-  BASE_NARRATIVE = "";
-}
-
-/**
- * Register chat routes
- */
 export function registerChatRoutes(app: Express): void {
-  /**
-   * Get all conversations
-   */
+  // ---------------------------------------------------------------------------
+  // GET ALL CONVERSATIONS
+  // ---------------------------------------------------------------------------
   app.get("/api/conversations", async (_req: Request, res: Response) => {
     try {
       const conversations = await chatStorage.getAllConversations();
@@ -45,9 +41,9 @@ export function registerChatRoutes(app: Express): void {
     }
   });
 
-  /**
-   * Get a single conversation + messages
-   */
+  // ---------------------------------------------------------------------------
+  // GET SINGLE CONVERSATION
+  // ---------------------------------------------------------------------------
   app.get("/api/conversations/:id", async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -64,24 +60,24 @@ export function registerChatRoutes(app: Express): void {
     }
   });
 
-  /**
-   * Create a new conversation
-   */
+  // ---------------------------------------------------------------------------
+  // CREATE CONVERSATION
+  // ---------------------------------------------------------------------------
   app.post("/api/conversations", async (req: Request, res: Response) => {
     try {
-      const title: string | undefined = req.body?.title;
-      const conversation = await chatStorage.createConversation(
-        title ?? "New Chat"
-      );
+      const title =
+        typeof req.body?.title === "string" ? req.body.title : "New Chat";
+
+      const conversation = await chatStorage.createConversation(title);
       res.status(201).json(conversation);
     } catch {
       res.status(500).json({ error: "Failed to create conversation" });
     }
   });
 
-  /**
-   * Delete a conversation
-   */
+  // ---------------------------------------------------------------------------
+  // DELETE CONVERSATION
+  // ---------------------------------------------------------------------------
   app.delete("/api/conversations/:id", async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -92,47 +88,49 @@ export function registerChatRoutes(app: Express): void {
     }
   });
 
-  /**
-   * Send message and stream AI response
-   */
+  // ---------------------------------------------------------------------------
+  // SEND MESSAGE + STREAM RESPONSE (BASE NARRATIVE HARD-INJECTED)
+  // ---------------------------------------------------------------------------
   app.post(
     "/api/conversations/:id/messages",
     async (req: Request, res: Response) => {
       try {
         const conversationId = Number(req.params.id);
-        const content: string = req.body?.content ?? "";
+        const content =
+          typeof req.body?.content === "string" ? req.body.content : "";
+
+        if (!content) {
+          return res.status(400).json({ error: "Empty message" });
+        }
 
         // Save user message
         await chatStorage.createMessage(conversationId, "user", content);
 
         // Load conversation history
-        const history = await chatStorage.getMessagesByConversation(
-          conversationId
-        );
+        const storedMessages =
+          await chatStorage.getMessagesByConversation(conversationId);
 
-        /**
-         * Build prompt:
-         * 1. BASE NARRATIVE (system)
-         * 2. Conversation history
-         */
+        // Build messages with BASE NARRATIVE FIRST
         const messages = [
-          ...(BASE_NARRATIVE
-            ? [{ role: "system" as const, content: BASE_NARRATIVE }]
-            : []),
-          ...history.map((m) => ({
+          {
+            role: "system" as const,
+            content: BASE_NARRATIVE,
+          },
+          ...storedMessages.map((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
           })),
         ];
 
-        // SSE headers
+        // SSE HEADERS
         res.setHeader("Content-Type", "text/event-stream");
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("Connection", "keep-alive");
 
-        const stream = await openai.chat.completions.stream({
+        const stream = await openai.chat.completions.create({
           model: "gpt-5.1",
           messages,
+          stream: true,
           max_completion_tokens: 2048,
         });
 
@@ -146,7 +144,7 @@ export function registerChatRoutes(app: Express): void {
           }
         }
 
-        // Save assistant response
+        // Save assistant message
         await chatStorage.createMessage(
           conversationId,
           "assistant",
@@ -156,13 +154,10 @@ export function registerChatRoutes(app: Express): void {
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       } catch {
-        if (res.headersSent) {
-          res.write(
-            `data: ${JSON.stringify({ error: "Failed to send message" })}\n\n`
-          );
-          res.end();
-        } else {
+        if (!res.headersSent) {
           res.status(500).json({ error: "Failed to send message" });
+        } else {
+          res.end();
         }
       }
     }
