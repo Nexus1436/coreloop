@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CentralForm } from "@/components/central-form";
 import { ChatView, type Message } from "@/components/chat-view";
@@ -30,18 +30,6 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, []);
 
-  const seedOnboarding = useCallback(() => {
-    if (messages.length === 0) {
-      setMessages([
-        {
-          id: nextId(),
-          role: "assistant",
-          text: "What would you like me to call you?",
-        },
-      ]);
-    }
-  }, [messages.length]);
-
   const handleInteraction = () => {
     if (mode === "text") return;
 
@@ -60,7 +48,6 @@ export default function Home() {
     setIsActive(false);
     setHasStarted(true);
     setShowTypeOption(false);
-    seedOnboarding();
   };
 
   const handleSendMessage = (text: string) => {
