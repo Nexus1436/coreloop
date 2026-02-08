@@ -116,7 +116,7 @@ export function ChatView({ messages, onSendMessage, onBack }: ChatViewProps) {
               value={inputValue}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
-              placeholder="Type what you're noticing in your body…"
+              placeholder="Type here"
               rows={1}
               className="w-full bg-transparent text-[#e0e0e0] text-base font-light leading-relaxed resize-none outline-none placeholder-[#3a3a3a] py-2"
               style={{ caretColor: "#858585", maxHeight: "120px" }}
