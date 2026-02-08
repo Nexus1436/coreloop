@@ -203,37 +203,17 @@ export default function Home() {
       <div className="flex-1 flex flex-col items-center justify-center relative w-full">
         <CentralForm isActive={hasPressed} isDimmed={false} />
 
-        <AnimatePresence>
-          {!hasPressed && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 0.65 }}
-              exit={{ opacity: 0, transition: { duration: 0.6, ease: "easeOut" } }}
-              transition={{ duration: 1.2 }}
-              className="absolute pointer-events-none"
-            >
-              <p className="text-sm md:text-base font-light text-[#b0b0b0] tracking-wide text-center">
-                Press here
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {isRecording && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 0.6 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.4 }}
-              className="absolute pointer-events-none mt-48"
-            >
-              <p className="text-xs font-light text-[#858585] tracking-widest uppercase">
-                listening
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <div className="absolute pointer-events-none">
+          {isRecording ? (
+            <p className="text-sm md:text-base font-light text-[#858585] tracking-widest uppercase text-center" style={{ opacity: 0.6 }}>
+              Listening…
+            </p>
+          ) : !isProcessing ? (
+            <p className="text-sm md:text-base font-light text-[#b0b0b0] tracking-wide text-center" style={{ opacity: 0.65 }}>
+              Press here
+            </p>
+          ) : null}
+        </div>
 
         <AnimatePresence>
           {replayText && (
