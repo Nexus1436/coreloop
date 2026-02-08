@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CentralForm } from "@/components/central-form";
 import { ChatView, type Message } from "@/components/chat-view";
@@ -14,6 +14,14 @@ export default function Home() {
   const [mode, setMode] = useState<"voice" | "text">("voice");
   const [showTypeOption, setShowTypeOption] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [replayText, setReplayText] = useState<string | null>(null);
+
+  const lastResponse = useMemo(() => {
+    const assistantMessages = messages.filter((m) => m.role === "assistant");
+    return assistantMessages.length > 0
+      ? assistantMessages[assistantMessages.length - 1].text
+      : null;
+  }, [messages]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -66,6 +74,13 @@ export default function Home() {
     setShowTypeOption(true);
   };
 
+  const handleRepeatResponse = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!lastResponse) return;
+    setReplayText(lastResponse);
+    setTimeout(() => setReplayText(null), 4000);
+  };
+
   if (mode === "text") {
     return (
       <ChatView
@@ -101,27 +116,60 @@ export default function Home() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        <AnimatePresence>
+          {replayText && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.8 }}
+              exit={{ opacity: 0, transition: { duration: 1, ease: "easeOut" } }}
+              transition={{ duration: 0.5 }}
+              className="absolute pointer-events-none mt-40"
+            >
+              <p className="text-base md:text-lg font-light text-[#e0e0e0] tracking-wide text-center max-w-sm px-6 leading-relaxed">
+                {replayText}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      <AnimatePresence>
-        {showTypeOption && mode === "voice" && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 0.85 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 1.5, ease: "easeInOut" }}
-            className="absolute bottom-12 md:bottom-16 pointer-events-auto"
-            onClick={handleTextMode}
+      <div className="absolute bottom-12 md:bottom-16 left-0 right-0 flex justify-between items-baseline px-8 md:px-12 pointer-events-none">
+        <AnimatePresence>
+          {showTypeOption && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.85 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 1.5, ease: "easeInOut" }}
+              className="pointer-events-auto"
+              onClick={handleTextMode}
+            >
+              <p
+                className="text-lg font-medium text-[#858585] leading-relaxed hover:text-[#a3a3a3] transition-colors duration-300"
+                data-testid="link-prefer-typing"
+              >
+                Prefer typing?
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {lastResponse && (
+          <div
+            className="pointer-events-auto"
+            onClick={handleRepeatResponse}
           >
             <p
-              className="text-lg font-medium text-[#858585] leading-relaxed hover:text-[#a3a3a3] transition-colors duration-300"
-              data-testid="link-prefer-typing"
+              className="text-lg font-medium text-[#909090] leading-relaxed transition-colors duration-300"
+              style={{ opacity: 0.68 }}
+              data-testid="button-repeat-response"
             >
-              Prefer typing?
+              Repeat response
             </p>
-          </motion.div>
+          </div>
         )}
-      </AnimatePresence>
+      </div>
     </div>
   );
 }
