@@ -97,6 +97,7 @@ export default function Home() {
           });
         },
         onDone: async (transcript) => {
+          if (!transcript || !transcript.trim()) return;
           await playback.init();
           playback.clear();
           await streamTTS(transcript, (audioChunk) => {
