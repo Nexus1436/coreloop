@@ -1,0 +1,68 @@
+We still have two unresolved audio interaction failures. Fix both.
+
+ISSUE 1 — Microphone is not “hot” (no continuous capture)
+
+Problem:
+The microphone only attempts to initialize on discrete actions and is not staying active during the listening window. This prevents reliable speech-to-text and causes missed audio.
+
+Required behavior:
+When the user enters Listening state, the microphone must remain actively capturing until Listening is explicitly stopped.
+
+Required fixes:
+• Microphone capture must start immediately on the same tap that enters Listening
+• Microphone stream must stay open for the entire Listening window
+• Audio capture must not depend on intermediate UI states or async resolution
+• Do not require repeated permission requests
+• Do not stop and restart the mic between phrases
+
+Listening state = hot mic.
+No gaps. No re-initialization loops.
+
+If the user exits Listening:
+• Stop mic
+• Cleanly release stream
+• Return to idle state
+
+ISSUE 2 — Excessive response delay (primary response + repeat response)
+
+Problem:
+There is a noticeable delay after Listening stops before the assistant responds, and an even longer delay when “Repeat response” is tapped. This makes the system feel unresponsive and broken.
+
+Cause:
+The app is re-triggering full response generation or waiting on unnecessary async steps instead of replaying existing output.
+
+Required fixes:
+Primary response timing:
+• As soon as speech-to-text completes, the assistant response should be requested immediately
+• Do not wait for UI transitions, animations, or state confirmations
+• Do not insert artificial pauses
+
+Repeat response timing:
+• “Repeat response” must replay the last response from a cached buffer
+• It must NOT:
+– regenerate the response
+– re-call the model
+– re-run TTS generation
+• Audio playback should start immediately on tap (near-instant)
+
+Internal requirement:
+Maintain a lastResponseBuffer that stores:
+• Text of last response
+• Audio output of last response (if audio was used)
+
+Repeat response plays from this buffer only.
+
+Constraints:
+• Do not change base narrative behavior
+• Do not change UI layout
+• Do not add new controls
+• Do not alter Mode A / Mode B switching
+• Do not add artificial delays for “calmness”
+
+Success criteria:
+• Tap “Press here” → mic is hot immediately
+• Speak freely → voice captured reliably
+• Stop listening → response begins promptly
+• Tap “Repeat response” → audio plays instantly
+
+This is a responsiveness and state management fix, not an intelligence change.

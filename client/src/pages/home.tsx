@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CentralForm } from "@/components/central-form";
 import { ChatView } from "@/components/chat-view";
@@ -25,7 +25,9 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [replayText, setReplayText] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const lastAudioChunksRef = useRef<string[]>([]);
   const playback = useAudioPlayback();
 
   const lastResponse = useMemo(() => {
@@ -42,23 +44,26 @@ export default function Home() {
     return conv.id;
   }, [conversationId]);
 
+  const startRecorderOnStream = (stream: MediaStream) => {
+    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+    mediaRecorderRef.current = recorder;
+    chunksRef.current = [];
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+
+    recorder.start(100);
+  };
+
   const handleScreenTap = async () => {
     if (!hasPressed) {
       setHasPressed(true);
       setIsRecording(true);
 
-      const micPromise = navigator.mediaDevices.getUserMedia({ audio: true });
-
-      micPromise.then((stream) => {
-        const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-        mediaRecorderRef.current = recorder;
-        chunksRef.current = [];
-
-        recorder.ondataavailable = (e) => {
-          if (e.data.size > 0) chunksRef.current.push(e.data);
-        };
-
-        recorder.start(100);
+      navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+        micStreamRef.current = stream;
+        startRecorderOnStream(stream);
       }).catch((err) => {
         console.error("Microphone access denied:", err);
         setIsRecording(false);
@@ -77,7 +82,6 @@ export default function Home() {
       const blob = await new Promise<Blob>((resolve) => {
         recorder.onstop = () => {
           const b = new Blob(chunksRef.current, { type: "audio/webm" });
-          recorder.stream.getTracks().forEach((t) => t.stop());
           resolve(b);
         };
         recorder.stop();
@@ -91,6 +95,7 @@ export default function Home() {
 
         let assistantText = "";
         const assistantMsgId = nextId();
+        const audioCache: string[] = [];
 
         await sendVoiceMessage(convId, blob, {
           onUserTranscript: (text) => {
@@ -111,9 +116,11 @@ export default function Home() {
             await playback.init();
             playback.clear();
             await streamTTS(transcript, (audioChunk) => {
+              audioCache.push(audioChunk);
               playback.pushAudio(audioChunk);
             });
             playback.signalComplete();
+            lastAudioChunksRef.current = audioCache;
           },
         });
       } catch (err) {
@@ -124,22 +131,18 @@ export default function Home() {
     } else {
       setIsRecording(true);
 
-      const micPromise = navigator.mediaDevices.getUserMedia({ audio: true });
-
-      micPromise.then((stream) => {
-        const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-        mediaRecorderRef.current = recorder;
-        chunksRef.current = [];
-
-        recorder.ondataavailable = (e) => {
-          if (e.data.size > 0) chunksRef.current.push(e.data);
-        };
-
-        recorder.start(100);
-      }).catch((err) => {
-        console.error("Microphone access denied:", err);
-        setIsRecording(false);
-      });
+      const stream = micStreamRef.current;
+      if (stream && stream.active) {
+        startRecorderOnStream(stream);
+      } else {
+        navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => {
+          micStreamRef.current = s;
+          startRecorderOnStream(s);
+        }).catch((err) => {
+          console.error("Microphone access denied:", err);
+          setIsRecording(false);
+        });
+      }
     }
   };
 
@@ -161,10 +164,19 @@ export default function Home() {
 
     await playback.init();
     playback.clear();
-    await streamTTS(lastResponse, (audioChunk) => {
-      playback.pushAudio(audioChunk);
-    });
-    playback.signalComplete();
+
+    const cached = lastAudioChunksRef.current;
+    if (cached.length > 0) {
+      for (const chunk of cached) {
+        playback.pushAudio(chunk);
+      }
+      playback.signalComplete();
+    } else {
+      await streamTTS(lastResponse, (audioChunk) => {
+        playback.pushAudio(audioChunk);
+      });
+      playback.signalComplete();
+    }
 
     setTimeout(() => setReplayText(null), 4000);
   }, [lastResponse, playback]);
