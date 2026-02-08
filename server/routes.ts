@@ -211,6 +211,24 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/stt", async (req, res) => {
+    try {
+      const { audio } = req.body;
+      if (!audio) {
+        return res.status(400).json({ error: "Audio data is required" });
+      }
+
+      const rawBuffer = Buffer.from(audio, "base64");
+      const { buffer: audioBuffer, format: inputFormat } = await ensureCompatibleFormat(rawBuffer);
+      const transcript = await speechToText(audioBuffer, inputFormat);
+
+      res.json({ transcript });
+    } catch (error) {
+      console.error("Error in STT:", error);
+      res.status(500).json({ error: "Transcription failed" });
+    }
+  });
+
   app.post("/api/tts", async (req, res) => {
     try {
       const { text } = req.body;

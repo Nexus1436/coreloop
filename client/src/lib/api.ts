@@ -113,6 +113,27 @@ export async function sendVoiceMessage(
   return fullTranscript;
 }
 
+export async function transcribeAudio(audioBlob: Blob): Promise<string> {
+  const base64Audio = await new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.split(",")[1]);
+    };
+    reader.readAsDataURL(audioBlob);
+  });
+
+  const res = await fetch("/api/stt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ audio: base64Audio }),
+  });
+
+  if (!res.ok) throw new Error("Transcription failed");
+  const data = await res.json();
+  return data.transcript;
+}
+
 export async function streamTTS(
   text: string,
   onAudioChunk: (base64: string) => void

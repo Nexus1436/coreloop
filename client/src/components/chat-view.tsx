@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, type Dispatch, type SetStateA
 import { motion } from "framer-motion";
 import { Mic, Square, Volume2 } from "lucide-react";
 import { type ChatMessage } from "@/pages/home";
-import { sendMessage, sendVoiceMessage, streamTTS } from "@/lib/api";
+import { sendMessage, transcribeAudio, streamTTS } from "@/lib/api";
 import type { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
 
 interface ChatViewProps {
@@ -55,6 +55,7 @@ export function ChatView({ messages, setMessages, conversationId, ensureConversa
     setIsStreaming(true);
     const assistantMsgId = nextChatId();
     let assistantText = "";
+    const audioCache: string[] = [];
 
     try {
       const convId = await ensureConversation();
@@ -73,6 +74,7 @@ export function ChatView({ messages, setMessages, conversationId, ensureConversa
       console.error("Send error:", err);
     } finally {
       setIsStreaming(false);
+      lastAudioChunksRef.current = [];
     }
   };
 
@@ -110,28 +112,16 @@ export function ChatView({ messages, setMessages, conversationId, ensureConversa
       setIsMicProcessing(true);
 
       try {
-        const convId = await ensureConversation();
-        const assistantMsgId = nextChatId();
-        let assistantText = "";
-
-        await sendVoiceMessage(convId, blob, {
-          onUserTranscript: (text) => {
-            setMessages((prev) => [...prev, { id: nextChatId(), role: "user", text }]);
-          },
-          onTranscript: (chunk) => {
-            assistantText += chunk;
-            setMessages((prev) => {
-              const existing = prev.find((m) => m.id === assistantMsgId);
-              if (existing) {
-                return prev.map((m) => m.id === assistantMsgId ? { ...m, text: assistantText } : m);
-              }
-              return [...prev, { id: assistantMsgId, role: "assistant", text: assistantText }];
-            });
-          },
-          onDone: async () => {},
-        });
+        const transcript = await transcribeAudio(blob);
+        if (transcript && transcript.trim()) {
+          setInputValue((prev) => {
+            const separator = prev.trim() ? " " : "";
+            return prev + separator + transcript.trim();
+          });
+          setTimeout(() => textareaRef.current?.focus(), 0);
+        }
       } catch (err) {
-        console.error("Voice message error:", err);
+        console.error("Transcription error:", err);
       } finally {
         setIsMicProcessing(false);
       }
@@ -241,7 +231,7 @@ export function ChatView({ messages, setMessages, conversationId, ensureConversa
               value={inputValue}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
-              placeholder="Type here"
+              placeholder={isMicProcessing ? "Transcribing..." : "Type here"}
               rows={1}
               className="w-full bg-transparent text-[#e0e0e0] text-base font-light leading-relaxed resize-none outline-none placeholder-[#3a3a3a] py-2"
               style={{ caretColor: "#858585", maxHeight: "120px" }}
