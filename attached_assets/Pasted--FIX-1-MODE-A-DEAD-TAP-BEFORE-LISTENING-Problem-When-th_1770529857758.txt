@@ -1,0 +1,59 @@
+––––––––––––––––––
+FIX 1 — MODE A “DEAD TAP” BEFORE LISTENING
+––––––––––––––––––
+
+Problem:
+When the user taps “Press here”, nothing appears to happen until they tap again. The UI waits for the microphone to initialize before showing “Listening”.
+
+Required behavior:
+The UI must immediately show “Listening” on the first tap, even if the microphone is still initializing.
+
+What to change:
+In the client-side microphone tap handler (wherever startRecording or micStart is triggered):
+	1.	Move the UI state change to happen BEFORE any async microphone setup.
+	2.	Do not wait for permissions, MediaRecorder, or stream setup.
+
+Exact instruction in words:
+When the mic button is tapped, immediately set the listening state to true, then start the microphone logic afterward.
+
+In other words:
+– First line on tap: listening = true
+– Second step: initialize microphone / recorder
+
+This removes the “dead” feeling on first tap.
+
+––––––––––––––––––
+FIX 2 — MISSING USER MESSAGES WHEN SWITCHING MODE A → MODE B
+––––––––––––––––––
+
+Problem:
+When speaking in Mode A, only assistant responses are saved.
+User speech is transcribed but NOT added to the conversation history.
+So when switching to Mode B, only responses appear, not user questions.
+
+Required behavior:
+Every spoken user input must be saved as a user message, exactly like typed input.
+
+What to change:
+In the client-side code that receives the speech-to-text transcript:
+
+After the transcript string is returned successfully:
+– Immediately create a new message with role = user
+– Content = transcript text
+– Append it to the same messages array / conversation store
+
+Then proceed to send the conversation to the AI as normal.
+
+Exact instruction in words:
+Speech-to-text output must be treated identically to typed text input and stored as a user message.
+
+––––––––––––––––––
+SUMMARY (ONLY THESE TWO CHANGES)
+––––––––––––––––––
+	1.	Mode A: On mic tap, set Listening state immediately, then initialize audio.
+	2.	Mode A → Mode B continuity: Save voice transcripts as user messages.
+
+Nothing else.
+No UI redesign.
+No backend changes.
+Just these two fixes.

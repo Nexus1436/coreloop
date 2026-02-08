@@ -43,6 +43,7 @@ export default function Home() {
   }, [conversationId]);
 
   const startRecording = useCallback(async () => {
+    setIsRecording(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
@@ -54,9 +55,9 @@ export default function Home() {
       };
 
       recorder.start(100);
-      setIsRecording(true);
     } catch (err) {
       console.error("Microphone access denied:", err);
+      setIsRecording(false);
     }
   }, []);
 
