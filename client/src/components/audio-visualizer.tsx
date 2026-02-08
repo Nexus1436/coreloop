@@ -1,56 +1,70 @@
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { useRef, useState } from "react";
 
-interface AudioVisualizerProps {
-  isActive: boolean;
-}
+export default function AudioVisualizer() {
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const [recording, setRecording] = useState(false);
 
-export function AudioVisualizer({ isActive }: AudioVisualizerProps) {
-  // Mock data for the visualizer bars
-  const bars = Array.from({ length: 12 });
+  async function startRecording() {
+    console.log("🎤 Mic tapped");
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    console.log("✅ Mic permission granted");
+
+    const mediaRecorder = new MediaRecorder(stream);
+    mediaRecorderRef.current = mediaRecorder;
+    chunksRef.current = [];
+
+    mediaRecorder.ondataavailable = (e) => {
+      chunksRef.current.push(e.data);
+    };
+
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+      console.log("📦 Audio blob size:", blob.size);
+
+      if (blob.size === 0) {
+        console.error("❌ Empty audio blob");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("audio", blob); // MUST be "audio"
+
+      const res = await fetch("/chat/speech-to-text", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+      console.log("📝 Transcription result:", data);
+    };
+
+    mediaRecorder.start();
+    setRecording(true);
+    console.log("🔴 Recording started");
+  }
+
+  function stopRecording() {
+    if (!mediaRecorderRef.current) return;
+
+    mediaRecorderRef.current.stop();
+    setRecording(false);
+    console.log("⏹️ Recording stopped");
+  }
 
   return (
-    <div className="flex items-center justify-center gap-1.5 h-16" data-testid="audio-visualizer">
-      {bars.map((_, index) => (
-        <motion.div
-          key={index}
-          className="w-1.5 bg-foreground rounded-full"
-          initial={{ height: 4 }}
-          animate={{
-            height: isActive ? [8, 32, 8] : 4,
-            opacity: isActive ? 1 : 0.3,
-          }}
-          transition={{
-            duration: 0.8,
-            repeat: Infinity,
-            delay: index * 0.1,
-            ease: "easeInOut",
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-export function PulseIndicator({ isActive }: { isActive: boolean }) {
-  return (
-    <div className="relative flex items-center justify-center w-32 h-32">
-       {isActive && (
-        <>
-          <motion.div
-            className="absolute inset-0 rounded-full bg-foreground/5"
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1.5, opacity: 0 }}
-            transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
-          />
-           <motion.div
-            className="absolute inset-0 rounded-full bg-foreground/5"
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1.5, opacity: 0 }}
-            transition={{ duration: 2, repeat: Infinity, ease: "easeOut", delay: 1 }}
-          />
-        </>
-      )}
-    </div>
+    <button
+      onClick={recording ? stopRecording : startRecording}
+      style={{
+        background: "none",
+        border: "none",
+        color: "#aaa",
+        fontSize: "18px",
+        cursor: "pointer",
+      }}
+    >
+      {recording ? "Stop Mic" : "Start Mic"}
+    </button>
   );
 }
