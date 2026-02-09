@@ -1,101 +1,262 @@
-import type { Express, Request, Response } from "express";
+import type { Express } from "express";
+import { type Server } from "http";
 import OpenAI from "openai";
-import fs from "fs";
-import path from "path";
+import express from "express";
+import { db } from "./db";
+import { conversations, messages } from "@shared/schema";
+import { eq, desc } from "drizzle-orm";
+import { ensureCompatibleFormat, speechToText, textToSpeechStream } from "./replit_integrations/audio/client";
 
-/* ================================
-   OPENAI CLIENT
-================================ */
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
-/* ================================
-   LOAD BASE NARRATIVE (ONCE)
-================================ */
-const BASE_NARRATIVE_PATH = path.resolve(
-  process.cwd(),
-  "shared",
-  "INTERLOOP_BASE_NARRATIVE.md"
-);
+const SYSTEM_PROMPT = `You are Interloop.
 
-if (!fs.existsSync(BASE_NARRATIVE_PATH)) {
-  throw new Error(
-    `Base narrative not found at ${BASE_NARRATIVE_PATH}`
-  );
-}
+You operate inside an application that supports:
+- Speech-to-text (user audio → text)
+- Text-to-speech (your responses → audio)
+- Typed text input and typed responses
+- A "repeat response" control that replays your last reply
 
-const BASE_NARRATIVE = fs.readFileSync(
-  BASE_NARRATIVE_PATH,
-  "utf8"
-);
+You do NOT initiate conversation.
+You do NOT ask questions unless the user speaks or types first.
+You do NOT assume emotional state, intent, or context.
 
-/* ================================
-   SYSTEM PROMPT (HARD GATE)
-================================ */
-const SYSTEM_PROMPT = `
-You are Interloop by Signal.
+Initial state:
+- Silent
+- Neutral
+- Present
 
-You MUST follow the Base Narrative below with absolute priority.
-If any instruction conflicts with the Base Narrative, the Base Narrative wins.
+When the user interacts:
+- If the user speaks, respond naturally and calmly.
+- If the user types, respond in text.
+- Match the user's mode unless explicitly changed.
+- Do not reference system mechanics unless asked.
 
---- BASE NARRATIVE START ---
-${BASE_NARRATIVE}
---- BASE NARRATIVE END ---
+Audio behavior:
+- Spoken responses should be clear, grounded, and unhurried.
+- Do not over-validate.
+- Do not dramatize.
+- Do not narrate silence.
 
-NON-NEGOTIABLE RULES:
+If asked to repeat:
+- Replay the last response exactly.
+- Do not add or change content.
 
-1. You MUST complete onboarding before interpretation.
-2. You MUST ask for the user's name first if unknown.
-3. You MUST remember and reuse the user's name once given.
-4. You MUST remain interpretive, signal-based, and non-prescriptive.
-5. You MUST NOT provide drills, instructions, or coaching unless:
-   - onboarding is complete AND
-   - the user explicitly asks.
-6. Ask at most ONE follow-up question at a time.
-7. If onboarding is bypassed, gently return to onboarding.
-8. Silence is acceptable after one follow-up question.
-`;
+You are not a therapist.
+You are not an authority.
+You are a steady, responsive presence.
 
-/* ================================
-   ROUTE REGISTRATION
-================================ */
-export function registerRoutes(app: Express): void {
-  app.post(
-    "/api/chat",
-    async (req: Request, res: Response) => {
-      try {
-        const { messages } = req.body;
+If unsure what to say:
+- Respond simply.
+- Or remain silent.
 
-        if (!Array.isArray(messages)) {
-          return res.status(400).json({
-            error: "messages must be an array",
-          });
+Wait for the user.`;
+
+const audioBodyParser = express.json({ limit: "50mb" });
+
+export async function registerRoutes(
+  httpServer: Server,
+  app: Express
+): Promise<Server> {
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok" });
+  });
+
+  app.post("/api/conversations", async (_req, res) => {
+    try {
+      const [conversation] = await db.insert(conversations).values({ title: "Session" }).returning();
+      res.status(201).json(conversation);
+    } catch (error) {
+      console.error("Error creating conversation:", error);
+      res.status(500).json({ error: "Failed to create conversation" });
+    }
+  });
+
+  app.get("/api/conversations/:id/messages", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const msgs = await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt);
+      res.json(msgs);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      res.status(500).json({ error: "Failed to fetch messages" });
+    }
+  });
+
+  app.post("/api/conversations/:id/messages", async (req, res) => {
+    try {
+      const conversationId = parseInt(req.params.id);
+      const { content } = req.body;
+
+      if (!content || typeof content !== "string") {
+        return res.status(400).json({ error: "Content is required" });
+      }
+
+      await db.insert(messages).values({ conversationId, role: "user", content });
+
+      const existingMessages = await db.select().from(messages)
+        .where(eq(messages.conversationId, conversationId))
+        .orderBy(messages.createdAt);
+
+      const chatHistory: OpenAI.ChatCompletionMessageParam[] = [
+        { role: "system", content: SYSTEM_PROMPT },
+        ...existingMessages.map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        })),
+      ];
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const stream = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages: chatHistory,
+        stream: true,
+        max_completion_tokens: 1024,
+      });
+
+      let fullResponse = "";
+
+      for await (const chunk of stream) {
+        const text = chunk.choices[0]?.delta?.content || "";
+        if (text) {
+          fullResponse += text;
+          res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
         }
+      }
 
-        const chatMessages = [
-          { role: "system", content: SYSTEM_PROMPT },
-          ...messages,
-        ];
+      await db.insert(messages).values({ conversationId, role: "assistant", content: fullResponse });
 
-        const completion =
-          await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: chatMessages,
-            temperature: 0.4,
-            max_tokens: 900,
-          });
-
-        res.json({
-          message:
-            completion.choices[0].message.content,
-        });
-      } catch (err) {
-        console.error(err);
-        res.status(500).json({
-          error: "Chat failed",
-        });
+      res.write(`data: ${JSON.stringify({ done: true, fullContent: fullResponse })}\n\n`);
+      res.end();
+    } catch (error) {
+      console.error("Error sending message:", error);
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ error: "Failed to process message" })}\n\n`);
+        res.end();
+      } else {
+        res.status(500).json({ error: "Failed to process message" });
       }
     }
-  );
+  });
+
+  app.post("/api/conversations/:id/voice", audioBodyParser, async (req, res) => {
+    try {
+      const conversationId = parseInt(req.params.id);
+      const { audio } = req.body;
+
+      if (!audio) {
+        return res.status(400).json({ error: "Audio data is required" });
+      }
+
+      const rawBuffer = Buffer.from(audio, "base64");
+      const { buffer: audioBuffer, format: inputFormat } = await ensureCompatibleFormat(rawBuffer);
+
+      const userTranscript = await speechToText(audioBuffer, inputFormat);
+
+      await db.insert(messages).values({ conversationId, role: "user", content: userTranscript });
+
+      const existingMessages = await db.select().from(messages)
+        .where(eq(messages.conversationId, conversationId))
+        .orderBy(messages.createdAt);
+
+      const chatHistory: OpenAI.ChatCompletionMessageParam[] = [
+        { role: "system", content: SYSTEM_PROMPT },
+        ...existingMessages.map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        })),
+      ];
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      res.write(`data: ${JSON.stringify({ type: "user_transcript", data: userTranscript })}\n\n`);
+
+      const stream = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages: chatHistory,
+        stream: true,
+        max_completion_tokens: 1024,
+      });
+
+      let fullResponse = "";
+
+      for await (const chunk of stream) {
+        const text = chunk.choices[0]?.delta?.content || "";
+        if (text) {
+          fullResponse += text;
+          res.write(`data: ${JSON.stringify({ type: "transcript", data: text })}\n\n`);
+        }
+      }
+
+      await db.insert(messages).values({ conversationId, role: "assistant", content: fullResponse });
+
+      res.write(`data: ${JSON.stringify({ type: "done", transcript: fullResponse })}\n\n`);
+      res.end();
+    } catch (error) {
+      console.error("Error processing voice message:", error);
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ type: "error", error: "Failed to process voice message" })}\n\n`);
+        res.end();
+      } else {
+        res.status(500).json({ error: "Failed to process voice message" });
+      }
+    }
+  });
+
+  app.post("/api/stt", async (req, res) => {
+    try {
+      const { audio } = req.body;
+      if (!audio) {
+        return res.status(400).json({ error: "Audio data is required" });
+      }
+
+      const rawBuffer = Buffer.from(audio, "base64");
+      const { buffer: audioBuffer, format: inputFormat } = await ensureCompatibleFormat(rawBuffer);
+      const transcript = await speechToText(audioBuffer, inputFormat);
+
+      res.json({ transcript });
+    } catch (error) {
+      console.error("Error in STT:", error);
+      res.status(500).json({ error: "Transcription failed" });
+    }
+  });
+
+  app.post("/api/tts", async (req, res) => {
+    try {
+      const { text } = req.body;
+      if (!text) {
+        return res.status(400).json({ error: "Text is required" });
+      }
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const audioStream = await textToSpeechStream(text, "alloy");
+      for await (const chunk of audioStream) {
+        res.write(`data: ${JSON.stringify({ type: "audio", data: chunk })}\n\n`);
+      }
+
+      res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+      res.end();
+    } catch (error) {
+      console.error("Error in TTS:", error);
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ type: "error", error: "TTS failed" })}\n\n`);
+        res.end();
+      } else {
+        res.status(500).json({ error: "TTS failed" });
+      }
+    }
+  });
+
+  return httpServer;
 }
