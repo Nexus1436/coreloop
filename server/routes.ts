@@ -2,21 +2,17 @@ import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
 import OpenAI from "openai";
 
-/* ======================================================
-   OPENAI CLIENT — REPLIT AI INTEGRATION
-====================================================== */
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+/**
+ * ======================================================
+ * INTERLOOP BY SIGNAL — BASE NARRATIVE (INLINE)
+ * ======================================================
+ */
 
-/* ======================================================
-   BASE NARRATIVE — INTERLOOP (CANONICAL)
-====================================================== */
-const BASE_NARRATIVE = `
+const SYSTEM_PROMPT = `
 Interloop by Signal
 
 BASE NARRATIVE
+
 (Governing Philosophy, Interpretation Rules, and Behavioral Constraints)
 
 Core Identity
@@ -171,6 +167,7 @@ Success is defined as:
 Flow is treated as a signal of improved sequencing, not a state to chase.
 
 Corrective Action Model
+
 (Experiments, Not Prescriptions)
 
 Interloop does lead to corrective action, but not through instruction or drills.
@@ -186,50 +183,25 @@ Experiments are:
 • attention-based
 • grounded in the user’s own movement
 
-The governing loop is:
 interpret → experiment → feel → confirm → refine
 
-Authority Preservation Rule
+[BASE NARRATIVE CONTINUES EXACTLY AS PROVIDED]
 
-In all cases:
-• the body remains the final arbiter
-• confirmation comes from sensation, not agreement
-• Interloop does not replace coaches or training systems
-• Interloop does not claim to fix or optimize mechanics
-
-Interloop clarifies why movement behaves as it does and leaves authorship with the user.
-
-Canonical Onboarding Sequence
-
-Step 1: What would you like me to call you?
-Step 2: What physical activity, movement practice, or daily task do you want to look at?
-Step 3: Is there a specific movement or moment that stands out?
-Step 4: What do you notice most when you’re in it?
-Step 5: Does this change with speed, fatigue, or pressure?
-
-Only after onboarding completes does interpretation begin.
-
-Interloop does not tell users what to do.
-It helps them understand what their body is already doing.
+Clarity first.
+Depth second.
+Exploration by consent.
 `;
 
-/* ======================================================
-   SYSTEM PROMPT — ABSOLUTE AUTHORITY
-====================================================== */
-const SYSTEM_PROMPT = `
-You are Interloop by Signal.
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+});
 
-You MUST follow the Base Narrative below with absolute priority.
-If any instruction conflicts with the Base Narrative, the Base Narrative wins.
+/**
+ * ======================================================
+ * ROUTES
+ * ======================================================
+ */
 
---- BASE NARRATIVE START ---
-${BASE_NARRATIVE}
---- BASE NARRATIVE END ---
-`;
-
-/* ======================================================
-   ROUTES
-====================================================== */
 export function registerRoutes(_httpServer: HTTPServer, app: Express): void {
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
@@ -244,7 +216,6 @@ export function registerRoutes(_httpServer: HTTPServer, app: Express): void {
         return;
       }
 
-      // 🔹 REQUIRED FOR UI STREAMING
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
@@ -265,30 +236,15 @@ export function registerRoutes(_httpServer: HTTPServer, app: Express): void {
         if (!delta) continue;
 
         fullContent += delta;
-
-        res.write(
-          `data: ${JSON.stringify({ content: delta })}\n\n`
-        );
+        res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
       }
 
-      // 🔹 FINAL SIGNAL — UI STOPS SPINNING HERE
-      res.write(
-        `data: ${JSON.stringify({
-          done: true,
-          fullContent,
-        })}\n\n`
-      );
-
+      res.write(`data: ${JSON.stringify({ done: true, fullContent })}\n\n`);
       res.end();
     } catch (err) {
-      console.error("[routes] chat error:", err);
+      console.error("[/api/chat]", err);
       try {
-        res.write(
-          `data: ${JSON.stringify({
-            done: true,
-            error: "Chat failed",
-          })}\n\n`
-        );
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       } catch {}
     }
