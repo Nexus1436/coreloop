@@ -240,27 +240,57 @@ export function registerRoutes(_httpServer: HTTPServer, app: Express): void {
       const { messages } = req.body;
 
       if (!Array.isArray(messages)) {
-        return res.status(400).json({ error: "messages must be an array" });
+        res.status(400).json({ error: "messages must be an array" });
+        return;
       }
 
-      const completion = await openai.chat.completions.create({
+      // 🔹 REQUIRED FOR UI STREAMING
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+
+      const stream = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
         temperature: 0.4,
         max_tokens: 900,
+        stream: true,
       });
 
-      res.json({
-        messages: [
-          {
-            role: "assistant",
-            content: completion.choices[0].message.content,
-          },
-        ],
-      });
+      let fullContent = "";
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (!delta) continue;
+
+        fullContent += delta;
+
+        res.write(
+          `data: ${JSON.stringify({ content: delta })}\n\n`
+        );
+      }
+
+      // 🔹 FINAL SIGNAL — UI STOPS SPINNING HERE
+      res.write(
+        `data: ${JSON.stringify({
+          done: true,
+          fullContent,
+        })}\n\n`
+      );
+
+      res.end();
     } catch (err) {
       console.error("[routes] chat error:", err);
-      res.status(500).json({ error: "Chat failed" });
+      try {
+        res.write(
+          `data: ${JSON.stringify({
+            done: true,
+            error: "Chat failed",
+          })}\n\n`
+        );
+        res.end();
+      } catch {}
     }
   });
 }
