@@ -1,55 +1,98 @@
+// client/src/lib/api.ts
+// (or wherever your existing createConversation/sendMessage file lives)
+
+type ChatRole = "user" | "assistant" | "system";
+
+type ChatMessage = {
+  role: ChatRole;
+  content: string;
+};
+
+function base64FromBlob(audioBlob: Blob): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // data:audio/...;base64,AAAA
+      const parts = result.split(",");
+      if (parts.length < 2)
+        return reject(new Error("Invalid base64 audio data"));
+      resolve(parts[1]);
+    };
+    reader.onerror = () => reject(new Error("Failed to read audio blob"));
+    reader.readAsDataURL(audioBlob);
+  });
+}
+
+async function throwIfResNotOk(res: Response) {
+  if (res.ok) return;
+  const text = (await res.text()) || res.statusText;
+  throw new Error(`${res.status}: ${text}`);
+}
+
+async function safeJson<T = any>(res: Response): Promise<T> {
+  // Helps you avoid "Unexpected token '<'" with a clearer error message
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(
+      `Expected JSON but got non-JSON response (first 200 chars): ${text.slice(0, 200)}`,
+    );
+  }
+}
+
+/**
+ * IMPORTANT:
+ * Your backend currently has /api/chat working.
+ * Your UI was trying /api/conversations + streaming endpoints that may not exist.
+ *
+ * We keep the same exports the UI expects, but route text chat through /api/chat
+ * so the UI works immediately.
+ */
+
 export async function createConversation(): Promise<{ id: number }> {
-  const res = await fetch("/api/conversations", { method: "POST" });
-  if (!res.ok) throw new Error("Failed to create conversation");
-  return res.json();
+  // If your backend does NOT implement /api/conversations, this must NOT call it.
+  // The UI just needs an id to proceed.
+  // Use a stable-ish id so refresh doesn't break.
+  const existing = Number(localStorage.getItem("interloop_conversation_id"));
+  if (existing && Number.isFinite(existing)) return { id: existing };
+
+  const id = Date.now(); // simple unique id client-side for now
+  localStorage.setItem("interloop_conversation_id", String(id));
+  return { id };
 }
 
 export async function sendMessage(
-  conversationId: number,
+  _conversationId: number,
   content: string,
-  onChunk: (text: string) => void
+  onChunk: (text: string) => void,
 ): Promise<string> {
-  const res = await fetch(`/api/conversations/${conversationId}/messages`, {
+  // NON-STREAMING path, but we still satisfy onChunk() so UI renders
+  const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({
+      messages: [{ role: "user", content } satisfies ChatMessage],
+    }),
   });
 
-  if (!res.ok) throw new Error("Failed to send message");
+  await throwIfResNotOk(res);
 
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("No response body");
+  // Your backend returns: { message: "..." }
+  const data = await safeJson<{ message: string }>(res);
 
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let fullResponse = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const event = JSON.parse(line.slice(6));
-        if (event.content) {
-          fullResponse += event.content;
-          onChunk(event.content);
-        }
-        if (event.done) {
-          return event.fullContent || fullResponse;
-        }
-      } catch {}
-    }
-  }
-
-  return fullResponse;
+  const full = data?.message ?? "";
+  if (full) onChunk(full);
+  return full;
 }
 
+/**
+ * Voice endpoint: only works if your backend supports:
+ * POST /api/conversations/:id/voice  (SSE stream)
+ *
+ * If it’s not implemented, this will throw a clear error instead of hanging.
+ */
 export async function sendVoiceMessage(
   conversationId: number,
   audioBlob: Blob,
@@ -57,16 +100,9 @@ export async function sendVoiceMessage(
     onUserTranscript?: (text: string) => void;
     onTranscript?: (text: string) => void;
     onDone?: (transcript: string) => void;
-  }
+  },
 ): Promise<string> {
-  const base64Audio = await new Promise<string>((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.readAsDataURL(audioBlob);
-  });
+  const base64Audio = await base64FromBlob(audioBlob);
 
   const res = await fetch(`/api/conversations/${conversationId}/voice`, {
     method: "POST",
@@ -74,7 +110,7 @@ export async function sendVoiceMessage(
     body: JSON.stringify({ audio: base64Audio }),
   });
 
-  if (!res.ok) throw new Error("Failed to send voice message");
+  await throwIfResNotOk(res);
 
   const streamReader = res.body?.getReader();
   if (!streamReader) throw new Error("No response body");
@@ -106,22 +142,21 @@ export async function sendVoiceMessage(
           callbacks.onDone?.(event.transcript);
           return event.transcript;
         }
-      } catch {}
+      } catch {
+        // ignore malformed chunk
+      }
     }
   }
 
   return fullTranscript;
 }
 
+/**
+ * STT endpoint: only works if backend supports:
+ * POST /api/stt -> { transcript }
+ */
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
-  const base64Audio = await new Promise<string>((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.readAsDataURL(audioBlob);
-  });
+  const base64Audio = await base64FromBlob(audioBlob);
 
   const res = await fetch("/api/stt", {
     method: "POST",
@@ -129,14 +164,19 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
     body: JSON.stringify({ audio: base64Audio }),
   });
 
-  if (!res.ok) throw new Error("Transcription failed");
-  const data = await res.json();
+  await throwIfResNotOk(res);
+
+  const data = await safeJson<{ transcript: string }>(res);
   return data.transcript;
 }
 
+/**
+ * TTS endpoint: only works if backend supports:
+ * POST /api/tts (SSE stream of {type:"audio", data:"base64"})
+ */
 export async function streamTTS(
   text: string,
-  onAudioChunk: (base64: string) => void
+  onAudioChunk: (base64: string) => void,
 ): Promise<void> {
   const res = await fetch("/api/tts", {
     method: "POST",
@@ -144,7 +184,7 @@ export async function streamTTS(
     body: JSON.stringify({ text }),
   });
 
-  if (!res.ok) throw new Error("TTS failed");
+  await throwIfResNotOk(res);
 
   const reader = res.body?.getReader();
   if (!reader) return;
@@ -167,7 +207,9 @@ export async function streamTTS(
         if (event.type === "audio") {
           onAudioChunk(event.data);
         }
-      } catch {}
+      } catch {
+        // ignore malformed chunk
+      }
     }
   }
 }
