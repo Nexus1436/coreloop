@@ -1,7 +1,7 @@
 /**
  * ======================================================
  * CLIENT API — INTERLOOP
- * Streaming-safe, server-aligned
+ * Streaming-only, server-aligned
  * ======================================================
  */
 
@@ -9,6 +9,7 @@
  * ------------------------------------------------------
  * CREATE CONVERSATION
  * ------------------------------------------------------
+ * (Kept for future use — not used by /api/chat yet)
  */
 export async function createConversation(): Promise<{ id: number }> {
   const res = await fetch("/api/conversations", { method: "POST" });
@@ -18,14 +19,18 @@ export async function createConversation(): Promise<{ id: number }> {
 
 /**
  * ------------------------------------------------------
- * SEND MESSAGE (TEXT — STREAMING SSE)
+ * SEND MESSAGE (TEXT — PURE STREAMING SSE)
  * ------------------------------------------------------
+ * CONTRACT:
+ * - Streams chunks ONLY
+ * - Never returns text
+ * - Promise resolves as a signal, not data
  */
 export async function sendMessage(
-  conversationId: number,
+  _conversationId: number,
   content: string,
   onChunk: (text: string) => void,
-): Promise<string> {
+): Promise<void> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -45,7 +50,6 @@ export async function sendMessage(
 
   const decoder = new TextDecoder();
   let buffer = "";
-  let fullResponse = "";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -62,32 +66,29 @@ export async function sendMessage(
         const event = JSON.parse(line.slice(6));
 
         if (event.content) {
-          fullResponse += event.content;
           onChunk(event.content);
         }
 
         if (event.done) {
-          return event.fullContent || fullResponse;
+          return; // streaming complete — no data returned
         }
       } catch {
         // Ignore malformed SSE chunks
       }
     }
   }
-
-  return fullResponse;
 }
 
 /**
  * ------------------------------------------------------
- * VOICE MESSAGE (TEMP STUB — PREVENTS RUNTIME CRASH)
+ * VOICE MESSAGE (INTENTIONAL STUB)
  * ------------------------------------------------------
- * This exists ONLY because some UI code still imports it.
- * Voice streaming will be reattached later.
+ * Exists only because some UI still imports it.
+ * Prevents runtime crashes.
  */
 export async function sendVoiceMessage(): Promise<never> {
   throw new Error(
-    "sendVoiceMessage is not implemented yet. Voice streaming will be reattached after text streaming is stable."
+    "sendVoiceMessage is intentionally disabled. Voice streaming will be reattached after text streaming is stable.",
   );
 }
 
