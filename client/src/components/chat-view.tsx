@@ -51,7 +51,7 @@ export function ChatView({
   useEffect(() => textareaRef.current?.focus(), []);
 
   /* ===============================
-     SEND TEXT (SSE STREAMING)
+     SEND TEXT (STREAMING — FIXED)
      =============================== */
   const handleSend = async () => {
     const trimmed = inputValue.trim();
@@ -61,36 +61,29 @@ export function ChatView({
     textareaRef.current!.style.height = "auto";
 
     const userMsgId = nextChatId();
+    const assistantMsgId = nextChatId();
+
+    // 1️⃣ Commit BOTH messages immediately
     setMessages((prev) => [
       ...prev,
       { id: userMsgId, role: "user", text: trimmed },
+      { id: assistantMsgId, role: "assistant", text: "" },
     ]);
 
-    const assistantMsgId = nextChatId();
+    setIsStreaming(true);
     let assistantText = "";
 
-    setIsStreaming(true);
-
     try {
-      await sendMessage(
-        0, // unused — kept for API compatibility
-        trimmed,
-        (chunk) => {
-          assistantText += chunk;
-          setMessages((prev) => {
-            const exists = prev.find((m) => m.id === assistantMsgId);
-            if (exists) {
-              return prev.map((m) =>
-                m.id === assistantMsgId ? { ...m, text: assistantText } : m,
-              );
-            }
-            return [
-              ...prev,
-              { id: assistantMsgId, role: "assistant", text: assistantText },
-            ];
-          });
-        },
-      );
+      await sendMessage(0, trimmed, (chunk) => {
+        assistantText += chunk;
+
+        // 2️⃣ Only update existing assistant message
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId ? { ...m, text: assistantText } : m,
+          ),
+        );
+      });
     } catch (err) {
       console.error("Streaming error:", err);
     } finally {
@@ -100,7 +93,7 @@ export function ChatView({
   };
 
   /* ===============================
-     INPUT HANDLERS
+     INPUT
      =============================== */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -127,9 +120,7 @@ export function ChatView({
 
       const blob = await new Promise<Blob>((resolve) => {
         recorder.onstop = () => {
-          const audio = new Blob(micChunksRef.current, {
-            type: "audio/webm",
-          });
+          const audio = new Blob(micChunksRef.current, { type: "audio/webm" });
           recorder.stream.getTracks().forEach((t) => t.stop());
           resolve(audio);
         };
@@ -162,10 +153,8 @@ export function ChatView({
           });
           micRecorderRef.current = recorder;
           micChunksRef.current = [];
-
           recorder.ondataavailable = (e) =>
             e.data.size && micChunksRef.current.push(e.data);
-
           recorder.start(100);
         })
         .catch(() => setIsMicRecording(false));
