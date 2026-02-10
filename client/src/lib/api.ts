@@ -1,24 +1,47 @@
+/**
+ * ======================================================
+ * CLIENT API — INTERLOOP
+ * Streaming-safe, server-aligned
+ * ======================================================
+ */
+
+/**
+ * ------------------------------------------------------
+ * CREATE CONVERSATION
+ * ------------------------------------------------------
+ */
 export async function createConversation(): Promise<{ id: number }> {
   const res = await fetch("/api/conversations", { method: "POST" });
   if (!res.ok) throw new Error("Failed to create conversation");
   return res.json();
 }
 
+/**
+ * ------------------------------------------------------
+ * SEND MESSAGE (TEXT — STREAMING SSE)
+ * ------------------------------------------------------
+ */
 export async function sendMessage(
   conversationId: number,
   content: string,
   onChunk: (text: string) => void,
 ): Promise<string> {
-  const res = await fetch(`/api/conversations/${conversationId}/messages`, {
+  const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({
+      messages: [{ role: "user", content }],
+    }),
   });
 
-  if (!res.ok) throw new Error("Failed to send message");
+  if (!res.ok) {
+    throw new Error("Failed to send message");
+  }
 
   const reader = res.body?.getReader();
-  if (!reader) throw new Error("No response body");
+  if (!reader) {
+    throw new Error("No response body");
+  }
 
   const decoder = new TextDecoder();
   let buffer = "";
@@ -34,17 +57,20 @@ export async function sendMessage(
 
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
+
       try {
         const event = JSON.parse(line.slice(6));
+
         if (event.content) {
           fullResponse += event.content;
           onChunk(event.content);
         }
+
         if (event.done) {
           return event.fullContent || fullResponse;
         }
       } catch {
-        // ignore malformed chunks
+        // Ignore malformed SSE chunks
       }
     }
   }
@@ -52,71 +78,24 @@ export async function sendMessage(
   return fullResponse;
 }
 
-export async function sendVoiceMessage(
-  conversationId: number,
-  audioBlob: Blob,
-  callbacks: {
-    onUserTranscript?: (text: string) => void;
-    onTranscript?: (text: string) => void;
-    onDone?: (transcript: string) => void;
-  },
-): Promise<string> {
-  const base64Audio = await new Promise<string>((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.readAsDataURL(audioBlob);
-  });
-
-  const res = await fetch(`/api/conversations/${conversationId}/voice`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ audio: base64Audio }),
-  });
-
-  if (!res.ok) throw new Error("Failed to send voice message");
-
-  const streamReader = res.body?.getReader();
-  if (!streamReader) throw new Error("No response body");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let fullTranscript = "";
-
-  while (true) {
-    const { done, value } = await streamReader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const event = JSON.parse(line.slice(6));
-        if (event.type === "user_transcript") {
-          callbacks.onUserTranscript?.(event.data);
-        }
-        if (event.type === "transcript") {
-          fullTranscript += event.data;
-          callbacks.onTranscript?.(event.data);
-        }
-        if (event.type === "done") {
-          callbacks.onDone?.(event.transcript);
-          return event.transcript;
-        }
-      } catch {
-        // ignore malformed chunks
-      }
-    }
-  }
-
-  return fullTranscript;
+/**
+ * ------------------------------------------------------
+ * VOICE MESSAGE (TEMP STUB — PREVENTS RUNTIME CRASH)
+ * ------------------------------------------------------
+ * This exists ONLY because some UI code still imports it.
+ * Voice streaming will be reattached later.
+ */
+export async function sendVoiceMessage(): Promise<never> {
+  throw new Error(
+    "sendVoiceMessage is not implemented yet. Voice streaming will be reattached after text streaming is stable."
+  );
 }
 
+/**
+ * ------------------------------------------------------
+ * SPEECH TO TEXT (NON-STREAMING)
+ * ------------------------------------------------------
+ */
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   const base64Audio = await new Promise<string>((resolve) => {
     const reader = new FileReader();
@@ -133,11 +112,19 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
     body: JSON.stringify({ audio: base64Audio }),
   });
 
-  if (!res.ok) throw new Error("Transcription failed");
+  if (!res.ok) {
+    throw new Error("Transcription failed");
+  }
+
   const data = await res.json();
   return data.transcript;
 }
 
+/**
+ * ------------------------------------------------------
+ * TEXT TO SPEECH (STREAMING AUDIO)
+ * ------------------------------------------------------
+ */
 export async function streamTTS(
   text: string,
   onAudioChunk: (base64: string) => void,
@@ -148,7 +135,9 @@ export async function streamTTS(
     body: JSON.stringify({ text }),
   });
 
-  if (!res.ok) throw new Error("TTS failed");
+  if (!res.ok) {
+    throw new Error("TTS failed");
+  }
 
   const reader = res.body?.getReader();
   if (!reader) return;
@@ -166,13 +155,14 @@ export async function streamTTS(
 
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
+
       try {
         const event = JSON.parse(line.slice(6));
         if (event.type === "audio") {
           onAudioChunk(event.data);
         }
       } catch {
-        // ignore malformed chunks
+        // Ignore malformed chunks
       }
     }
   }
