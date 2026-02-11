@@ -482,84 +482,85 @@ Once a name is given:
 If no name is given, Interloop proceeds without one.
 `;
 
+// ======================================================
+// server/routes.ts
+// ======================================================
+
 import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
 import OpenAI from "openai";
+import { readFileSync } from "node:fs";
+import { toFile } from "openai/uploads";
 
-/**
- * ======================================================
- * OPENAI + MEMORY
- * ======================================================
- */
+// ======================================================
+// OPENAI CLIENT
+// ======================================================
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
+// ======================================================
+// MEMORY
+// ======================================================
+
 type ChatMsg = { role: "user" | "assistant"; content: string };
-
-// In-memory session store
 const sessions: Record<string, ChatMsg[]> = {};
+const MAX_SESSION_MESSAGES = 30;
 
-/**
- * ======================================================
- * ROUTES
- * ======================================================
- */
+// ======================================================
+// ROUTES
+// ======================================================
 
-export function registerRoutes(
+export async function registerRoutes(
   _httpServer: HTTPServer,
-  app: Express
-): void {
-  /**
-   * ------------------------------------------------------
-   * HEALTH CHECK
-   * ------------------------------------------------------
-   */
+  app: Express,
+): Promise<void> {
+  // -----------------------------
+  // HEALTH
+  // -----------------------------
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ ok: true });
   });
 
-  /**
-   * ------------------------------------------------------
-   * CHAT (SSE STREAMING + MEMORY)
-   * ------------------------------------------------------
-   */
+  // -----------------------------
+  // CHAT (SSE STREAMING)
+  // Body: { sessionId: string, messages: [{role:"user", content:string}] }
+  // -----------------------------
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
-      const { messages, sessionId } = req.body ?? {};
-
-      if (!Array.isArray(messages)) {
-        return res.status(400).json({ error: "messages must be an array" });
-      }
+      const { sessionId, messages } = (req.body ?? {}) as {
+        sessionId?: string;
+        messages?: ChatMsg[];
+      };
 
       if (!sessionId || typeof sessionId !== "string") {
         return res.status(400).json({ error: "sessionId is required" });
       }
 
-      // Initialize session
-      if (!sessions[sessionId]) {
-        sessions[sessionId] = [];
+      if (!Array.isArray(messages)) {
+        return res.status(400).json({ error: "messages must be an array" });
       }
 
-      // Only store latest user message
-      const lastMessage = messages[messages.length - 1];
+      if (!sessions[sessionId]) sessions[sessionId] = [];
 
+      // Append only the last user message
+      const last = messages[messages.length - 1];
       if (
-        lastMessage &&
-        lastMessage.role === "user" &&
-        typeof lastMessage.content === "string" &&
-        lastMessage.content.trim().length > 0
+        last &&
+        last.role === "user" &&
+        typeof last.content === "string" &&
+        last.content.trim().length > 0
       ) {
         sessions[sessionId].push({
           role: "user",
-          content: lastMessage.content,
+          content: last.content.trim(),
         });
       }
 
-      // Trim memory
-      if (sessions[sessionId].length > 30) {
-        sessions[sessionId] = sessions[sessionId].slice(-30);
+      // Trim session
+      if (sessions[sessionId].length > MAX_SESSION_MESSAGES) {
+        sessions[sessionId] = sessions[sessionId].slice(-MAX_SESSION_MESSAGES);
       }
 
       // SSE headers
@@ -586,24 +587,21 @@ export function registerRoutes(
         if (!delta) continue;
 
         fullContent += delta;
-
-        res.write(
-          `data: ${JSON.stringify({ content: delta })}\n\n`
-        );
+        res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
       }
 
-      // Save assistant reply
       if (fullContent.trim().length > 0) {
-        sessions[sessionId].push({
-          role: "assistant",
-          content: fullContent,
-        });
+        sessions[sessionId].push({ role: "assistant", content: fullContent });
+        if (sessions[sessionId].length > MAX_SESSION_MESSAGES) {
+          sessions[sessionId] =
+            sessions[sessionId].slice(-MAX_SESSION_MESSAGES);
+        }
       }
 
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
     } catch (err) {
-      console.error("CHAT ERROR:", err);
+      console.error("[/api/chat]", err);
       try {
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
@@ -611,74 +609,59 @@ export function registerRoutes(
     }
   });
 
-  /**
-   * ------------------------------------------------------
-   * SPEECH → TEXT (BASE64 AUDIO)
-   * ------------------------------------------------------
-   */
+  // -----------------------------
+  // SPEECH → TEXT (SDK + toFile)
+  // Body: { audio: base64string }
+  // Returns: { transcript: string }
+  // -----------------------------
   app.post("/api/stt", async (req: Request, res: Response) => {
     try {
-      const { audio } = req.body ?? {};
+      const { audio } = (req.body ?? {}) as { audio?: string };
 
       if (!audio || typeof audio !== "string") {
-        return res.status(400).json({ error: "audio is required" });
+        return res.status(400).json({ error: "audio (base64) is required" });
       }
 
-      const buffer = Buffer.from(audio, "base64");
+      const audioBuffer = Buffer.from(audio, "base64");
+      const file = await toFile(audioBuffer, "audio.webm");
 
       const transcription = await openai.audio.transcriptions.create({
-        file: buffer,
+        file,
         model: "whisper-1",
       });
 
-      res.json({ transcript: transcription.text });
+      return res.json({ transcript: transcription.text ?? "" });
     } catch (err) {
-      console.error("STT ERROR:", err);
-      res.status(500).json({ error: "Transcription failed" });
+      console.error("[/api/stt]", err);
+      return res.status(500).json({ error: "Transcription failed" });
     }
   });
 
-  /**
-   * ------------------------------------------------------
-   * TEXT → SPEECH (STREAMING BASE64 AUDIO)
-   * ------------------------------------------------------
-   */
+  // -----------------------------
+  // TEXT → SPEECH (SDK)
+  // Body: { text: string }
+  // Returns: audio/mpeg
+  // -----------------------------
   app.post("/api/tts", async (req: Request, res: Response) => {
     try {
-      const { text } = req.body ?? {};
+      const { text } = (req.body ?? {}) as { text?: string };
 
       if (!text || typeof text !== "string") {
         return res.status(400).json({ error: "text is required" });
       }
 
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      (res as any).flushHeaders?.();
-
-      const stream = await openai.audio.speech.create({
+      const speech = await openai.audio.speech.create({
         model: "gpt-4o-mini-tts",
-        voice: "narrator",
+        voice: "alloy",
         input: text,
-        stream: true,
       });
 
-      for await (const chunk of stream) {
-        const base64 = chunk.toString("base64");
-
-        res.write(
-          `data: ${JSON.stringify({
-            type: "audio",
-            data: base64,
-          })}\n\n`
-        );
-      }
-
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-      res.end();
+      const buf = Buffer.from(await speech.arrayBuffer());
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.send(buf);
     } catch (err) {
-      console.error("TTS ERROR:", err);
-      res.status(500).json({ error: "TTS failed" });
+      console.error("[/api/tts]", err);
+      return res.status(500).json({ error: "TTS failed" });
     }
   });
 }
