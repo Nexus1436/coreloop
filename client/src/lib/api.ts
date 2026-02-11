@@ -1,15 +1,29 @@
 /**
  * ======================================================
  * CLIENT API — INTERLOOP
- * Streaming-only, server-aligned
+ * Streaming-only, session-aware
  * ======================================================
  */
 
+/* =====================================================
+   SESSION ID — PERSISTENT BROWSER IDENTITY
+   ===================================================== */
+
+function getSessionId(): string {
+  let sessionId = localStorage.getItem("interloop_session_id");
+
+  if (!sessionId) {
+    sessionId = crypto.randomUUID();
+    localStorage.setItem("interloop_session_id", sessionId);
+  }
+
+  return sessionId;
+}
+
 /**
- * ------------------------------------------------------
- * CREATE CONVERSATION
- * ------------------------------------------------------
- * (Kept for future use — not used by /api/chat yet)
+ * ======================================================
+ * CREATE CONVERSATION (Reserved for future DB usage)
+ * ======================================================
  */
 export async function createConversation(): Promise<{ id: number }> {
   const res = await fetch("/api/conversations", { method: "POST" });
@@ -18,23 +32,28 @@ export async function createConversation(): Promise<{ id: number }> {
 }
 
 /**
- * ------------------------------------------------------
- * SEND MESSAGE (TEXT — PURE STREAMING SSE)
- * ------------------------------------------------------
+ * ======================================================
+ * SEND MESSAGE (TEXT — PURE STREAMING SSE + SESSION)
+ * ======================================================
+ *
  * CONTRACT:
- * - Streams chunks ONLY
- * - Never returns text
- * - Promise resolves as a signal, not data
+ * - Streams chunks only
+ * - No text returned
+ * - Session ID included
+ * - Promise resolves as signal only
  */
 export async function sendMessage(
   _conversationId: number,
   content: string,
   onChunk: (text: string) => void,
 ): Promise<void> {
+  const sessionId = getSessionId();
+
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      sessionId,
       messages: [{ role: "user", content }],
     }),
   });
@@ -70,7 +89,7 @@ export async function sendMessage(
         }
 
         if (event.done) {
-          return; // streaming complete — no data returned
+          return; // streaming complete
         }
       } catch {
         // Ignore malformed SSE chunks
@@ -80,11 +99,9 @@ export async function sendMessage(
 }
 
 /**
- * ------------------------------------------------------
+ * ======================================================
  * VOICE MESSAGE (INTENTIONAL STUB)
- * ------------------------------------------------------
- * Exists only because some UI still imports it.
- * Prevents runtime crashes.
+ * ======================================================
  */
 export async function sendVoiceMessage(): Promise<never> {
   throw new Error(
@@ -93,9 +110,9 @@ export async function sendVoiceMessage(): Promise<never> {
 }
 
 /**
- * ------------------------------------------------------
+ * ======================================================
  * SPEECH TO TEXT (NON-STREAMING)
- * ------------------------------------------------------
+ * ======================================================
  */
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   const base64Audio = await new Promise<string>((resolve) => {
@@ -122,18 +139,20 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
 }
 
 /**
- * ------------------------------------------------------
+ * ======================================================
  * TEXT TO SPEECH (STREAMING AUDIO)
- * ------------------------------------------------------
+ * ======================================================
  */
 export async function streamTTS(
   text: string,
   onAudioChunk: (base64: string) => void,
 ): Promise<void> {
+  const sessionId = getSessionId();
+
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ sessionId, text }),
   });
 
   if (!res.ok) {
