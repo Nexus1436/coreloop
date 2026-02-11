@@ -482,6 +482,10 @@ Once a name is given:
 If no name is given, Interloop proceeds without one.
 `;
 
+import type { Express, Request, Response } from "express";
+import type { Server as HTTPServer } from "http";
+import OpenAI from "openai";
+
 /**
  * ======================================================
  * OPENAI + MEMORY
@@ -494,49 +498,51 @@ const openai = new OpenAI({
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
 
-// In-memory session store (keyed by sessionId)
+// In-memory session store
 const sessions: Record<string, ChatMsg[]> = {};
 
 /**
  * ======================================================
- * ROUTES (exported for server/index.ts)
+ * ROUTES
  * ======================================================
  */
 
-export function registerRoutes(_httpServer: HTTPServer, app: Express): void {
+export function registerRoutes(
+  _httpServer: HTTPServer,
+  app: Express
+): void {
+  /**
+   * ------------------------------------------------------
+   * HEALTH CHECK
+   * ------------------------------------------------------
+   */
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ ok: true });
   });
 
+  /**
+   * ------------------------------------------------------
+   * CHAT (SSE STREAMING + MEMORY)
+   * ------------------------------------------------------
+   */
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
-      const { messages, sessionId } = (req.body ?? {}) as {
-        messages?: ChatMsg[];
-        sessionId?: string;
-      };
+      const { messages, sessionId } = req.body ?? {};
 
-      // ---------------------------------------------
-      // VALIDATION
-      // ---------------------------------------------
       if (!Array.isArray(messages)) {
-        res.status(400).json({ error: "messages must be an array" });
-        return;
+        return res.status(400).json({ error: "messages must be an array" });
       }
 
       if (!sessionId || typeof sessionId !== "string") {
-        res.status(400).json({ error: "sessionId is required" });
-        return;
+        return res.status(400).json({ error: "sessionId is required" });
       }
 
-      // ---------------------------------------------
-      // SESSION INITIALIZATION
-      // ---------------------------------------------
+      // Initialize session
       if (!sessions[sessionId]) {
         sessions[sessionId] = [];
       }
 
-      // Only append the LAST user message
-      // (prevents duplicating entire history every request)
+      // Only store latest user message
       const lastMessage = messages[messages.length - 1];
 
       if (
@@ -551,22 +557,17 @@ export function registerRoutes(_httpServer: HTTPServer, app: Express): void {
         });
       }
 
-      // Trim session history (keep last 30 messages)
+      // Trim memory
       if (sessions[sessionId].length > 30) {
         sessions[sessionId] = sessions[sessionId].slice(-30);
       }
 
-      // ---------------------------------------------
-      // STREAM HEADERS (SSE)
-      // ---------------------------------------------
+      // SSE headers
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
       (res as any).flushHeaders?.();
 
-      // ---------------------------------------------
-      // OPENAI CALL (FULL SESSION HISTORY)
-      // ---------------------------------------------
       const stream = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [
@@ -585,12 +586,13 @@ export function registerRoutes(_httpServer: HTTPServer, app: Express): void {
         if (!delta) continue;
 
         fullContent += delta;
-        res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+
+        res.write(
+          `data: ${JSON.stringify({ content: delta })}\n\n`
+        );
       }
 
-      // ---------------------------------------------
-      // STORE ASSISTANT RESPONSE
-      // ---------------------------------------------
+      // Save assistant reply
       if (fullContent.trim().length > 0) {
         sessions[sessionId].push({
           role: "assistant",
@@ -601,11 +603,82 @@ export function registerRoutes(_httpServer: HTTPServer, app: Express): void {
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
     } catch (err) {
-      console.error("[/api/chat]", err);
+      console.error("CHAT ERROR:", err);
       try {
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       } catch {}
+    }
+  });
+
+  /**
+   * ------------------------------------------------------
+   * SPEECH → TEXT (BASE64 AUDIO)
+   * ------------------------------------------------------
+   */
+  app.post("/api/stt", async (req: Request, res: Response) => {
+    try {
+      const { audio } = req.body ?? {};
+
+      if (!audio || typeof audio !== "string") {
+        return res.status(400).json({ error: "audio is required" });
+      }
+
+      const buffer = Buffer.from(audio, "base64");
+
+      const transcription = await openai.audio.transcriptions.create({
+        file: buffer,
+        model: "whisper-1",
+      });
+
+      res.json({ transcript: transcription.text });
+    } catch (err) {
+      console.error("STT ERROR:", err);
+      res.status(500).json({ error: "Transcription failed" });
+    }
+  });
+
+  /**
+   * ------------------------------------------------------
+   * TEXT → SPEECH (STREAMING BASE64 AUDIO)
+   * ------------------------------------------------------
+   */
+  app.post("/api/tts", async (req: Request, res: Response) => {
+    try {
+      const { text } = req.body ?? {};
+
+      if (!text || typeof text !== "string") {
+        return res.status(400).json({ error: "text is required" });
+      }
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      (res as any).flushHeaders?.();
+
+      const stream = await openai.audio.speech.create({
+        model: "gpt-4o-mini-tts",
+        voice: "narrator",
+        input: text,
+        stream: true,
+      });
+
+      for await (const chunk of stream) {
+        const base64 = chunk.toString("base64");
+
+        res.write(
+          `data: ${JSON.stringify({
+            type: "audio",
+            data: base64,
+          })}\n\n`
+        );
+      }
+
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+    } catch (err) {
+      console.error("TTS ERROR:", err);
+      res.status(500).json({ error: "TTS failed" });
     }
   });
 }
