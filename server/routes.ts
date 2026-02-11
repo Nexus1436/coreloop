@@ -482,88 +482,69 @@ Once a name is given:
 If no name is given, Interloop proceeds without one.
 `;
 
-// ======================================================
-// server/routes.ts
-// ======================================================
-
 import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
 import OpenAI from "openai";
 import { readFileSync } from "node:fs";
 import { toFile } from "openai/uploads";
 
-// ======================================================
-// OPENAI CLIENT
-// ======================================================
+/* =====================================================
+   OPENAI CLIENT
+===================================================== */
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
-// ======================================================
-// MEMORY
-// ======================================================
-
 type ChatMsg = { role: "user" | "assistant"; content: string };
+
 const sessions: Record<string, ChatMsg[]> = {};
 const MAX_SESSION_MESSAGES = 30;
 
-// ======================================================
-// ROUTES
-// ======================================================
+/* =====================================================
+   ROUTES
+===================================================== */
 
 export async function registerRoutes(
   _httpServer: HTTPServer,
   app: Express,
 ): Promise<void> {
-  // -----------------------------
-  // HEALTH
-  // -----------------------------
-  app.get("/api/health", (_req: Request, res: Response) => {
+  /* -----------------------------
+     HEALTH
+  ----------------------------- */
+  app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
   });
 
-  // -----------------------------
-  // CHAT (SSE STREAMING)
-  // Body: { sessionId: string, messages: [{role:"user", content:string}] }
-  // -----------------------------
+  /* -----------------------------
+     CHAT (SSE STREAMING)
+  ----------------------------- */
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
-      const { sessionId, messages } = (req.body ?? {}) as {
-        sessionId?: string;
-        messages?: ChatMsg[];
-      };
+      const { sessionId, messages } = req.body ?? {};
 
       if (!sessionId || typeof sessionId !== "string") {
-        return res.status(400).json({ error: "sessionId is required" });
+        return res.status(400).json({ error: "sessionId required" });
       }
 
       if (!Array.isArray(messages)) {
-        return res.status(400).json({ error: "messages must be an array" });
+        return res.status(400).json({ error: "messages must be array" });
       }
 
       if (!sessions[sessionId]) sessions[sessionId] = [];
 
-      // Append only the last user message
       const last = messages[messages.length - 1];
-      if (
-        last &&
-        last.role === "user" &&
-        typeof last.content === "string" &&
-        last.content.trim().length > 0
-      ) {
+      if (last?.role === "user" && last.content?.trim()) {
         sessions[sessionId].push({
           role: "user",
           content: last.content.trim(),
         });
       }
 
-      // Trim session
       if (sessions[sessionId].length > MAX_SESSION_MESSAGES) {
         sessions[sessionId] = sessions[sessionId].slice(-MAX_SESSION_MESSAGES);
       }
 
-      // SSE headers
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
@@ -590,78 +571,77 @@ export async function registerRoutes(
         res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
       }
 
-      if (fullContent.trim().length > 0) {
-        sessions[sessionId].push({ role: "assistant", content: fullContent });
-        if (sessions[sessionId].length > MAX_SESSION_MESSAGES) {
-          sessions[sessionId] =
-            sessions[sessionId].slice(-MAX_SESSION_MESSAGES);
-        }
+      if (fullContent.trim()) {
+        sessions[sessionId].push({
+          role: "assistant",
+          content: fullContent,
+        });
       }
 
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
     } catch (err) {
       console.error("[/api/chat]", err);
-      try {
-        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        res.end();
-      } catch {}
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
     }
   });
 
-  // -----------------------------
-  // SPEECH → TEXT (SDK + toFile)
-  // Body: { audio: base64string }
-  // Returns: { transcript: string }
-  // -----------------------------
+  /* -----------------------------
+     SPEECH → TEXT (WHISPER)
+  ----------------------------- */
   app.post("/api/stt", async (req: Request, res: Response) => {
     try {
-      const { audio } = (req.body ?? {}) as { audio?: string };
+      const { audio } = req.body ?? {};
 
       if (!audio || typeof audio !== "string") {
-        return res.status(400).json({ error: "audio (base64) is required" });
+        return res.status(400).json({ error: "audio required" });
       }
 
       const audioBuffer = Buffer.from(audio, "base64");
-      const file = await toFile(audioBuffer, "audio.webm");
 
       const transcription = await openai.audio.transcriptions.create({
-        file,
+        file: await toFile(audioBuffer, "audio.webm"),
         model: "whisper-1",
       });
 
-      return res.json({ transcript: transcription.text ?? "" });
+      return res.json({
+        transcript: transcription.text ?? "",
+      });
     } catch (err) {
       console.error("[/api/stt]", err);
-      return res.status(500).json({ error: "Transcription failed" });
+      return res.status(500).json({
+        error: "Transcription failed",
+      });
     }
   });
 
-  // -----------------------------
-  // TEXT → SPEECH (SDK)
-  // Body: { text: string }
-  // Returns: audio/mpeg
-  // -----------------------------
+  /* -----------------------------
+     TEXT → SPEECH
+  ----------------------------- */
   app.post("/api/tts", async (req: Request, res: Response) => {
     try {
-      const { text } = (req.body ?? {}) as { text?: string };
+      const { text } = req.body ?? {};
 
       if (!text || typeof text !== "string") {
-        return res.status(400).json({ error: "text is required" });
+        return res.status(400).json({ error: "text required" });
       }
 
-      const speech = await openai.audio.speech.create({
+      const audio = await openai.audio.speech.create({
         model: "gpt-4o-mini-tts",
         voice: "alloy",
         input: text,
       });
 
-      const buf = Buffer.from(await speech.arrayBuffer());
+      const buffer = Buffer.from(await audio.arrayBuffer());
+
       res.setHeader("Content-Type", "audio/mpeg");
-      res.send(buf);
+      res.send(buffer);
     } catch (err) {
       console.error("[/api/tts]", err);
-      return res.status(500).json({ error: "TTS failed" });
+      return res.status(500).json({
+        error: "TTS failed",
+      });
     }
   });
 }
