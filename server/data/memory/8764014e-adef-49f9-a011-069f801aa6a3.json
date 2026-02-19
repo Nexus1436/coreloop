@@ -1,0 +1,66 @@
+{
+  "identity": {
+    "name": "Tim",
+    "dominantHand": null,
+    "age": null,
+    "height": null,
+    "weight": null
+  },
+  "anthropometry": {
+    "limbLengthBias": null,
+    "notes": []
+  },
+  "body": {
+    "injuries": [
+      "soreness in the tops of hamstrings"
+    ],
+    "chronicTensionZones": [
+      "rear deltoid",
+      "trapezius"
+    ],
+    "instabilityZones": [
+      "lower back",
+      "groin"
+    ]
+  },
+  "sportContext": {
+    "primarySport": "racquetball",
+    "secondarySports": [],
+    "yearsExperience": null,
+    "competitionLevel": null
+  },
+  "movementPatterns": {
+    "confirmed": [],
+    "suspected": [],
+    "recurringThemes": []
+  },
+  "signalHistory": {
+    "recurringPainSignals": [
+      "discomfort after playing racquetball",
+      "discomfort when working at desk for a long time",
+      "pain when serving a lot during matches"
+    ],
+    "recurringConfusionSignals": [],
+    "fearTriggers": []
+  },
+  "experiments": {
+    "successful": [],
+    "failed": [],
+    "neutral": []
+  },
+  "performanceTrends": {
+    "improvements": [],
+    "regressions": [],
+    "consistencyNotes": []
+  },
+  "cognitivePatterns": {
+    "overanalysis": false,
+    "rushTendency": false,
+    "hesitationPattern": false,
+    "notes": []
+  },
+  "sessionMeta": {
+    "totalSessions": 85,
+    "lastSession": "2026-02-18T08:07:49.178Z"
+  }
+}

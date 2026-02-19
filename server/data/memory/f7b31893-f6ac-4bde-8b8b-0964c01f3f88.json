@@ -1,0 +1,74 @@
+{
+  "identity": {
+    "name": "Mac",
+    "dominantHand": "right",
+    "age": null,
+    "height": null,
+    "weight": null
+  },
+  "anthropometry": {
+    "limbLengthBias": null,
+    "notes": []
+  },
+  "body": {
+    "injuries": [
+      "back pain",
+      "mid-back pain",
+      "aneurysm in left knee"
+    ],
+    "chronicTensionZones": [
+      "neck",
+      "AC joint"
+    ],
+    "instabilityZones": []
+  },
+  "sportContext": {
+    "primarySport": "racquetball",
+    "secondarySports": [
+      "running"
+    ],
+    "yearsExperience": 1,
+    "competitionLevel": null
+  },
+  "movementPatterns": {
+    "confirmed": [],
+    "suspected": [],
+    "recurringThemes": []
+  },
+  "signalHistory": {
+    "recurringPainSignals": [
+      "lower back pain",
+      "mid-back pain",
+      "lower back pain on the right side",
+      "mid-back pain while running",
+      "sharp pain on the lower right side while playing racquetball",
+      "throbbing pain in mid-back while running"
+    ],
+    "recurringConfusionSignals": [],
+    "fearTriggers": []
+  },
+  "experiments": {
+    "successful": [],
+    "failed": [],
+    "neutral": []
+  },
+  "performanceTrends": {
+    "improvements": [],
+    "regressions": [],
+    "consistencyNotes": []
+  },
+  "cognitivePatterns": {
+    "overanalysis": false,
+    "rushTendency": false,
+    "hesitationPattern": false,
+    "notes": []
+  },
+  "sessionMeta": {
+    "totalSessions": 100,
+    "lastSession": "2026-02-15T04:04:02.992Z"
+  },
+  "patterns": {},
+  "history": {
+    "total_sessions": 0
+  }
+}

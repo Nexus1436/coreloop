@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CentralForm } from "@/components/central-form";
 import { ChatView } from "@/components/chat-view";
-import { createConversation, sendVoiceMessage, streamTTS } from "@/lib/api";
+import { sendMessage, transcribeAudio, streamTTS } from "@/lib/api";
 import { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
 
 export interface ChatMessage {
@@ -17,13 +17,28 @@ function nextId() {
 }
 
 export default function Home() {
+  /* ================= MODE ================= */
   const [mode, setMode] = useState<"A" | "B">("A");
+
+  /* ================= CHAT STATE ================= */
   const [hasPressed, setHasPressed] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [conversationId, setConversationId] = useState<number | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [replayText, setReplayText] = useState<string | null>(null);
+
+  /* ================= VOICE ================= */
+  // MALE DEFAULT
+  const [voiceGender, setVoiceGender] = useState<"male" | "female">("male");
+
+  /* IMPORTANT:
+     These strings MUST match what your server expects.
+     Server resolves:
+     - "male" -> ELEVEN_VOICE_ID_MALE
+     - "female" -> ELEVEN_VOICE_ID_FEMALE
+  */
+  const resolvedVoice = voiceGender;
+
+  /* ================= AUDIO ENGINE ================= */
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -32,20 +47,15 @@ export default function Home() {
 
   const lastResponse = useMemo(() => {
     const assistantMessages = messages.filter((m) => m.role === "assistant");
-    return assistantMessages.length > 0
+    return assistantMessages.length
       ? assistantMessages[assistantMessages.length - 1].text
       : null;
   }, [messages]);
 
-  const ensureConversation = useCallback(async () => {
-    if (conversationId) return conversationId;
-    const conv = await createConversation();
-    setConversationId(conv.id);
-    return conv.id;
-  }, [conversationId]);
+  /* ================= RECORDER ================= */
 
   const startRecorderOnStream = (stream: MediaStream) => {
-    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+    const recorder = new MediaRecorder(stream);
     mediaRecorderRef.current = recorder;
     chunksRef.current = [];
 
@@ -53,22 +63,105 @@ export default function Home() {
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
 
-    recorder.start(100);
+    recorder.start();
   };
+
+  const stopAndGetBlob = async (): Promise<Blob> => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== "recording") return new Blob();
+
+    await new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve();
+      recorder.stop();
+    });
+
+    const blob = new Blob(chunksRef.current, {
+      type: "audio/webm",
+    });
+
+    recorder.stream.getTracks().forEach((t) => t.stop());
+
+    mediaRecorderRef.current = null;
+    chunksRef.current = [];
+
+    return blob;
+  };
+
+  /* ================= VOICE FLOW ================= */
+
+  const runSTTThenChat = async (audioBlob: Blob) => {
+    const transcript = await transcribeAudio(audioBlob);
+    const userText = (transcript || "").trim();
+    if (!userText) return;
+
+    const userMsgId = nextId();
+    const assistantMsgId = nextId();
+
+    setMessages((prev) => [
+      ...prev,
+      { id: userMsgId, role: "user", text: userText },
+      { id: assistantMsgId, role: "assistant", text: "" },
+    ]);
+
+    let assistantText = "";
+
+    await sendMessage(0, userText, (chunk) => {
+      assistantText += chunk;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMsgId ? { ...m, text: assistantText } : m,
+        ),
+      );
+    });
+
+    if (mode === "A") {
+      try {
+        await playback.init();
+        playback.stop();
+
+        const cache: string[] = [];
+
+        await streamTTS(
+          assistantText,
+          (audioChunk: string) => {
+            cache.push(audioChunk);
+            playback.pushAudio(audioChunk);
+          },
+          {
+            voice: resolvedVoice,
+            speed: 0.97,
+          },
+        );
+
+        playback.signalComplete();
+        lastAudioChunksRef.current = cache;
+      } catch (err) {
+        console.error("TTS error:", err);
+      }
+    }
+  };
+
+  /* ================= TAP LOGIC ================= */
 
   const handleScreenTap = async () => {
     if (!hasPressed) {
       setHasPressed(true);
       setIsRecording(true);
 
-      navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      await playback.init();
+      playback.stop();
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
         micStreamRef.current = stream;
         startRecorderOnStream(stream);
-      }).catch((err) => {
+      } catch (err) {
         console.error("Microphone access denied:", err);
         setIsRecording(false);
         setHasPressed(false);
-      });
+      }
 
       return;
     }
@@ -76,75 +169,40 @@ export default function Home() {
     if (isProcessing) return;
 
     if (isRecording) {
-      const recorder = mediaRecorderRef.current;
-      if (!recorder || recorder.state !== "recording") return;
-
-      const blob = await new Promise<Blob>((resolve) => {
-        recorder.onstop = () => {
-          const b = new Blob(chunksRef.current, { type: "audio/webm" });
-          resolve(b);
-        };
-        recorder.stop();
-      });
-
       setIsRecording(false);
       setIsProcessing(true);
 
       try {
-        const convId = await ensureConversation();
-
-        let assistantText = "";
-        const assistantMsgId = nextId();
-        const audioCache: string[] = [];
-
-        await sendVoiceMessage(convId, blob, {
-          onUserTranscript: (text) => {
-            setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
-          },
-          onTranscript: (chunk) => {
-            assistantText += chunk;
-            setMessages((prev) => {
-              const existing = prev.find((m) => m.id === assistantMsgId);
-              if (existing) {
-                return prev.map((m) => m.id === assistantMsgId ? { ...m, text: assistantText } : m);
-              }
-              return [...prev, { id: assistantMsgId, role: "assistant", text: assistantText }];
-            });
-          },
-          onDone: async (transcript) => {
-            if (!transcript || !transcript.trim()) return;
-            await playback.init();
-            playback.clear();
-            await streamTTS(transcript, (audioChunk) => {
-              audioCache.push(audioChunk);
-              playback.pushAudio(audioChunk);
-            });
-            playback.signalComplete();
-            lastAudioChunksRef.current = audioCache;
-          },
-        });
+        const blob = await stopAndGetBlob();
+        if (!blob || blob.size === 0) return;
+        await runSTTThenChat(blob);
       } catch (err) {
-        console.error("Voice message error:", err);
+        console.error("Voice flow error:", err);
       } finally {
         setIsProcessing(false);
       }
-    } else {
-      setIsRecording(true);
 
-      const stream = micStreamRef.current;
-      if (stream && stream.active) {
-        startRecorderOnStream(stream);
-      } else {
-        navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => {
-          micStreamRef.current = s;
-          startRecorderOnStream(s);
-        }).catch((err) => {
-          console.error("Microphone access denied:", err);
-          setIsRecording(false);
-        });
-      }
+      return;
+    }
+
+    setIsRecording(true);
+
+    await playback.init();
+    playback.stop();
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      micStreamRef.current = stream;
+      startRecorderOnStream(stream);
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      setIsRecording(false);
     }
   };
+
+  /* ================= MODE SWITCH ================= */
 
   const handleSwitchToB = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -156,48 +214,56 @@ export default function Home() {
     setHasPressed(false);
   };
 
-  const handleRepeatResponse = useCallback(async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!lastResponse) return;
+  /* ================= REPLAY ================= */
 
-    setReplayText(lastResponse);
+  const handleRepeatResponse = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!lastResponse) return;
 
-    await playback.init();
-    playback.clear();
+      await playback.init();
+      playback.stop();
 
-    const cached = lastAudioChunksRef.current;
-    if (cached.length > 0) {
-      for (const chunk of cached) {
-        playback.pushAudio(chunk);
-      }
+      const cache: string[] = [];
+
+      await streamTTS(
+        lastResponse,
+        (audioChunk: string) => {
+          cache.push(audioChunk);
+          playback.pushAudio(audioChunk);
+        },
+        {
+          voice: resolvedVoice,
+          speed: 0.97,
+        },
+      );
+
       playback.signalComplete();
-    } else {
-      await streamTTS(lastResponse, (audioChunk) => {
-        playback.pushAudio(audioChunk);
-      });
-      playback.signalComplete();
-    }
+      lastAudioChunksRef.current = cache;
+    },
+    [lastResponse, resolvedVoice],
+  );
 
-    setTimeout(() => setReplayText(null), 4000);
-  }, [lastResponse, playback]);
+  /* ================= MODE B ================= */
 
   if (mode === "B") {
     return (
       <ChatView
         messages={messages}
         setMessages={setMessages}
-        conversationId={conversationId}
-        ensureConversation={ensureConversation}
         onBack={handleSwitchToA}
         playback={playback}
         lastAudioChunksRef={lastAudioChunksRef}
+        voiceGender={voiceGender}
       />
     );
   }
 
+  /* ================= MODE A UI ================= */
+
   return (
     <div
-      className="min-h-screen w-full flex flex-col items-center justify-center overflow-hidden cursor-pointer select-none bg-black relative"
+      className="min-h-screen w-full flex flex-col items-center justify-center bg-black relative"
       onClick={handleScreenTap}
     >
       <div className="flex-1 flex flex-col items-center justify-center relative w-full">
@@ -205,57 +271,35 @@ export default function Home() {
 
         <div className="absolute pointer-events-none">
           {isRecording ? (
-            <p className="text-sm md:text-base font-light text-[#858585] tracking-widest uppercase text-center" style={{ opacity: 0.6 }}>
+            <p className="text-sm text-[#858585] uppercase text-center">
               Listening…
             </p>
           ) : !isProcessing ? (
-            <p className="text-sm md:text-base font-light text-[#b0b0b0] tracking-wide text-center" style={{ opacity: 0.65 }}>
-              Press here
-            </p>
+            <p className="text-sm text-[#b0b0b0] text-center">Press here</p>
           ) : null}
         </div>
-
-        <AnimatePresence>
-          {replayText && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 0.8 }}
-              exit={{ opacity: 0, transition: { duration: 1, ease: "easeOut" } }}
-              transition={{ duration: 0.5 }}
-              className="absolute pointer-events-none mt-40"
-            >
-              <p className="text-base md:text-lg font-light text-[#e0e0e0] tracking-wide text-center max-w-sm px-6 leading-relaxed">
-                {replayText}
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
 
-      <div className="absolute bottom-12 md:bottom-16 left-0 right-0 flex justify-between items-baseline px-8 md:px-12 pointer-events-none">
-        <div
-          className="pointer-events-auto"
-          onClick={handleSwitchToB}
-        >
-          <p
-            className="text-lg font-medium text-[#858585] leading-relaxed hover:text-[#a3a3a3] transition-colors duration-300"
-            style={{ opacity: 0.85 }}
-            data-testid="link-prefer-typing"
-          >
+      <div className="absolute bottom-12 left-0 right-0 flex justify-between items-center px-8">
+        <div onClick={handleSwitchToB}>
+          <p className="text-lg text-[#858585] hover:text-[#a3a3a3]">
             Prefer typing?
           </p>
         </div>
 
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setVoiceGender((prev) => (prev === "male" ? "female" : "male"));
+          }}
+          className="text-sm text-[#909090] hover:text-white"
+        >
+          Voice: {voiceGender === "male" ? "Male" : "Female"}
+        </button>
+
         {lastResponse ? (
-          <div
-            className="pointer-events-auto"
-            onClick={handleRepeatResponse}
-          >
-            <p
-              className="text-lg font-medium text-[#909090] leading-relaxed transition-colors duration-300"
-              style={{ opacity: 0.68 }}
-              data-testid="button-repeat-response"
-            >
+          <div onClick={handleRepeatResponse}>
+            <p className="text-lg text-[#909090] hover:text-white">
               Repeat response
             </p>
           </div>

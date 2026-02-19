@@ -1,13 +1,9 @@
 /**
  * ======================================================
  * CLIENT API — INTERLOOP
- * Streaming-only, session-aware
+ * ElevenLabs TTS Version
  * ======================================================
  */
-
-/* =====================================================
-   SESSION ID — PERSISTENT BROWSER IDENTITY
-   ===================================================== */
 
 function getSessionId(): string {
   let sessionId = localStorage.getItem("interloop_session_id");
@@ -20,28 +16,9 @@ function getSessionId(): string {
   return sessionId;
 }
 
-/**
- * ======================================================
- * CREATE CONVERSATION (Reserved for future DB usage)
- * ======================================================
- */
-export async function createConversation(): Promise<{ id: number }> {
-  const res = await fetch("/api/conversations", { method: "POST" });
-  if (!res.ok) throw new Error("Failed to create conversation");
-  return res.json();
-}
-
-/**
- * ======================================================
- * SEND MESSAGE (TEXT — PURE STREAMING SSE + SESSION)
- * ======================================================
- *
- * CONTRACT:
- * - Streams chunks only
- * - No text returned
- * - Session ID included
- * - Promise resolves as signal only
- */
+/* ======================================================
+   SEND MESSAGE (Streaming SSE)
+====================================================== */
 export async function sendMessage(
   _conversationId: number,
   content: string,
@@ -63,9 +40,7 @@ export async function sendMessage(
   }
 
   const reader = res.body?.getReader();
-  if (!reader) {
-    throw new Error("No response body");
-  }
+  if (!reader) throw new Error("No response body");
 
   const decoder = new TextDecoder();
   let buffer = "";
@@ -84,36 +59,18 @@ export async function sendMessage(
       try {
         const event = JSON.parse(line.slice(6));
 
-        if (event.content) {
-          onChunk(event.content);
-        }
-
-        if (event.done) {
-          return; // streaming complete
-        }
+        if (event.content) onChunk(event.content);
+        if (event.done) return;
       } catch {
-        // Ignore malformed SSE chunks
+        // ignore malformed chunks
       }
     }
   }
 }
 
-/**
- * ======================================================
- * VOICE MESSAGE (INTENTIONAL STUB)
- * ======================================================
- */
-export async function sendVoiceMessage(): Promise<never> {
-  throw new Error(
-    "sendVoiceMessage is intentionally disabled. Voice streaming will be reattached after text streaming is stable.",
-  );
-}
-
-/**
- * ======================================================
- * SPEECH TO TEXT (NON-STREAMING)
- * ======================================================
- */
+/* ======================================================
+   TRANSCRIBE AUDIO (OpenAI Whisper)
+====================================================== */
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   const base64Audio = await new Promise<string>((resolve) => {
     const reader = new FileReader();
@@ -121,6 +78,7 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
       const result = reader.result as string;
       resolve(result.split(",")[1]);
     };
+
     reader.readAsDataURL(audioBlob);
   });
 
@@ -130,60 +88,46 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
     body: JSON.stringify({ audio: base64Audio }),
   });
 
-  if (!res.ok) {
-    throw new Error("Transcription failed");
-  }
+  if (!res.ok) throw new Error("Transcription failed");
 
   const data = await res.json();
-  return data.transcript;
+  return data.transcript ?? "";
 }
 
-/**
- * ======================================================
- * TEXT TO SPEECH (STREAMING AUDIO)
- * ======================================================
- */
+/* ======================================================
+   ELEVENLABS TTS
+====================================================== */
 export async function streamTTS(
   text: string,
-  onAudioChunk: (base64: string) => void,
+  onChunk: (audioChunk: string) => void,
+  options?: { voice?: string },
 ): Promise<void> {
-  const sessionId = getSessionId();
+  if (!text || !text.trim()) return;
 
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, text }),
+    body: JSON.stringify({
+      text,
+      // Default to female if nothing passed
+      voice: options?.voice ?? "female",
+    }),
   });
 
   if (!res.ok) {
     throw new Error("TTS failed");
   }
 
-  const reader = res.body?.getReader();
-  if (!reader) return;
+  const arrayBuffer = await res.arrayBuffer();
+  const uint8Array = new Uint8Array(arrayBuffer);
 
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-
-      try {
-        const event = JSON.parse(line.slice(6));
-        if (event.type === "audio") {
-          onAudioChunk(event.data);
-        }
-      } catch {
-        // Ignore malformed chunks
-      }
-    }
+  // Convert binary to base64 for Audio element playback
+  let binary = "";
+  for (let i = 0; i < uint8Array.length; i++) {
+    binary += String.fromCharCode(uint8Array[i]);
   }
+
+  const base64Audio = btoa(binary);
+
+  onChunk(base64Audio);
 }
