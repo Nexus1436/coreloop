@@ -3,10 +3,12 @@ import express, {
   type Response,
   type NextFunction,
 } from "express";
+
 import { createServer } from "http";
 
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
+import setupVite from "./vite";   // ✅ FIX
 
 // 🔐 Replit Auth
 import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
@@ -123,8 +125,7 @@ async function boot() {
     if (process.env.NODE_ENV === "production") {
       serveStatic(app);
     } else {
-      const { setupVite } = await import("./vite");
-      await setupVite(httpServer, app);
+      await setupVite(httpServer, app); // ✅ FIXED CALL
     }
 
     // PORT
