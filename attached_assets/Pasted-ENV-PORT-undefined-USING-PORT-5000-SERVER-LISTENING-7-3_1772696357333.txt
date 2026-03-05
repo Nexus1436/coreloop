@@ -1,0 +1,141 @@
+ENV PORT: undefined
+USING PORT: 5000
+SERVER LISTENING
+7:34:56 AM [express] server running on port 5000
+REQ: GET /
+REQ: GET /@vite/client
+REQ: GET /src/main.tsx
+REQ: GET /@react-refresh
+REQ: GET /src/index.css
+REQ: GET /src/App.tsx
+REQ: GET /
+REQ: GET /src/pages/not-found.tsx
+REQ: GET /src/components/ui/toaster.tsx
+REQ: GET /src/pages/home.tsx
+REQ: GET /src/lib/queryClient.ts
+REQ: GET /@fs/home/runner/workspace/node_modules/vite/dist/client/env.mjs
+REQ: GET /src/hooks/use-toast.ts
+REQ: GET /src/components/ui/toast.tsx
+REQ: GET /src/components/central-form.tsx
+REQ: GET /src/components/ui/card.tsx
+REQ: GET /src/components/chat-view.tsx
+REQ: GET /src/lib/api.ts
+REQ: GET /replit_integrations/audio/useAudioPlayback.ts
+REQ: GET /src/lib/utils.ts
+REQ: GET /logo.png
+REQ: GET /api/conversations
+7:34:57 AM [express] GET /api/conversations 200 11ms
+REQ: GET /@vite/client
+REQ: GET /src/main.tsx
+REQ: GET /@react-refresh
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=d3265bdf
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/react-dom_client.js?v=d3265bdf
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/chunk-WUR7D6NS.js?v=d3265bdf
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/chunk-G3PMV62Z.js?v=d3265bdf
+REQ: GET /src/App.tsx
+REQ: GET /src/index.css
+REQ: GET /@fs/home/runner/workspace/node_modules/vite/dist/client/env.mjs
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/wouter.js?v=d3265bdf
+REQ: GET /src/lib/queryClient.ts
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/@tanstack_react-query.js?v=d3265bdf
+REQ: GET /src/components/ui/toaster.tsx
+REQ: GET /src/pages/home.tsx
+REQ: GET /src/pages/not-found.tsx
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/chunk-YF4B4G2L.js?v=d3265bdf
+REQ: GET /src/hooks/use-toast.ts
+REQ: GET /src/components/ui/toast.tsx
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/react.js?v=d3265bdf
+REQ: GET /src/components/central-form.tsx
+REQ: GET /src/components/chat-view.tsx
+REQ: GET /src/lib/api.ts
+REQ: GET /replit_integrations/audio/useAudioPlayback.ts
+REQ: GET /src/components/ui/card.tsx
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/lucide-react.js?v=d3265bdf
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/chunk-2YVA4HRZ.js?v=d3265bdf
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/@radix-ui_react-toast.js?v=d3265bdf
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/class-variance-authority.js?v=d3265bdf
+REQ: GET /src/lib/utils.ts
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/framer-motion.js?v=d3265bdf
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/chunk-U7P2NEEE.js?v=d3265bdf
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/clsx.js?v=d3265bdf
+REQ: GET /@fs/home/runner/workspace/node_modules/.vite/deps/tailwind-merge.js?v=d3265bdf
+REQ: GET /api/conversations
+7:35:02 AM [express] GET /api/conversations 200 5ms
+REQ: GET /logo.png
+REQ: GET /favicon.png
+REQ: POST /api/stt
+7:35:58 AM [express] POST /api/stt 200 5ms
+REQ: POST /api/chat
+[/api/chat] error: insert or update on table "messages" violates foreign key constraint "messages_conversation_id_conversations_id_fk"
+    at /home/runner/workspace/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async <anonymous> (/home/runner/workspace/server/routes.ts:627:7) {
+  length: 316,
+  severity: 'ERROR',
+  code: '23503',
+  detail: 'Key (conversation_id)=(0) is not present in table "conversations".',
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: 'public',
+  table: 'messages',
+  column: undefined,
+  dataType: undefined,
+  constraint: 'messages_conversation_id_conversations_id_fk',
+  file: 'ri_triggers.c',
+  line: '2619',
+  routine: 'ri_ReportViolation'
+}
+7:36:10 AM [express] POST /api/chat 200 407ms
+REQ: POST /api/chat
+[/api/chat] error: insert or update on table "messages" violates foreign key constraint "messages_conversation_id_conversations_id_fk"
+    at /home/runner/workspace/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async <anonymous> (/home/runner/workspace/server/routes.ts:627:7) {
+  length: 316,
+  severity: 'ERROR',
+  code: '23503',
+  detail: 'Key (conversation_id)=(0) is not present in table "conversations".',
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: 'public',
+  table: 'messages',
+  column: undefined,
+  dataType: undefined,
+  constraint: 'messages_conversation_id_conversations_id_fk',
+  file: 'ri_triggers.c',
+  line: '2619',
+  routine: 'ri_ReportViolation'
+}
+7:36:15 AM [express] POST /api/chat 200 14ms
+REQ: GET /logo.png
+REQ: POST /api/stt
+7:37:23 AM [express] POST /api/stt 200 4ms
+REQ: GET /
+REQ: GET /
+REQ: GET /@vite/client
+REQ: GET /src/main.tsx
+REQ: GET /@fs/home/runner/workspace/node_modules/vite/dist/client/env.mjs
+REQ: GET /@react-refresh
+REQ: GET /src/App.tsx
+REQ: GET /src/index.css
+REQ: GET /src/components/ui/toaster.tsx
+REQ: GET /src/pages/home.tsx
+REQ: GET /src/lib/queryClient.ts
+REQ: GET /src/pages/not-found.tsx
+REQ: GET /src/components/ui/toast.tsx
+REQ: GET /src/hooks/use-toast.ts
+REQ: GET /src/components/chat-view.tsx
+REQ: GET /src/lib/api.ts
+REQ: GET /src/components/central-form.tsx
+REQ: GET /replit_integrations/audio/useAudioPlayback.ts
+REQ: GET /src/components/ui/card.tsx
+REQ: GET /src/lib/utils.ts
+REQ: GET /api/conversations
+REQ: GET /logo.png
+7:37:43 AM [express] GET /api/conversations 200 5ms

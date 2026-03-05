@@ -9,6 +9,7 @@ export default async function setupVite(server: Server, app: Express) {
     server: {
       middlewareMode: true,
       hmr: { server },
+      allowedHosts: true,
     },
     appType: "custom",
   });
