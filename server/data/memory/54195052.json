@@ -12,16 +12,10 @@
   },
   "body": {
     "injuries": [
-      "soreness in the tops of hamstrings"
+      "lower back pain"
     ],
-    "chronicTensionZones": [
-      "rear deltoid",
-      "trapezius"
-    ],
-    "instabilityZones": [
-      "lower back",
-      "groin"
-    ]
+    "chronicTensionZones": [],
+    "instabilityZones": []
   },
   "sportContext": {
     "primarySport": "racquetball",
@@ -36,9 +30,7 @@
   },
   "signalHistory": {
     "recurringPainSignals": [
-      "discomfort after playing racquetball",
-      "discomfort when working at desk for a long time",
-      "pain when serving a lot during matches"
+      "lower back pain during drive"
     ],
     "recurringConfusionSignals": [],
     "fearTriggers": []
@@ -60,7 +52,7 @@
     "notes": []
   },
   "sessionMeta": {
-    "totalSessions": 85,
-    "lastSession": "2026-02-18T08:07:49.178Z"
+    "totalSessions": 34,
+    "lastSession": "2026-02-25T05:21:35.809Z"
   }
 }

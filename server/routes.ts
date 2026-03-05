@@ -1,8 +1,16 @@
 import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
+
 import OpenAI from "openai";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { toFile } from "openai/uploads";
-import { getMemory, updateMemory } from "./memory/memory";
+import { asc, desc, eq } from "drizzle-orm";
+
+import { db } from "./db";
+import { conversations, messages } from "@shared/schema";
+
+import { getMemory, updateMemory, type InterloopMemory } from "./memory/memory";
+import { extractMemory } from "./memory/extract";
 
 /* =====================================================
    OPENAI CLIENT
@@ -324,169 +332,261 @@ It reveals how force behaves — across movements, across sessions.
 `;
 
 /* =====================================================
-   MEMORY EXTRACTION PROMPT (UNCHANGED)
+   MEMORY EXTRACTION PROMPT (STRUCTURED)
 ===================================================== */
 
 const MEMORY_EXTRACTION_PROMPT = `
-You are a structured data extraction engine.
+You are a STRICT JSON extraction engine.
 
-Extract only NEW durable user information from the latest message.
+Task:
+- Extract ONLY new durable user information from the latest user message.
+- Merge-safe: do not repeat what already exists in Current Memory unless it changes/corrects it.
+- Never invent. If the user did not say it, do not add it.
+- If nothing new, return {}.
+
+Output:
+- STRICT JSON ONLY (single object).
+- No markdown, no commentary, no code fences.
+
+Allowed paths (use only what applies):
+
+identity.name (string)
+identity.dominantHand ("left"|"right")
+identity.age (number)
+identity.height (string)
+identity.weight (string)
+
+anthropometry.limbLengthBias (string)
+anthropometry.notes (string[])
+
+sportContext.primarySport (string)
+sportContext.secondarySports (string[])
+sportContext.yearsExperience (number)
+sportContext.competitionLevel (string)
+
+body.injuries (array of objects):
+  - location (string)
+  - severity (string)
+  - status ("active"|"historical")
+
+body.chronicTensionZones (string[])
+body.instabilityZones (string[])
+
+movementPatterns.confirmed (string[])
+movementPatterns.suspected (string[])
+movementPatterns.recurringThemes (string[])
+
+signalHistory.recurringPainSignals (string[])
+signalHistory.recurringConfusionSignals (string[])
+signalHistory.fearTriggers (string[])
+
+performanceTrends.improvements (string[])
+performanceTrends.regressions (string[])
+performanceTrends.consistencyNotes (string[])
+
+cognitivePatterns.overanalysis (boolean)
+cognitivePatterns.rushTendency (boolean)
+cognitivePatterns.hesitationPattern (boolean)
+cognitivePatterns.notes (string[])
 
 Rules:
-- Do NOT repeat existing memory.
-- Do NOT infer beyond explicit statements.
-- If nothing new, return {}.
-- Return STRICT JSON only.
-- No commentary.
-
-Valid schema paths:
-
-identity:
-- name
-- age
-- height
-- weight
-- dominantHand
-
-sportContext:
-- primarySport
-- secondarySports[]
-- yearsExperience
-- competitionLevel
-
-body:
-- injuries[]
-- chronicTensionZones[]
-- instabilityZones[]
-
-signalHistory:
-- recurringPainSignals[]
-- recurringConfusionSignals[]
-- fearTriggers[]
+- Arrays must be NEW items only.
+- Normalize simple strings.
+- Prefer specific locations over vague ones.
 `;
-
 /* =====================================================
-   MEMORY SYNTHESIS PROMPT (UNCHANGED)
+   HELPERS
 ===================================================== */
 
-const MEMORY_SYNTHESIS_PROMPT = `
-You are a movement pattern synthesis engine.
+function clampText(s: string, max = 800): string {
+  const t = (s ?? "").trim();
+  if (!t) return "";
+  return t.length > max ? t.slice(0, max) + "…" : t;
+}
 
-Given full persistent memory and the latest user message:
+function normalizeItem(s: unknown): string | null {
+  if (typeof s !== "string") return null;
+  const t = s
+    .trim()
+    .replace(/[.,!?]+$/, "")
+    .trim();
+  return t ? t : null;
+}
 
-1. Identify recurring anatomical zones.
-2. Identify recurring phases of breakdown.
-3. Identify cross-activity pattern continuity.
-4. Suggest ONE dominant bottleneck hypothesis if present.
-5. If no strong continuity exists, return {}.
+function pushUniqueStrings(target: string[], items: unknown): void {
+  if (!Array.isArray(items)) return;
+  for (const raw of items) {
+    const v = normalizeItem(raw);
+    if (!v) continue;
+    if (!target.includes(v)) target.push(v);
+  }
+}
 
-Return concise structured text.
-No commentary.
-`;
+function pushUniqueInjuries(
+  target: InterloopMemory["body"]["injuries"],
+  items: unknown,
+): void {
+  if (!Array.isArray(items)) return;
 
-/* =====================================================
-   TYPES
-===================================================== */
+  for (const it of items) {
+    if (!it || typeof it !== "object") continue;
+    const o = it as any;
 
-type ChatMsg = {
-  role: "user" | "assistant";
-  content: string;
-};
+    const location = normalizeItem(o.location);
+    if (!location) continue;
 
-const sessions: Record<string, ChatMsg[]> = {};
-const MAX_SESSION_MESSAGES = 40;
+    const severity = normalizeItem(o.severity) ?? "unknown";
+    const status: "active" | "historical" =
+      o.status === "historical" ? "historical" : "active";
+
+    const key = `${location.toLowerCase()}|${status.toLowerCase()}`;
+    const exists = target.some(
+      (x) => `${x.location.toLowerCase()}|${x.status.toLowerCase()}` === key,
+    );
+
+    if (!exists) {
+      target.push({ location, severity, status });
+    }
+  }
+}
+
+function mergeExtracted(memory: InterloopMemory, extracted: any): void {
+  if (!extracted || typeof extracted !== "object") return;
+
+  if (extracted.identity) {
+    const id = extracted.identity;
+    if (id.name) memory.identity.name = id.name.trim();
+    if (id.dominantHand) memory.identity.dominantHand = id.dominantHand;
+    if (id.age) memory.identity.age = id.age;
+    if (id.height) memory.identity.height = id.height;
+    if (id.weight) memory.identity.weight = id.weight;
+  }
+
+  if (extracted.anthropometry) {
+    const a = extracted.anthropometry;
+    if (a.limbLengthBias)
+      memory.anthropometry.limbLengthBias = a.limbLengthBias;
+    pushUniqueStrings(memory.anthropometry.notes, a.notes);
+  }
+
+  if (extracted.sportContext) {
+    const s = extracted.sportContext;
+    if (s.primarySport) memory.sportContext.primarySport = s.primarySport;
+    pushUniqueStrings(memory.sportContext.secondarySports, s.secondarySports);
+    if (s.yearsExperience)
+      memory.sportContext.yearsExperience = s.yearsExperience;
+    if (s.competitionLevel)
+      memory.sportContext.competitionLevel = s.competitionLevel;
+  }
+
+  if (extracted.body) {
+    const b = extracted.body;
+    pushUniqueInjuries(memory.body.injuries, b.injuries);
+    pushUniqueStrings(memory.body.chronicTensionZones, b.chronicTensionZones);
+    pushUniqueStrings(memory.body.instabilityZones, b.instabilityZones);
+  }
+
+  if (extracted.movementPatterns) {
+    const mp = extracted.movementPatterns;
+    pushUniqueStrings(memory.movementPatterns.confirmed, mp.confirmed);
+    pushUniqueStrings(memory.movementPatterns.suspected, mp.suspected);
+    pushUniqueStrings(
+      memory.movementPatterns.recurringThemes,
+      mp.recurringThemes,
+    );
+  }
+
+  if (extracted.signalHistory) {
+    const sh = extracted.signalHistory;
+    pushUniqueStrings(
+      memory.signalHistory.recurringPainSignals,
+      sh.recurringPainSignals,
+    );
+    pushUniqueStrings(
+      memory.signalHistory.recurringConfusionSignals,
+      sh.recurringConfusionSignals,
+    );
+    pushUniqueStrings(memory.signalHistory.fearTriggers, sh.fearTriggers);
+  }
+
+  if (extracted.performanceTrends) {
+    const pt = extracted.performanceTrends;
+    pushUniqueStrings(memory.performanceTrends.improvements, pt.improvements);
+    pushUniqueStrings(memory.performanceTrends.regressions, pt.regressions);
+    pushUniqueStrings(
+      memory.performanceTrends.consistencyNotes,
+      pt.consistencyNotes,
+    );
+  }
+
+  if (extracted.cognitivePatterns) {
+    const cp = extracted.cognitivePatterns;
+    if (typeof cp.overanalysis === "boolean")
+      memory.cognitivePatterns.overanalysis = cp.overanalysis;
+    if (typeof cp.rushTendency === "boolean")
+      memory.cognitivePatterns.rushTendency = cp.rushTendency;
+    if (typeof cp.hesitationPattern === "boolean")
+      memory.cognitivePatterns.hesitationPattern = cp.hesitationPattern;
+    pushUniqueStrings(memory.cognitivePatterns.notes, cp.notes);
+  }
+}
 
 /* =====================================================
    MEMORY FORMATTER
 ===================================================== */
 
-function formatMemory(memory: any): string | null {
+function formatMemory(memory: InterloopMemory): string | null {
   if (!memory) return null;
 
   const lines: string[] = [];
 
   if (memory.identity?.name) lines.push(`Name: ${memory.identity.name}`);
   if (memory.identity?.dominantHand)
-    lines.push(`Dominant Hand: ${memory.identity.dominantHand}`);
+    lines.push(`Dominant hand: ${memory.identity.dominantHand}`);
+
   if (memory.sportContext?.primarySport)
-    lines.push(`Primary Sport: ${memory.sportContext.primarySport}`);
+    lines.push(`Primary sport: ${memory.sportContext.primarySport}`);
+
+  if (memory.sportContext?.secondarySports?.length)
+    lines.push(
+      `Secondary sports: ${memory.sportContext.secondarySports.join(", ")}`,
+    );
+
+  if (memory.body?.injuries?.length)
+    lines.push(
+      `Injuries: ${memory.body.injuries
+        .slice(0, 5)
+        .map((i) => `${i.location} (${i.status})`)
+        .join(", ")}`,
+    );
+
   if (memory.body?.chronicTensionZones?.length)
     lines.push(
-      `Chronic Tension Zones: ${memory.body.chronicTensionZones.join(", ")}`,
+      `Chronic tension: ${memory.body.chronicTensionZones.slice(0, 5).join(", ")}`,
+    );
+
+  if (memory.body?.instabilityZones?.length)
+    lines.push(
+      `Instability: ${memory.body.instabilityZones.slice(0, 5).join(", ")}`,
+    );
+
+  if (memory.movementPatterns?.recurringThemes?.length)
+    lines.push(
+      `Recurring movement themes: ${memory.movementPatterns.recurringThemes
+        .slice(0, 5)
+        .join(", ")}`,
+    );
+
+  if (memory.signalHistory?.recurringPainSignals?.length)
+    lines.push(
+      `Recurring pain signals: ${memory.signalHistory.recurringPainSignals
+        .slice(0, 5)
+        .join(", ")}`,
     );
 
   if (!lines.length) return null;
-  return `Known User Context:\n${lines.map((l) => `- ${l}`).join("\n")}`;
-}
 
-/* =====================================================
-   UTIL
-===================================================== */
-
-function mergeUnique(target: string[], incoming?: string[]) {
-  if (!incoming?.length) return;
-  const set = new Set(target);
-  for (const item of incoming) {
-    if (item && typeof item === "string") set.add(item.trim());
-  }
-  target.length = 0;
-  target.push(...Array.from(set));
-}
-
-/* =====================================================
-   ELEVENLABS TTS
-===================================================== */
-
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY!;
-const ELEVEN_VOICE_ID_MALE =
-  process.env.ELEVENLABS_VOICE_ID_MALE || "GwiNi5XZx3ydWAkkDpoQ";
-const ELEVEN_VOICE_ID_FEMALE =
-  process.env.ELEVENLABS_VOICE_ID_FEMALE || "VI2qcJpxMy5M6WFvpIrh";
-
-function resolveElevenVoiceId(voice?: unknown): string {
-  if (typeof voice === "string") {
-    const v = voice.trim().toLowerCase();
-    if (v === "male") return ELEVEN_VOICE_ID_MALE;
-    if (v === "female") return ELEVEN_VOICE_ID_FEMALE;
-    if (/^[a-zA-Z0-9_-]{10,}$/.test(voice)) return voice;
-  }
-  return ELEVEN_VOICE_ID_FEMALE; // default female
-}
-
-async function elevenLabsTTS(
-  text: string,
-  voice?: unknown,
-): Promise<ArrayBuffer> {
-  const voiceId = resolveElevenVoiceId(voice);
-
-  const resp = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
-    {
-      method: "POST",
-      headers: {
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text,
-        model_id: "eleven_multilingual_v2",
-        voice_settings: {
-          stability: 0.55,
-          similarity_boost: 0.75,
-          style: 0.25,
-          use_speaker_boost: true,
-        },
-      }),
-    },
-  );
-
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => "");
-    throw new Error(`ElevenLabs TTS failed (${resp.status}): ${errText}`);
-  }
-
-  return await resp.arrayBuffer();
+  return `User Structural Context:\n${lines.map((l) => `- ${l}`).join("\n")}`;
 }
 
 /* =====================================================
@@ -501,160 +601,140 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
-  /* CHAT — UNCHANGED LOGIC */
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
-      const { sessionId, messages } = req.body ?? {};
+      const { conversationId, messages: incoming } = req.body ?? {};
 
-      if (!sessionId || typeof sessionId !== "string")
-        return res.status(400).json({ error: "Invalid sessionId" });
+      const last = incoming[incoming.length - 1];
+      const userText = String(last.content ?? "").trim();
 
-      if (!Array.isArray(messages))
-        return res.status(400).json({ error: "messages must be array" });
+      let convoId = Number(conversationId);
+      let userId = "default-user";
 
-      sessions[sessionId] ??= [];
-      const last = messages[messages.length - 1];
+      if (!Number.isFinite(convoId)) {
+        const [row] = await db
+          .insert(conversations)
+          .values({
+            userId: "default-user",
+            title: clampText(userText, 60),
+          })
+          .returning();
 
-      let synthesisText: string | null = null;
+        convoId = row.id;
+        userId = row.userId;
+      }
 
-      if (last?.role === "user" && typeof last.content === "string") {
-        const userText = last.content.trim();
-        const currentMemory = getMemory(sessionId);
+      await db.insert(messages).values({
+        conversationId: convoId,
+        role: "user",
+        content: userText,
+      });
 
-        const extraction = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          temperature: 0,
-          messages: [
-            { role: "system", content: MEMORY_EXTRACTION_PROMPT },
-            {
-              role: "system",
-              content: `Current Memory:\n${JSON.stringify(currentMemory)}`,
-            },
-            { role: "user", content: userText },
-          ],
-        });
+      const previous = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, convoId))
+        .orderBy(asc(messages.createdAt));
 
-        let extracted: any = {};
-        try {
-          extracted = JSON.parse(
-            extraction.choices?.[0]?.message?.content || "{}",
-          );
-        } catch {}
+      /* ================= MEMORY EXTRACTION ================= */
 
-        updateMemory(sessionId, (memory: any) => {
-          memory.identity ??= {};
-          memory.body ??= {
-            injuries: [],
-            chronicTensionZones: [],
-            instabilityZones: [],
-          };
-          memory.sportContext ??= {};
-          memory.signalHistory ??= {
-            recurringPainSignals: [],
-            recurringConfusionSignals: [],
-            fearTriggers: [],
-          };
+      let extracted: any = null;
 
-          if (extracted.identity)
-            Object.assign(memory.identity, extracted.identity);
-          if (extracted.sportContext)
-            Object.assign(memory.sportContext, extracted.sportContext);
+      try {
+        const currentMemory = getMemory(userId);
 
-          mergeUnique(memory.body.injuries, extracted.body?.injuries);
-          mergeUnique(
-            memory.body.chronicTensionZones,
-            extracted.body?.chronicTensionZones,
-          );
-          mergeUnique(
-            memory.body.instabilityZones,
-            extracted.body?.instabilityZones,
-          );
+        extracted = await extractMemory(userText, currentMemory);
 
-          mergeUnique(
-            memory.signalHistory.recurringPainSignals,
-            extracted.signalHistory?.recurringPainSignals,
-          );
-          mergeUnique(
-            memory.signalHistory.recurringConfusionSignals,
-            extracted.signalHistory?.recurringConfusionSignals,
-          );
-          mergeUnique(
-            memory.signalHistory.recurringConfusionSignals,
-            extracted.signalHistory?.recurringConfusionSignals,
-          );
-          mergeUnique(
-            memory.signalHistory.fearTriggers,
-            extracted.signalHistory?.fearTriggers,
-          );
-        });
-
-        const updatedMemory = getMemory(sessionId);
-
-        const synthesis = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          temperature: 0.1,
-          messages: [
-            { role: "system", content: MEMORY_SYNTHESIS_PROMPT },
-            {
-              role: "system",
-              content: `Persistent Memory:\n${JSON.stringify(updatedMemory)}`,
-            },
-            { role: "user", content: userText },
-          ],
-        });
-
-        const raw = synthesis.choices?.[0]?.message?.content?.trim();
-        if (raw && raw !== "{}") {
-          synthesisText = `Active Pattern Hypothesis:\n${raw}`;
+        if (
+          extracted &&
+          typeof extracted === "object" &&
+          Object.keys(extracted).length > 0
+        ) {
+          updateMemory(userId, (memory) => {
+            mergeExtracted(memory, extracted);
+          });
         }
-
-        sessions[sessionId].push({ role: "user", content: userText });
+      } catch (err) {
+        console.error("[memory extraction failed]", err);
       }
 
-      if (sessions[sessionId].length > MAX_SESSION_MESSAGES) {
-        sessions[sessionId] = sessions[sessionId].slice(-MAX_SESSION_MESSAGES);
-      }
+      /* ================= LOAD MEMORY FOR PROMPT ================= */
 
-      const memory = getMemory(sessionId);
+      const memory = getMemory(userId);
       const formattedMemory = formatMemory(memory);
+      /* ================= CONVERSATION COMPRESSION ================= */
 
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache, no-transform");
-      res.setHeader("Connection", "keep-alive");
-      (res as any).flushHeaders?.();
+      const TRANSCRIPT_TAIL = 14;
+      const tail = previous.slice(-TRANSCRIPT_TAIL);
 
-      const chatMessages = [
+      let conversationSummary: string | null = null;
+
+      if (previous.length > TRANSCRIPT_TAIL) {
+        const earlier = previous.slice(0, previous.length - TRANSCRIPT_TAIL);
+
+        const summary = earlier
+          .slice(-6)
+          .map((m) => `${m.role}: ${String(m.content).slice(0, 120)}`)
+          .join("\n");
+
+        conversationSummary = `Earlier conversation summary:\n${summary}`;
+      }
+
+      const chatMessages: ChatCompletionMessageParam[] = [
         { role: "system", content: SYSTEM_PROMPT },
+
         ...(formattedMemory
-          ? [{ role: "system", content: formattedMemory }]
+          ? [{ role: "system", content: formattedMemory } as const]
           : []),
-        ...(synthesisText ? [{ role: "system", content: synthesisText }] : []),
-        ...sessions[sessionId],
+
+        ...(conversationSummary
+          ? [{ role: "system", content: conversationSummary } as const]
+          : []),
+
+        ...tail.map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: String(m.content ?? ""),
+        })),
       ];
+
+      /* ================= STREAM RESPONSE ================= */
 
       const stream = await openai.chat.completions.create({
         model: "gpt-4o",
         temperature: 0.15,
         max_tokens: 900,
+        messages: chatMessages,
         stream: true,
-        messages: chatMessages as any,
       });
 
       let assistantText = "";
 
-      for await (const chunk of stream as any) {
+      for await (const chunk of stream) {
         const delta = chunk.choices?.[0]?.delta?.content;
+
         if (!delta) continue;
 
         assistantText += delta;
+
         res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
       }
 
-      if (assistantText.trim()) {
-        sessions[sessionId].push({
-          role: "assistant",
-          content: assistantText,
-        });
+      res.write("data: [DONE]\n\n");
+      res.end();
+      /* =====================================================
+         ASSISTANT INSIGHT EXTRACTION
+      ===================================================== */
+
+      try {
+        const insights = await extractMemory(assistantText, memory);
+
+        if (insights && Object.keys(insights).length > 0) {
+          updateMemory(userId, (mem) => {
+            mergeExtracted(mem, insights);
+          });
+        }
+      } catch (err) {
+        console.error("[assistant memory extraction]", err);
       }
 
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
@@ -663,52 +743,5 @@ export async function registerRoutes(
       console.error("[/api/chat]", err);
       res.end();
     }
-  });
-
-  /* STT */
-  app.post("/api/stt", async (req: Request, res: Response) => {
-    try {
-      const { audio } = req.body ?? {};
-      if (!audio) return res.status(400).json({ error: "audio required" });
-
-      const buffer = Buffer.from(audio, "base64");
-
-      const transcription = await openai.audio.transcriptions.create({
-        file: await toFile(buffer, "audio.webm"),
-        model: "whisper-1",
-      });
-
-      res.json({ transcript: transcription.text ?? "" });
-    } catch {
-      res.status(500).json({ error: "Transcription failed" });
-    }
-  });
-
-  /* TTS — ElevenLabs */
-  app.post("/api/tts", async (req: Request, res: Response) => {
-    try {
-      const { text, voice } = req.body ?? {};
-      if (!text) return res.status(400).json({ error: "text required" });
-
-      const audioBuf = await elevenLabsTTS(text.trim(), voice);
-
-      res.setHeader("Content-Type", "audio/mpeg");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(Buffer.from(audioBuf));
-    } catch (err) {
-      console.error("[/api/tts]", err);
-      res.status(500).json({ error: "TTS failed" });
-    }
-  });
-
-  // Replit Auth handshake trigger (must live before Vite)
-  app.get("/login", (req, res) => {
-    const host = req.get("host");
-    const proto = (req.get("x-forwarded-proto") || req.protocol || "https")
-      .toString()
-      .split(",")[0]
-      .trim();
-
-    res.redirect(`${proto}://${host}/__/auth/login`);
   });
 }

@@ -1,15 +1,26 @@
-import express, { type Request, type Response, type NextFunction } from "express";
+import express, {
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import { createServer } from "http";
 
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 
+// 🔐 Replit Auth
+import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
+
 const app = express();
 const httpServer = createServer(app);
 
+/* =====================================================
+   RAW BODY SUPPORT
+===================================================== */
+
 declare module "http" {
   interface IncomingMessage {
-    rawBody: unknown;
+    rawBody?: Buffer;
   }
 }
 
@@ -19,69 +30,96 @@ app.use(
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
-  })
+  }),
 );
 
 app.use(express.urlencoded({ extended: false }));
 
+/* =====================================================
+   REQUEST TRACE (TEMP DEBUG)
+===================================================== */
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  console.log("REQ:", req.method, req.url);
+  next();
+});
+
+/* =====================================================
+   LOGGER
+===================================================== */
+
 export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
+  const time = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
     hour12: true,
   });
 
-  console.log(`${formattedTime} [${source}] ${message}`);
+  console.log(`${time} [${source}] ${message}`);
 }
 
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
   const path = req.path;
 
-  let capturedJsonResponse: Record<string, any> | undefined;
+  let responseBody: unknown;
 
-  const originalResJson = res.json.bind(res);
-
-  (res as any).json = (bodyJson: any) => {
-    capturedJsonResponse = bodyJson;
-    return originalResJson(bodyJson);
+  const originalJson = res.json.bind(res);
+  (res as any).json = (body: unknown) => {
+    responseBody = body;
+    return originalJson(body);
   };
 
   res.on("finish", () => {
     const duration = Date.now() - start;
 
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      log(logLine);
+      let line = `${req.method} ${path} ${res.statusCode} ${duration}ms`;
+      if (responseBody) line += ` :: ${JSON.stringify(responseBody)}`;
+      log(line);
     }
   });
 
   next();
 });
 
-(async () => {
+/* =====================================================
+   ERROR HANDLER
+===================================================== */
+
+function errorHandler(
+  err: any,
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  if (res.headersSent) return next(err);
+
+  const status = err.status || err.statusCode || 500;
+  const message = err.message || "Internal Server Error";
+
+  console.error("Server error:", err);
+  res.status(status).json({ message });
+}
+
+/* =====================================================
+   SERVER BOOT
+===================================================== */
+
+async function boot() {
   try {
+    // AUTH
+    await setupAuth(app);
+    registerAuthRoutes(app);
+
+    // ROUTES
     await registerRoutes(httpServer, app);
 
-    app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-      const status = err.status || err.statusCode || 500;
-      const message = err.message || "Internal Server Error";
+    // ERROR HANDLER
+    app.use(errorHandler);
 
-      console.error("Internal Server Error:", err);
-
-      if (res.headersSent) {
-        return next(err);
-      }
-
-      return res.status(status).json({ message });
-    });
-
+    // DEV / PROD
     if (process.env.NODE_ENV === "production") {
       serveStatic(app);
     } else {
@@ -89,20 +127,40 @@ app.use((req, res, next) => {
       await setupVite(httpServer, app);
     }
 
-    const port = parseInt(process.env.PORT || "5000", 10);
+    // PORT
+    const port = 5000;
 
-    httpServer.listen(
-      {
-        port,
-        host: "0.0.0.0",
-        reusePort: true,
-      },
-      () => {
-        log(`serving on port ${port}`);
-      }
-    );
+    console.log("ENV PORT:", process.env.PORT);
+    console.log("USING PORT:", port);
+
+    httpServer.listen(Number(port), "0.0.0.0", () => {
+      console.log("SERVER LISTENING");
+      log(`server running on port ${port}`);
+    });
+
+    httpServer.on("error", (err: any) => {
+      console.error("SERVER LISTEN ERROR:", err);
+      process.exit(1);
+    });
+
+    // CLEAN SHUTDOWN
+    const shutdown = (signal: string) => {
+      log(`${signal} received — shutting down`);
+
+      httpServer.close(() => {
+        log("server closed");
+        process.exit(0);
+      });
+
+      setTimeout(() => process.exit(1), 5000);
+    };
+
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
   } catch (err) {
-    console.error("Server boot failure:", err);
+    console.error("Server failed to start:", err);
     process.exit(1);
   }
-})();
+}
+
+boot();

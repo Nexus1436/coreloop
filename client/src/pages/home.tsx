@@ -1,8 +1,8 @@
-import { useState, useMemo, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
+
 import { CentralForm } from "@/components/central-form";
 import { ChatView } from "@/components/chat-view";
-import { sendMessage, transcribeAudio, streamTTS } from "@/lib/api";
+import { transcribeAudio, streamTTS } from "@/lib/api";
 import { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
 
 export interface ChatMessage {
@@ -16,46 +16,148 @@ function nextId() {
   return String(++messageCounter);
 }
 
-export default function Home() {
-  /* ================= MODE ================= */
-  const [mode, setMode] = useState<"A" | "B">("A");
+/* =====================================================
+   STREAM CHAT (FIXED)
+===================================================== */
 
-  /* ================= CHAT STATE ================= */
-  const [hasPressed, setHasPressed] = useState(false);
+async function sendChat(
+  conversationId: number | null,
+  userText: string,
+  onConversationId: (id: number) => void,
+  onChunk: (chunk: string) => void,
+) {
+  const resp = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      conversationId: conversationId ?? undefined,
+      messages: [{ role: "user", content: userText }],
+    }),
+  });
+
+  if (!resp.ok || !resp.body) {
+    throw new Error("Chat failed");
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith("data:")) continue;
+
+      try {
+        const obj = JSON.parse(line.slice(5));
+
+        if (obj?.conversationId) {
+          onConversationId(Number(obj.conversationId));
+        }
+
+        if (obj?.content) {
+          onChunk(obj.content);
+        }
+
+        if (obj?.done) {
+          reader.cancel();
+          return;
+        }
+      } catch {
+        // ignore malformed chunk
+      }
+    }
+  }
+}
+
+/* =====================================================
+   COMPONENT
+===================================================== */
+
+export default function Home() {
+  const [mode, setMode] = useState<"A" | "B">("A");
+  const [conversationId, setConversationId] = useState<number | null>(null);
+  const conversationIdRef = useRef<number | null>(null);
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-
-  /* ================= VOICE ================= */
-  // MALE DEFAULT
   const [voiceGender, setVoiceGender] = useState<"male" | "female">("male");
 
-  /* IMPORTANT:
-     These strings MUST match what your server expects.
-     Server resolves:
-     - "male" -> ELEVEN_VOICE_ID_MALE
-     - "female" -> ELEVEN_VOICE_ID_FEMALE
-  */
-  const resolvedVoice = voiceGender;
-
-  /* ================= AUDIO ENGINE ================= */
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const lastAudioChunksRef = useRef<string[]>([]);
   const playback = useAudioPlayback();
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   const lastResponse = useMemo(() => {
-    const assistantMessages = messages.filter((m) => m.role === "assistant");
-    return assistantMessages.length
-      ? assistantMessages[assistantMessages.length - 1].text
-      : null;
+    const assistant = messages.filter((m) => m.role === "assistant");
+    return assistant.length ? assistant[assistant.length - 1].text : null;
   }, [messages]);
 
-  /* ================= RECORDER ================= */
+  /* =====================================================
+     LOAD LATEST CONVERSATION
+  ===================================================== */
 
-  const startRecorderOnStream = (stream: MediaStream) => {
+  useEffect(() => {
+    async function loadLatestConversation() {
+      try {
+        const resp = await fetch("/api/conversations", {
+          credentials: "include",
+        });
+
+        if (!resp.ok) return;
+
+        const data = await resp.json();
+        const convs = data?.conversations;
+        if (!Array.isArray(convs) || convs.length === 0) return;
+
+        const latestId = Number(convs[0].id);
+        if (!Number.isFinite(latestId)) return;
+
+        const msgResp = await fetch(`/api/conversations/${latestId}/messages`, {
+          credentials: "include",
+        });
+
+        if (!msgResp.ok) return;
+
+        const msgData = await msgResp.json();
+        const rows = msgData?.messages;
+        if (!Array.isArray(rows)) return;
+
+        conversationIdRef.current = latestId;
+        setConversationId(latestId);
+
+        setMessages(
+          rows.map((m: any) => ({
+            id: String(m.id),
+            role: m.role,
+            text: m.content,
+          })),
+        );
+      } catch (err) {
+        console.error("Load conversation failed:", err);
+      }
+    }
+
+    loadLatestConversation();
+  }, []);
+
+  /* =====================================================
+     RECORDING
+  ===================================================== */
+
+  const startRecording = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const recorder = new MediaRecorder(stream);
+
     mediaRecorderRef.current = recorder;
     chunksRef.current = [];
 
@@ -64,159 +166,107 @@ export default function Home() {
     };
 
     recorder.start();
+    setIsRecording(true);
   };
 
-  const stopAndGetBlob = async (): Promise<Blob> => {
+  const stopRecording = async (): Promise<Blob> => {
     const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state !== "recording") return new Blob();
+    if (!recorder) return new Blob();
 
     await new Promise<void>((resolve) => {
       recorder.onstop = () => resolve();
       recorder.stop();
     });
 
-    const blob = new Blob(chunksRef.current, {
-      type: "audio/webm",
-    });
-
     recorder.stream.getTracks().forEach((t) => t.stop());
+    setIsRecording(false);
 
-    mediaRecorderRef.current = null;
-    chunksRef.current = [];
-
-    return blob;
+    return new Blob(chunksRef.current, { type: "audio/webm" });
   };
 
-  /* ================= VOICE FLOW ================= */
+  /* =====================================================
+     TAP FLOW
+  ===================================================== */
 
-  const runSTTThenChat = async (audioBlob: Blob) => {
-    const transcript = await transcribeAudio(audioBlob);
-    const userText = (transcript || "").trim();
-    if (!userText) return;
+  const handleTap = async () => {
+    if (isProcessing) return;
 
-    const userMsgId = nextId();
-    const assistantMsgId = nextId();
-
-    setMessages((prev) => [
-      ...prev,
-      { id: userMsgId, role: "user", text: userText },
-      { id: assistantMsgId, role: "assistant", text: "" },
-    ]);
-
-    let assistantText = "";
-
-    await sendMessage(0, userText, (chunk) => {
-      assistantText += chunk;
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsgId ? { ...m, text: assistantText } : m,
-        ),
-      );
-    });
-
-    if (mode === "A") {
+    if (!isRecording) {
       try {
-        await playback.init();
-        playback.stop();
-
-        const cache: string[] = [];
-
-        await streamTTS(
-          assistantText,
-          (audioChunk: string) => {
-            cache.push(audioChunk);
-            playback.pushAudio(audioChunk);
-          },
-          {
-            voice: resolvedVoice,
-            speed: 0.97,
-          },
-        );
-
-        playback.signalComplete();
-        lastAudioChunksRef.current = cache;
+        await startRecording();
       } catch (err) {
-        console.error("TTS error:", err);
+        console.error("Mic failed:", err);
       }
+      return;
     }
-  };
 
-  /* ================= TAP LOGIC ================= */
+    setIsProcessing(true);
 
-  const handleScreenTap = async () => {
-    if (!hasPressed) {
-      setHasPressed(true);
-      setIsRecording(true);
+    try {
+      const blob = await stopRecording();
+      const transcript = await transcribeAudio(blob);
+
+      if (!transcript) {
+        setIsProcessing(false);
+        return;
+      }
+
+      const userId = nextId();
+      const assistantId = nextId();
+
+      setMessages((prev) => [
+        ...prev,
+        { id: userId, role: "user", text: transcript },
+        { id: assistantId, role: "assistant", text: "" },
+      ]);
+
+      let assistantText = "";
+
+      await sendChat(
+        conversationIdRef.current,
+        transcript,
+        (id) => {
+          conversationIdRef.current = id;
+          setConversationId(id);
+        },
+        (chunk) => {
+          assistantText += chunk;
+
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, text: assistantText } : m,
+            ),
+          );
+        },
+      );
+
+      if (!assistantText.trim()) {
+        setIsProcessing(false);
+        return;
+      }
 
       await playback.init();
       playback.stop();
 
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-        });
-        micStreamRef.current = stream;
-        startRecorderOnStream(stream);
-      } catch (err) {
-        console.error("Microphone access denied:", err);
-        setIsRecording(false);
-        setHasPressed(false);
-      }
+      await streamTTS(
+        assistantText,
+        (audioChunk: string) => playback.pushAudio(audioChunk),
+        { voice: voiceGender },
+      );
 
-      return;
-    }
-
-    if (isProcessing) return;
-
-    if (isRecording) {
-      setIsRecording(false);
-      setIsProcessing(true);
-
-      try {
-        const blob = await stopAndGetBlob();
-        if (!blob || blob.size === 0) return;
-        await runSTTThenChat(blob);
-      } catch (err) {
-        console.error("Voice flow error:", err);
-      } finally {
-        setIsProcessing(false);
-      }
-
-      return;
-    }
-
-    setIsRecording(true);
-
-    await playback.init();
-    playback.stop();
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-      });
-      micStreamRef.current = stream;
-      startRecorderOnStream(stream);
+      playback.signalComplete();
     } catch (err) {
-      console.error("Microphone access denied:", err);
-      setIsRecording(false);
+      console.error("Flow failed:", err);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  /* ================= MODE SWITCH ================= */
+  /* =====================================================
+     REPEAT
+  ===================================================== */
 
-  const handleSwitchToB = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setMode("B");
-  };
-
-  const handleSwitchToA = () => {
-    setMode("A");
-    setHasPressed(false);
-  };
-
-  /* ================= REPLAY ================= */
-
-  const handleRepeatResponse = useCallback(
+  const handleRepeat = useCallback(
     async (e: React.MouseEvent) => {
       e.stopPropagation();
       if (!lastResponse) return;
@@ -224,82 +274,75 @@ export default function Home() {
       await playback.init();
       playback.stop();
 
-      const cache: string[] = [];
-
       await streamTTS(
         lastResponse,
-        (audioChunk: string) => {
-          cache.push(audioChunk);
-          playback.pushAudio(audioChunk);
-        },
-        {
-          voice: resolvedVoice,
-          speed: 0.97,
-        },
+        (audioChunk: string) => playback.pushAudio(audioChunk),
+        { voice: voiceGender },
       );
 
       playback.signalComplete();
-      lastAudioChunksRef.current = cache;
     },
-    [lastResponse, resolvedVoice],
+    [lastResponse, voiceGender],
   );
 
-  /* ================= MODE B ================= */
+  /* =====================================================
+     MODE B
+  ===================================================== */
 
   if (mode === "B") {
     return (
       <ChatView
         messages={messages}
         setMessages={setMessages}
-        onBack={handleSwitchToA}
+        onBack={() => setMode("A")}
         playback={playback}
-        lastAudioChunksRef={lastAudioChunksRef}
         voiceGender={voiceGender}
+        lastAudioChunksRef={{ current: [] }}
       />
     );
   }
 
-  /* ================= MODE A UI ================= */
+  /* =====================================================
+     MAIN UI
+  ===================================================== */
 
   return (
-    <div
-      className="min-h-screen w-full flex flex-col items-center justify-center bg-black relative"
-      onClick={handleScreenTap}
-    >
-      <div className="flex-1 flex flex-col items-center justify-center relative w-full">
-        <CentralForm isActive={hasPressed} isDimmed={false} />
-
-        <div className="absolute pointer-events-none">
-          {isRecording ? (
-            <p className="text-sm text-[#858585] uppercase text-center">
-              Listening…
-            </p>
-          ) : !isProcessing ? (
-            <p className="text-sm text-[#b0b0b0] text-center">Press here</p>
-          ) : null}
-        </div>
+    <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center relative">
+      <div className="relative mb-12">
+        <CentralForm isActive={isRecording} isDimmed={false} />
+        <button
+          onClick={handleTap}
+          className="absolute inset-0 flex items-center justify-center"
+        >
+          <span className="text-sm text-gray-400">
+            {isRecording
+              ? "Listening..."
+              : isProcessing
+                ? "Reflecting..."
+                : "Press here"}
+          </span>
+        </button>
       </div>
 
-      <div className="absolute bottom-12 left-0 right-0 flex justify-between items-center px-8">
-        <div onClick={handleSwitchToB}>
-          <p className="text-lg text-[#858585] hover:text-[#a3a3a3]">
+      <div className="absolute bottom-12 left-0 right-0 flex justify-between px-8">
+        <div onClick={() => setMode("B")}>
+          <p className="text-lg text-gray-500 hover:text-white">
             Prefer typing?
           </p>
         </div>
 
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setVoiceGender((prev) => (prev === "male" ? "female" : "male"));
-          }}
-          className="text-sm text-[#909090] hover:text-white"
+          onClick={() =>
+            setVoiceGender((prev) => (prev === "male" ? "female" : "male"))
+          }
+          className="text-sm text-gray-400 hover:text-white"
         >
-          Voice: {voiceGender === "male" ? "Male" : "Female"}
+          Voice: {voiceGender}
         </button>
 
         {lastResponse ? (
-          <div onClick={handleRepeatResponse}>
-            <p className="text-lg text-[#909090] hover:text-white">
+          <div onClick={handleRepeat}>
+            <p className="text-lg text-gray-500 hover:text-white">
               Repeat response
             </p>
           </div>
