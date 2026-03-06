@@ -471,28 +471,51 @@ export async function registerRoutes(
 
       /* ================= STREAM ================= */
 
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
+      try {
 
-      const stream = await openai.chat.completions.create({
-        model: "gpt-4o",
-        temperature: 0.15,
-        max_tokens: 900,
-        messages: chatMessages,
-        stream: true,
-      });
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
 
-      let assistantText = "";
+        const stream = await openai.chat.completions.create({
+          model: "gpt-4o",
+          temperature: 0.15,
+          max_tokens: 900,
+          messages: chatMessages,
+          stream: true,
+        });
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices?.[0]?.delta?.content;
+        let assistantText = "";
 
-        if (!delta) continue;
+        for await (const chunk of stream) {
 
-        assistantText += delta;
+          const delta = chunk.choices?.[0]?.delta?.content;
 
-        res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+          if (!delta) continue;
+
+          assistantText += delta;
+
+          res.write(
+            `data: ${JSON.stringify({ content: delta })}\n\n`
+          );
+
+        }
+
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+
+      } catch (err) {
+
+        console.error("STREAM ERROR:", err);
+
+        res.write(
+          `data: ${JSON.stringify({
+            error: "Server error occurred"
+          })}\n\n`
+        );
+
+        res.end();
+
       }
 
       /* ================= SAVE ASSISTANT MESSAGE ================= */
