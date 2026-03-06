@@ -17,7 +17,7 @@ function nextId() {
 }
 
 /* =====================================================
-   STREAM CHAT (FIXED)
+   STREAM CHAT
 ===================================================== */
 
 async function sendChat(
@@ -115,8 +115,15 @@ export default function Home() {
 
         if (!resp.ok) return;
 
+        const contentType = resp.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+          console.warn("Expected JSON but received:", contentType);
+          return;
+        }
+
         const data = await resp.json();
         const convs = data?.conversations;
+
         if (!Array.isArray(convs) || convs.length === 0) return;
 
         const latestId = Number(convs[0].id);
@@ -128,8 +135,15 @@ export default function Home() {
 
         if (!msgResp.ok) return;
 
+        const msgContentType = msgResp.headers.get("content-type");
+        if (!msgContentType || !msgContentType.includes("application/json")) {
+          console.warn("Expected JSON but received:", msgContentType);
+          return;
+        }
+
         const msgData = await msgResp.json();
         const rows = msgData?.messages;
+
         if (!Array.isArray(rows)) return;
 
         conversationIdRef.current = latestId;
