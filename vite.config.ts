@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig({
-  plugins: [react(), runtimeErrorOverlay(), tailwindcss(), metaImagesPlugin()],
+  plugins: [react(), tailwindcss(), metaImagesPlugin()],
 
   resolve: {
     alias: {
@@ -34,6 +34,7 @@ export default defineConfig({
     allowedHosts: true,
     hmr: {
       clientPort: 443,
+      overlay: false,
     },
   },
 });

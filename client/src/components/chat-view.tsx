@@ -19,7 +19,7 @@ interface ChatViewProps {
   onBack?: () => void;
   playback: ReturnType<typeof useAudioPlayback>;
   lastAudioChunksRef: MutableRefObject<string[]>;
-  voiceGender: "male" | "female"; // 🔥 from Home
+  voiceGender: "male" | "female";
 }
 
 let msgCounter = 1000;
@@ -41,11 +41,14 @@ export function ChatView({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const conversationIdRef = useRef<number | null>(null);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   /* ================= SEND ================= */
+
   const handleSend = async () => {
     const trimmed = inputValue.trim();
     if (!trimmed || isStreaming) return;
@@ -68,23 +71,38 @@ export function ChatView({
     let assistantText = "";
 
     try {
-      await sendMessage(0, trimmed, (chunk) => {
-        assistantText += chunk;
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsgId ? { ...m, text: assistantText } : m,
-          ),
-        );
-      });
+      await sendMessage(
+        conversationIdRef.current,
+        trimmed,
+
+        /* conversation id callback */
+
+        (id: number) => {
+          conversationIdRef.current = id;
+        },
+
+        /* streaming token callback */
+
+        (chunk: string) => {
+          assistantText += chunk;
+
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId ? { ...m, text: assistantText } : m,
+            ),
+          );
+        },
+      );
 
       const cache: string[] = [];
+
       await streamTTS(
         assistantText,
         (chunk: string) => {
           cache.push(chunk);
           playback.pushAudio(chunk);
         },
-        { voice: voiceGender }, // 🔥 USE SHARED VOICE
+        { voice: voiceGender },
       );
 
       playback.signalComplete();
@@ -95,6 +113,7 @@ export function ChatView({
   };
 
   /* ================= REPLAY ================= */
+
   const handleReadAloud = useCallback(async () => {
     const lastAssistant = [...messages]
       .reverse()
@@ -140,6 +159,7 @@ export function ChatView({
               </p>
             </div>
           ))}
+
           <div ref={messagesEndRef} />
         </div>
       </div>

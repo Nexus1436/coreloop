@@ -32,6 +32,7 @@ export async function sendMessage(
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+
   let buffer = "";
 
   while (true) {
@@ -40,26 +41,38 @@ export async function sendMessage(
 
     buffer += decoder.decode(value, { stream: true });
 
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
 
-    for (const part of parts) {
-      const line = part.trim();
+    for (const evt of events) {
+      const line = evt.trim();
       if (!line.startsWith("data:")) continue;
 
+      const payload = line.slice(5).trim();
+      if (!payload) continue;
+
       try {
-        const event = JSON.parse(line.slice(5));
+        const event = JSON.parse(payload);
+
+        /* conversation id */
 
         if (event.conversationId) {
           activeConversationId = event.conversationId;
           onConversationId(event.conversationId);
+          continue;
         }
+
+        /* streaming assistant text */
 
         if (event.content) {
           onChunk(event.content);
+          continue;
         }
 
+        /* stream finished */
+
         if (event.done) {
+          reader.cancel();
           return;
         }
       } catch {

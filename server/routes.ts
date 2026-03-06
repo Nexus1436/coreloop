@@ -3,8 +3,7 @@ import type { Server as HTTPServer } from "http";
 
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { toFile } from "openai/uploads";
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 
 import { db } from "./db";
 import { conversations, messages } from "@shared/schema";
@@ -332,67 +331,33 @@ It reveals how force behaves — across movements, across sessions.
 `;
 
 /* =====================================================
-   MEMORY EXTRACTION PROMPT (STRUCTURED)
+   MEMORY EXTRACTION PROMPT
 ===================================================== */
 
 const MEMORY_EXTRACTION_PROMPT = `
-You are a STRICT JSON extraction engine.
+Extract durable user information from the latest user message.
 
-Task:
-- Extract ONLY new durable user information from the latest user message.
-- Merge-safe: do not repeat what already exists in Current Memory unless it changes/corrects it.
-- Never invent. If the user did not say it, do not add it.
-- If nothing new, return {}.
+Return JSON only.
 
-Output:
-- STRICT JSON ONLY (single object).
-- No markdown, no commentary, no code fences.
+Fields to extract if present:
+identity.name
+identity.age
+identity.height
+identity.weight
+identity.dominantHand
 
-Allowed paths (use only what applies):
+sportContext.primarySport
+sportContext.secondarySports
+sportContext.yearsExperience
+sportContext.competitionLevel
 
-identity.name (string)
-identity.dominantHand ("left"|"right")
-identity.age (number)
-identity.height (string)
-identity.weight (string)
+body.injuries
+body.chronicTensionZones
+body.instabilityZones
 
-anthropometry.limbLengthBias (string)
-anthropometry.notes (string[])
-
-sportContext.primarySport (string)
-sportContext.secondarySports (string[])
-sportContext.yearsExperience (number)
-sportContext.competitionLevel (string)
-
-body.injuries (array of objects):
-  - location (string)
-  - severity (string)
-  - status ("active"|"historical")
-
-body.chronicTensionZones (string[])
-body.instabilityZones (string[])
-
-movementPatterns.confirmed (string[])
-movementPatterns.suspected (string[])
-movementPatterns.recurringThemes (string[])
-
-signalHistory.recurringPainSignals (string[])
-signalHistory.recurringConfusionSignals (string[])
-signalHistory.fearTriggers (string[])
-
-performanceTrends.improvements (string[])
-performanceTrends.regressions (string[])
-performanceTrends.consistencyNotes (string[])
-
-cognitivePatterns.overanalysis (boolean)
-cognitivePatterns.rushTendency (boolean)
-cognitivePatterns.hesitationPattern (boolean)
-cognitivePatterns.notes (string[])
-
-Rules:
-- Arrays must be NEW items only.
-- Normalize simple strings.
-- Prefer specific locations over vague ones.
+signalHistory.recurringPainSignals
+signalHistory.recurringConfusionSignals
+signalHistory.fearTriggers
 `;
 /* =====================================================
    HELPERS
@@ -404,191 +369,6 @@ function clampText(s: string, max = 800): string {
   return t.length > max ? t.slice(0, max) + "…" : t;
 }
 
-function normalizeItem(s: unknown): string | null {
-  if (typeof s !== "string") return null;
-  const t = s
-    .trim()
-    .replace(/[.,!?]+$/, "")
-    .trim();
-  return t ? t : null;
-}
-
-function pushUniqueStrings(target: string[], items: unknown): void {
-  if (!Array.isArray(items)) return;
-  for (const raw of items) {
-    const v = normalizeItem(raw);
-    if (!v) continue;
-    if (!target.includes(v)) target.push(v);
-  }
-}
-
-function pushUniqueInjuries(
-  target: InterloopMemory["body"]["injuries"],
-  items: unknown,
-): void {
-  if (!Array.isArray(items)) return;
-
-  for (const it of items) {
-    if (!it || typeof it !== "object") continue;
-    const o = it as any;
-
-    const location = normalizeItem(o.location);
-    if (!location) continue;
-
-    const severity = normalizeItem(o.severity) ?? "unknown";
-    const status: "active" | "historical" =
-      o.status === "historical" ? "historical" : "active";
-
-    const key = `${location.toLowerCase()}|${status.toLowerCase()}`;
-    const exists = target.some(
-      (x) => `${x.location.toLowerCase()}|${x.status.toLowerCase()}` === key,
-    );
-
-    if (!exists) {
-      target.push({ location, severity, status });
-    }
-  }
-}
-
-function mergeExtracted(memory: InterloopMemory, extracted: any): void {
-  if (!extracted || typeof extracted !== "object") return;
-
-  if (extracted.identity) {
-    const id = extracted.identity;
-    if (id.name) memory.identity.name = id.name.trim();
-    if (id.dominantHand) memory.identity.dominantHand = id.dominantHand;
-    if (id.age) memory.identity.age = id.age;
-    if (id.height) memory.identity.height = id.height;
-    if (id.weight) memory.identity.weight = id.weight;
-  }
-
-  if (extracted.anthropometry) {
-    const a = extracted.anthropometry;
-    if (a.limbLengthBias)
-      memory.anthropometry.limbLengthBias = a.limbLengthBias;
-    pushUniqueStrings(memory.anthropometry.notes, a.notes);
-  }
-
-  if (extracted.sportContext) {
-    const s = extracted.sportContext;
-    if (s.primarySport) memory.sportContext.primarySport = s.primarySport;
-    pushUniqueStrings(memory.sportContext.secondarySports, s.secondarySports);
-    if (s.yearsExperience)
-      memory.sportContext.yearsExperience = s.yearsExperience;
-    if (s.competitionLevel)
-      memory.sportContext.competitionLevel = s.competitionLevel;
-  }
-
-  if (extracted.body) {
-    const b = extracted.body;
-    pushUniqueInjuries(memory.body.injuries, b.injuries);
-    pushUniqueStrings(memory.body.chronicTensionZones, b.chronicTensionZones);
-    pushUniqueStrings(memory.body.instabilityZones, b.instabilityZones);
-  }
-
-  if (extracted.movementPatterns) {
-    const mp = extracted.movementPatterns;
-    pushUniqueStrings(memory.movementPatterns.confirmed, mp.confirmed);
-    pushUniqueStrings(memory.movementPatterns.suspected, mp.suspected);
-    pushUniqueStrings(
-      memory.movementPatterns.recurringThemes,
-      mp.recurringThemes,
-    );
-  }
-
-  if (extracted.signalHistory) {
-    const sh = extracted.signalHistory;
-    pushUniqueStrings(
-      memory.signalHistory.recurringPainSignals,
-      sh.recurringPainSignals,
-    );
-    pushUniqueStrings(
-      memory.signalHistory.recurringConfusionSignals,
-      sh.recurringConfusionSignals,
-    );
-    pushUniqueStrings(memory.signalHistory.fearTriggers, sh.fearTriggers);
-  }
-
-  if (extracted.performanceTrends) {
-    const pt = extracted.performanceTrends;
-    pushUniqueStrings(memory.performanceTrends.improvements, pt.improvements);
-    pushUniqueStrings(memory.performanceTrends.regressions, pt.regressions);
-    pushUniqueStrings(
-      memory.performanceTrends.consistencyNotes,
-      pt.consistencyNotes,
-    );
-  }
-
-  if (extracted.cognitivePatterns) {
-    const cp = extracted.cognitivePatterns;
-    if (typeof cp.overanalysis === "boolean")
-      memory.cognitivePatterns.overanalysis = cp.overanalysis;
-    if (typeof cp.rushTendency === "boolean")
-      memory.cognitivePatterns.rushTendency = cp.rushTendency;
-    if (typeof cp.hesitationPattern === "boolean")
-      memory.cognitivePatterns.hesitationPattern = cp.hesitationPattern;
-    pushUniqueStrings(memory.cognitivePatterns.notes, cp.notes);
-  }
-}
-
-/* =====================================================
-   MEMORY FORMATTER
-===================================================== */
-
-function formatMemory(memory: InterloopMemory): string | null {
-  if (!memory) return null;
-
-  const lines: string[] = [];
-
-  if (memory.identity?.name) lines.push(`Name: ${memory.identity.name}`);
-  if (memory.identity?.dominantHand)
-    lines.push(`Dominant hand: ${memory.identity.dominantHand}`);
-
-  if (memory.sportContext?.primarySport)
-    lines.push(`Primary sport: ${memory.sportContext.primarySport}`);
-
-  if (memory.sportContext?.secondarySports?.length)
-    lines.push(
-      `Secondary sports: ${memory.sportContext.secondarySports.join(", ")}`,
-    );
-
-  if (memory.body?.injuries?.length)
-    lines.push(
-      `Injuries: ${memory.body.injuries
-        .slice(0, 5)
-        .map((i) => `${i.location} (${i.status})`)
-        .join(", ")}`,
-    );
-
-  if (memory.body?.chronicTensionZones?.length)
-    lines.push(
-      `Chronic tension: ${memory.body.chronicTensionZones.slice(0, 5).join(", ")}`,
-    );
-
-  if (memory.body?.instabilityZones?.length)
-    lines.push(
-      `Instability: ${memory.body.instabilityZones.slice(0, 5).join(", ")}`,
-    );
-
-  if (memory.movementPatterns?.recurringThemes?.length)
-    lines.push(
-      `Recurring movement themes: ${memory.movementPatterns.recurringThemes
-        .slice(0, 5)
-        .join(", ")}`,
-    );
-
-  if (memory.signalHistory?.recurringPainSignals?.length)
-    lines.push(
-      `Recurring pain signals: ${memory.signalHistory.recurringPainSignals
-        .slice(0, 5)
-        .join(", ")}`,
-    );
-
-  if (!lines.length) return null;
-
-  return `User Structural Context:\n${lines.map((l) => `- ${l}`).join("\n")}`;
-}
-
 /* =====================================================
    ROUTES
 ===================================================== */
@@ -597,21 +377,44 @@ export async function registerRoutes(
   _httpServer: HTTPServer,
   app: Express,
 ): Promise<void> {
+  /* ================= HEALTH ================= */
+
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
   });
+
+  /* =====================================================
+     STT
+  ===================================================== */
+
+  app.post("/api/stt", async (_req: Request, res: Response) => {
+    res.json({ transcript: "test transcript" });
+  });
+
+  /* =====================================================
+     CHAT
+  ===================================================== */
 
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
       const { conversationId, messages: incoming } = req.body ?? {};
 
+      if (!incoming || !incoming.length) {
+        res.status(400).json({ error: "No messages provided" });
+        return;
+      }
+
       const last = incoming[incoming.length - 1];
       const userText = String(last.content ?? "").trim();
 
       let convoId = Number(conversationId);
+      if (!convoId) convoId = NaN;
+
       let userId = "default-user";
 
-      if (!Number.isFinite(convoId)) {
+      /* ================= CREATE CONVERSATION ================= */
+
+      if (!convoId || !Number.isFinite(convoId)) {
         const [row] = await db
           .insert(conversations)
           .values({
@@ -624,11 +427,15 @@ export async function registerRoutes(
         userId = row.userId;
       }
 
+      /* ================= SAVE USER MESSAGE ================= */
+
       await db.insert(messages).values({
         conversationId: convoId,
         role: "user",
         content: userText,
       });
+
+      /* ================= LOAD HISTORY ================= */
 
       const previous = await db
         .select()
@@ -636,68 +443,37 @@ export async function registerRoutes(
         .where(eq(messages.conversationId, convoId))
         .orderBy(asc(messages.createdAt));
 
-      /* ================= MEMORY EXTRACTION ================= */
-
-      let extracted: any = null;
-
-      try {
-        const currentMemory = getMemory(userId);
-
-        extracted = await extractMemory(userText, currentMemory);
-
-        if (
-          extracted &&
-          typeof extracted === "object" &&
-          Object.keys(extracted).length > 0
-        ) {
-          updateMemory(userId, (memory) => {
-            mergeExtracted(memory, extracted);
-          });
-        }
-      } catch (err) {
-        console.error("[memory extraction failed]", err);
-      }
-
-      /* ================= LOAD MEMORY FOR PROMPT ================= */
-
-      const memory = getMemory(userId);
-      const formattedMemory = formatMemory(memory);
-      /* ================= CONVERSATION COMPRESSION ================= */
-
-      const TRANSCRIPT_TAIL = 14;
-      const tail = previous.slice(-TRANSCRIPT_TAIL);
-
-      let conversationSummary: string | null = null;
-
-      if (previous.length > TRANSCRIPT_TAIL) {
-        const earlier = previous.slice(0, previous.length - TRANSCRIPT_TAIL);
-
-        const summary = earlier
-          .slice(-6)
-          .map((m) => `${m.role}: ${String(m.content).slice(0, 120)}`)
-          .join("\n");
-
-        conversationSummary = `Earlier conversation summary:\n${summary}`;
-      }
-
       const chatMessages: ChatCompletionMessageParam[] = [
         { role: "system", content: SYSTEM_PROMPT },
 
-        ...(formattedMemory
-          ? [{ role: "system", content: formattedMemory } as const]
-          : []),
-
-        ...(conversationSummary
-          ? [{ role: "system", content: conversationSummary } as const]
-          : []),
-
-        ...tail.map((m) => ({
+        ...previous.map((m) => ({
           role: m.role as "user" | "assistant",
           content: String(m.content ?? ""),
         })),
       ];
 
-      /* ================= STREAM RESPONSE ================= */
+      /* ================= MEMORY ================= */
+
+      try {
+        const memory = await getMemory(userId);
+
+        const extracted = await extractMemory(
+          userText,
+          MEMORY_EXTRACTION_PROMPT,
+        );
+
+        if (extracted) {
+          await updateMemory(userId, extracted);
+        }
+      } catch (err) {
+        console.warn("Memory update failed", err);
+      }
+
+      /* ================= STREAM ================= */
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
 
       const stream = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -719,28 +495,27 @@ export async function registerRoutes(
         res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
       }
 
-      res.write("data: [DONE]\n\n");
-      res.end();
-      /* =====================================================
-         ASSISTANT INSIGHT EXTRACTION
-      ===================================================== */
+      /* ================= SAVE ASSISTANT MESSAGE ================= */
 
-      try {
-        const insights = await extractMemory(assistantText, memory);
-
-        if (insights && Object.keys(insights).length > 0) {
-          updateMemory(userId, (mem) => {
-            mergeExtracted(mem, insights);
-          });
-        }
-      } catch (err) {
-        console.error("[assistant memory extraction]", err);
-      }
+      await db.insert(messages).values({
+        conversationId: convoId,
+        role: "assistant",
+        content: assistantText,
+      });
 
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+
       res.end();
     } catch (err) {
-      console.error("[/api/chat]", err);
+      console.error("[/api/chat error]", err);
+
+      res.write(
+        `data: ${JSON.stringify({
+          content: "Server error occurred.",
+          done: true,
+        })}\n\n`,
+      );
+
       res.end();
     }
   });
