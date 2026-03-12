@@ -1,61 +1,116 @@
-import { useRef, useCallback, useState } from "react";
+import { useRef, useState, useCallback } from "react";
 
 export type PlaybackState = "idle" | "playing" | "ended";
 
 export function useAudioPlayback() {
-  const [state, setState] = useState<PlaybackState>("idle");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const queueRef = useRef<string[]>([]);
+  const playingRef = useRef(false);
+
+  const [state, setState] = useState<PlaybackState>("idle");
+
+  /* ================= INIT ================= */
 
   const init = useCallback(async () => {
     if (!audioRef.current) {
       const audio = new Audio();
+      audio.preload = "auto";
       audio.volume = 1.0;
-      audio.onended = () => setState("ended");
+
+      audio.onended = () => {
+        playingRef.current = false;
+        playNext();
+      };
+
       audioRef.current = audio;
     }
   }, []);
 
-  const pushAudio = useCallback((base64Audio: string) => {
-    if (!audioRef.current) return;
+  /* ================= PLAY NEXT ================= */
 
-    const src = `data:audio/mpeg;base64,${base64Audio}`;
-    audioRef.current.src = src;
+  const playNext = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
 
-    audioRef.current.play();
+    const next = queueRef.current.shift();
+
+    if (!next) {
+      setState("ended");
+      return;
+    }
+
+    playingRef.current = true;
     setState("playing");
+
+    audio.src = `data:audio/mpeg;base64,${next}`;
+
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {});
+    }
   }, []);
 
-  const clear = useCallback(() => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    audioRef.current.currentTime = 0;
-    setState("idle");
-  }, []);
+  /* ================= PUSH AUDIO ================= */
+
+  const pushAudio = useCallback(
+    (base64Audio: string) => {
+      queueRef.current.push(base64Audio);
+
+      // If nothing is playing, start immediately
+      if (!playingRef.current) {
+        playNext();
+        return;
+      }
+
+      // If something is playing, preload next clip so decoding starts early
+      const audio = audioRef.current;
+      if (audio && queueRef.current.length === 1) {
+        const preload = new Audio(
+          `data:audio/mpeg;base64,${base64Audio}`
+        );
+        preload.preload = "auto";
+      }
+    },
+    [playNext],
+  );
+
+  /* ================= STOP ================= */
 
   const stop = useCallback(() => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    audioRef.current.currentTime = 0;
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    queueRef.current = [];
+    playingRef.current = false;
+
+    audio.pause();
+    audio.currentTime = 0;
+    audio.src = "";
+
     setState("idle");
   }, []);
 
-  // ✅ Add this back so Home compiles cleanly
-  const signalComplete = useCallback(() => {
-    // For simple HTMLAudio playback,
-    // nothing required — but we expose the method
-    // to keep API stable.
+  /* ================= CLEAR ================= */
+
+  const clear = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    queueRef.current = [];
+    playingRef.current = false;
+
+    audio.pause();
+    audio.currentTime = 0;
+    audio.src = "";
+
+    setState("idle");
   }, []);
 
-  // ✅ Voice compensation stays
-  const setVoiceCompensation = useCallback((voice: string) => {
-    if (!audioRef.current) return;
+  /* ================= SIGNAL COMPLETE ================= */
 
-    if (voice === "verse") {
-      audioRef.current.volume = 1.0; // male boosted
-    } else if (voice === "nova") {
-      audioRef.current.volume = 0.7; // female softened
-    } else {
-      audioRef.current.volume = 1.0;
+  const signalComplete = useCallback(() => {
+    if (!playingRef.current && queueRef.current.length === 0) {
+      setState("ended");
     }
   }, []);
 
@@ -63,9 +118,8 @@ export function useAudioPlayback() {
     state,
     init,
     pushAudio,
-    signalComplete,
-    clear,
     stop,
-    setVoiceCompensation,
+    clear,
+    signalComplete,
   };
 }

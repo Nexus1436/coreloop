@@ -24,7 +24,7 @@ export function loadMemory() {
       identity: {},
       body: { injuries: [] },
       patterns: {},
-      history: { total_sessions: 0 }
+      history: { total_sessions: 0 },
     };
     saveMemory();
   }
@@ -50,7 +50,7 @@ export function saveMemory() {
     fs.writeFileSync(
       MEMORY_PATH,
       JSON.stringify(memoryCache, null, 2),
-      "utf-8"
+      "utf-8",
     );
   } catch (err) {
     console.error("Failed to save memory:", err);

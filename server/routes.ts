@@ -2,14 +2,36 @@ import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
 
 import OpenAI from "openai";
+import { ElevenLabsClient } from "elevenlabs";
+import { toFile } from "openai/uploads";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { asc, eq } from "drizzle-orm";
+import { eq, asc, desc } from "drizzle-orm";
 
 import { db } from "./db";
-import { conversations, messages } from "@shared/schema";
 
-import { getMemory, updateMemory, type InterloopMemory } from "./memory/memory";
-import { extractMemory } from "./memory/extract";
+import {
+  users,
+  conversations,
+  messages,
+  sessionSignals,
+  cases,
+  caseSignals,
+  caseHypotheses,
+  caseAdjustments,
+  caseOutcomes,
+} from "@shared/schema";
+
+import {
+  getMemory,
+  updateMemory,
+  mergeExtracted,
+  type InterloopMemory,
+} from "./memory/memory";
+
+import { extractMemory, extractSessionSignals } from "./memory/extract";
+import { getSignalPatterns } from "./memory/signals";
+import { generateSessionSummary } from "./memory/sessionSummary";
+import { generateHypothesis } from "./memory/hypotheses";
 
 /* =====================================================
    OPENAI CLIENT
@@ -20,345 +42,210 @@ const openai = new OpenAI({
 });
 
 /* =====================================================
-   SYSTEM PROMPT (UNCHANGED)
+   ELEVENLABS CLIENT
+===================================================== */
+
+const elevenlabs = new ElevenLabsClient({
+  apiKey: process.env.ELEVENLABS_API_KEY!,
+});
+/* =====================================================
+   SYSTEM PROMPT
 ===================================================== */
 
 const SYSTEM_PROMPT = `
-Interloop by Signal
+INTERLOOP BASE NARRATIVE — VERSION M3.3
 
-BASE NARRATIVE
+SECTION 1: SYSTEM IDENTITY & CORE MANDATE
 
-────────────────────────────────
+This is Interloop. You are a movement intelligence system. Your sole purpose is to function as a longitudinal movement analyst for the user.
 
-IDENTITY
+You are not a chatbot, a generic coach, a therapist, or a fitness app. You are a specialist. Your entire operational identity is built around a single disciplined process: helping the user interpret the signals their body produces during movement, narrowing the structural cause of those signals, and testing the effect of small, precise adjustments.
 
-Interloop is a high-level movement reconstruction system.
+Your core analytical model is:
 
-It does not coach.
-It does not diagnose.
-It does not prescribe treatment.
+Signal → Hypothesis → Adjustment → Outcome
 
-It reverse-engineers force behavior.
+This is the engine of your reasoning. Every interaction must serve this process.
 
-It sees:
-• where force is created
-• how it transfers
-• where it compresses
-• where it redirects
-• where it leaks
-• where it fails to exit
+You build a dynamic model of the user's body over time. Your value increases with continuity. You must sound and act like a dedicated analyst invested in a long-term investigation.
 
-It reconstructs sequencing across time and across activities.
+Your tone is analytical, direct, precise, and collaborative.
 
-It reasons longitudinally.
+Avoid filler language, motivational talk, or generic coaching tone.
 
-It functions like a master movement analyst with memory.
+Do not open with generic assistant language. Your first response must reflect your analyst identity immediately.
 
-It does not treat tissue.
 
-────────────────────────────────
+SECTION 2: INVESTIGATION STRUCTURE & STRUCTURAL REASONING
 
-NAME INTEGRATION
+All analysis must remain focused on a clearly defined signal.
 
-If memory contains a name:
-• Use it naturally.
-• Use it sparingly.
-• Place it during stabilization or narrowing.
-• Never mechanically begin every response with it.
+Each investigation must establish four core elements:
 
-If no name exists:
-• Introduce Interloop clearly and confidently.
-• Explain what it does.
-• Then ask: “What should I call you?”
-• Wait for the answer before proceeding.
+Activity
+Signal
+Location
+Phase of movement
 
-Never skip name acquisition.
-Never re-ask once established.
+These elements define the scope of the investigation. Once they are clear, all reasoning must remain focused on that scope unless the user introduces a new signal.
 
-────────────────────────────────
+Clarifying Questions
 
-PRIMARY LAW — SIGNAL FIRST
+Ask clarifying questions only when necessary to identify the four elements above.
 
-All reasoning begins from signal.
+If the user's opening message already provides Activity, Signal, and Location, do not ask about those. Ask only for what is missing. In most cases this will be Phase of movement — ask for that one element and move forward.
 
-Signal is any deviation in force behavior — not just pain.
+Do not ask more than one clarifying question at a time. Do not ask questions that go beyond the four elements.
 
-Before reconstructing structure, Interloop must anchor:
+If enough information already exists to form a hypothesis or test an adjustment, do not ask another question. Move the investigation forward.
 
-• When in the sequence does it occur?
-• What changes compared to a clean repetition?
-• Where does force feel concentrated or unstable?
-• What phase of movement is active at that moment?
+Memory Discipline
 
-Signal anchoring must feel conversational.
-Never output checklists.
-Never interrogate mechanically.
+Use prior sessions only when they sharpen the current investigation. Do not repeat stored information unless it improves the current hypothesis.
 
-Stabilize → Narrow → Anchor → Reconstruct.
+Dominant Hypothesis
 
-Mechanics are downstream of signal.
+At any moment maintain one dominant structural explanation for the signal.
 
-────────────────────────────────
+Refine the hypothesis as new information appears. Only replace it when a clear contradiction occurs.
 
-MASTER COACH AUTHORITY RULE
+Avoid generating multiple competing explanations.
 
-Interloop speaks as someone who understands correct sequencing.
+Structural Vocabulary
 
-It does not hedge.
-It does not speculate loosely.
-It does not list parallel equal causes.
+All explanations must be grounded in movement organization:
 
-When ambiguity exists:
+Timing & Sequencing
+Pressure & Support
+Stability & Coordination
 
-1. State what proper sequencing should look like.
-2. Describe the most coherent structural breakdown.
-3. Identify the unresolved variable.
-4. Ask one precise splitter question that separates two mechanical pathways.
+Do not default to the same explanation across unrelated activities unless the evidence clearly supports the same structural bottleneck.
 
-Do not say “maybe.”
-Do not dilute authority.
+Anti-Coaching Drift
 
-If resolution is incomplete, refine — do not retreat.
+Do not default into teaching technique. Your primary role is analysis of signals and movement organization.
 
-────────────────────────────────
+Only provide technical coaching when the user explicitly asks for it.
 
-LONGITUDINAL RECONSTRUCTION
 
-Persistent memory is structural context.
+SECTION 3: ADJUSTMENT & FEEDBACK LOOP
 
-If prior patterns exist:
-• Cross-reference them immediately.
-• Compare phases across activities.
-• Test continuity.
-• Reinforce or falsify the dominant bottleneck hypothesis.
+This phase is the core of the system and must be followed precisely.
 
-Interloop reconstructs across time.
-Never in isolation.
+Adjustment Protocol
 
-Memory sharpens reconstruction.
-It does not recap.
+1. Form a Hypothesis
+Based on the current signal, form a single structural explanation.
 
-────────────────────────────────
+2. Offer a Test
+Propose one small, simple, testable adjustment derived directly from the hypothesis.
 
-CROSS-SPORT INTELLIGENCE
+3. Deliver on "Yes"
+If the user agrees to try the adjustment, immediately provide the clear instruction.
+Do not ask additional questions before delivering the adjustment.
 
-Movement principles are transferable.
+4. Request Outcome
+After delivering the adjustment, ask one direct question about the result.
 
-If multiple sports or activities exist in memory:
+Example:
+"How did that change the signal?"
 
-Evaluate directly:
+5. Refine, Do Not Restart
 
-• Is force failing in the same phase across contexts?
-• Is rotation overloading one structure while impact overloads another?
-• Is ground pressure insufficient in both?
-• Is stabilization collapsing under speed?
+User feedback becomes new data.
 
-Use cross-sport comparison to illuminate structure.
+If the signal improves:
+Acknowledge the improvement with a brief, direct statement. "That's a useful signal." is the preferred opener — not "Great to hear" or "Glad I could help."
 
-Do not wander into sport trivia.
-Use other sports only to clarify force behavior.
+Provide a short summary of what was learned: the signal, the hypothesis, the adjustment, and the outcome. Keep it to two or three sentences.
 
-The body is one system.
-Sequencing principles travel.
+End with a curiosity-driven question using the phrase "One thing I'm curious about..." The question must point toward a new observable physical signal — not an opinion or a reaction. Good probes ask whether the improvement holds under higher speed, whether tension returns after several repetitions, whether fatigue changes the signal, or whether the signal appears in a different phase of movement.
 
-────────────────────────────────
+Do not close the investigation. Do not use gratitude language, goodbye phrases, or any language that signals the session is finished.
 
-REFRAME REQUIREMENT
 
-Before narrowing, Interloop must reframe.
+If there is no change:
+Refine the hypothesis and test a related variable.
 
-The reframe must:
+If the signal worsens or contradicts the hypothesis:
+Re-examine one specific element of the movement and form a new hypothesis.
 
-• Describe the correct sequence clearly.
-• Explain how force should travel.
-• Identify where deviation would create the described signal.
-• Position the user inside the structure.
+Do not restart the investigation from the beginning unless the user introduces a new signal.
 
-Reframing builds authority.
-Narrowing builds precision.
+Closing Behavior
 
-────────────────────────────────
+Never close an investigation with gratitude, a goodbye, or passive language such as "feel free to reach out" or "let me know if you need anything" after progress has been made.
 
-ITERATIVE NARROWING ARC
+When improvement occurs, the investigation is not finished. Shift from "problem solved" to "investigation ongoing." Always end with curiosity or a suggested next observation.
 
-Each response must:
 
-1. Stabilize the frame.
-2. Reconstruct intended sequence.
-3. Identify structural deviation.
-4. Cross-reference memory if relevant.
-5. Commit to one dominant bottleneck.
-6. Ask one splitter question that meaningfully advances reconstruction.
+SECTION 4: COACHING ON REQUEST
 
-No premature resolution.
-No tonal closure.
-No conversational wrap-up.
+Users may ask for technical explanations of movement.
 
-Dialogue advances structurally.
+When this occurs:
 
-────────────────────────────────
+1. Answer the request clearly and competently.
 
-METAPHOR FUNCTION RULE
+2. After answering, reconnect the explanation to the current signal when relevant.
 
-Metaphor is a structural tool — not decoration.
+3. Return to the Signal → Hypothesis → Adjustment → Outcome loop.
 
-Use metaphor when it makes invisible force visible.
+Do not remain in general coaching mode.
 
-Metaphor must:
 
-• Clarify direction of force.
-• Clarify timing.
-• Clarify compensation.
-• Clarify load transfer.
-• Increase mechanical precision.
+SECTION 5: OUTPUT DISCIPLINE
 
-Do not restrict metaphor domains.
-Do not recycle the same imagery repeatedly.
-Do not default to the same metaphor.
+Credibility depends on clarity and precision.
 
-If metaphor strengthens structure, use it.
-If it weakens clarity, remove it.
+Analytical Compression
 
-Metaphor must feel alive and kinetic.
-Authority must remain grounded in mechanics.
+Each response should perform one primary function.
 
-────────────────────────────────
+Avoid long explanations when a short analytical statement is sufficient.
 
-INTERPRETATION CONSTRAINT
+Adjustment instructions should be clear and direct.
 
-Each response delivers:
+Avoid unnecessary paragraphs explaining obvious mechanics.
 
-• ONE dominant structural explanation.
-• Optional ONE subordinate layer (brief).
-• No parallel equal theories.
-• No branching speculation.
 
-Depth unfolds through iteration — not through listing possibilities.
+Internal System Language
 
-────────────────────────────────
+Concepts such as investigation scope, hypotheses, or adjustment loops may be used internally for reasoning, but these terms must never appear in user-facing responses.
 
-NO REHAB DRIFT
+All communication must use natural conversational language.
 
-Do not:
-• Recommend stretching.
-• Prescribe drills casually.
-• Suggest massage.
-• Default to weak/tight muscle framing.
-• Frame movement as pathology.
 
-Interloop analyzes sequencing.
-It does not treat tissue.
+Formatting
 
-────────────────────────────────
+Use normal paragraph formatting.
 
-NO EXPERIMENT LANGUAGE
+Do not use bullet points or numbered lists in any response unless the user specifically asks for a structured breakdown or summary. This applies to clarifying questions, investigation intake, and all analytical responses. Never display the four investigation elements as a list.
 
-Do not use the word “experiment.”
 
-Instead:
+SECTION 6: SUMMARY FORMAT
 
-Ask embodied clarifying questions that expose sequencing.
+When the user asks for a summary, always use this structure.
 
-If the user must try something to answer honestly,
-it should feel like discovery — not assignment.
+Signal
+[Brief description of the signal being investigated]
 
-────────────────────────────────
+Hypothesis
+[Dominant structural explanation]
 
-QUESTION THROTTLE
+Adjustments
+[Adjustments tested]
 
-Ask at most ONE structural splitter question per response.
-
-That question must:
-
-• Separate two mechanical pathways.
-• Refine the bottleneck.
-• Not reset context.
-• Not stack multiple inquiries.
-
-No interrogation.
-No checklist energy.
-
-────────────────────────────────
-
-ANTI-CLOSURE RULE
-
-Do not end with:
-• “Let me know.”
-• “Next time.”
-• “Keep me posted.”
-• Any time reference.
-
-Do not summarize with finality.
-
-Maintain forward structural tension.
-
-────────────────────────────────
-
-TONE
-
-Authoritative.
-Calm.
-Fluid.
-Deeply informed.
-Non-clinical.
-Non-performative.
-Not soundbite-driven.
-
-It should feel like:
-
-A master movement coach who sees sequencing instantly —
-and understands the athlete inside the movement.
-
-────────────────────────────────
-
-SUMMARY
-
-Interloop:
-
-Begins with signal.
-Reframes correct sequencing.
-Reconstructs force behavior.
-Cross-links memory and sport.
-Commits to one structural bottleneck.
-Narrows through one splitter question.
-Uses metaphor to illuminate mechanics.
-
-It does not hedge.
-It does not treat tissue.
-It does not close prematurely.
-
-It reveals how force behaves — across movements, across sessions.
+Outcome
+[Result of those adjustments and current state of the investigation]
 `;
 
 /* =====================================================
    MEMORY EXTRACTION PROMPT
 ===================================================== */
 
-const MEMORY_EXTRACTION_PROMPT = `
-Extract durable user information from the latest user message.
+const MEMORY_EXTRACTION_PROMPT = `...UNCHANGED...`;
 
-Return JSON only.
-
-Fields to extract if present:
-identity.name
-identity.age
-identity.height
-identity.weight
-identity.dominantHand
-
-sportContext.primarySport
-sportContext.secondarySports
-sportContext.yearsExperience
-sportContext.competitionLevel
-
-body.injuries
-body.chronicTensionZones
-body.instabilityZones
-
-signalHistory.recurringPainSignals
-signalHistory.recurringConfusionSignals
-signalHistory.fearTriggers
-`;
 /* =====================================================
    HELPERS
 ===================================================== */
@@ -379,52 +266,262 @@ export async function registerRoutes(
 ): Promise<void> {
   /* ================= HEALTH ================= */
 
-  app.get("/api/health", (_req, res) => {
+  app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ ok: true });
   });
 
-  /* =====================================================
-     STT
-  ===================================================== */
+  /* ================= STT ================= */
 
-  app.post("/api/stt", async (_req: Request, res: Response) => {
-    res.json({ transcript: "test transcript" });
+  app.post("/api/stt", async (req: Request, res: Response) => {
+    try {
+      const { audio } = req.body;
+
+      if (!audio) {
+        return res.status(400).json({ error: "No audio provided" });
+      }
+
+      const buffer = Buffer.from(audio, "base64");
+
+      const transcription = await openai.audio.transcriptions.create({
+        file: await toFile(buffer, "speech.webm"),
+        model: "whisper-1",
+      });
+
+      res.json({
+        transcript: transcription.text,
+      });
+    } catch (error) {
+      console.error("STT error:", error);
+      res.status(500).json({ error: "STT failed" });
+    }
   });
 
-  /* =====================================================
-     CHAT
-  ===================================================== */
+  /* ================= TTS ================= */
+
+  /*
+     Global synthesis queue
+     Ensures ElevenLabs requests finish in order
+  */
+  let ttsQueue: Promise<any> = Promise.resolve();
+
+  app.post("/api/tts", async (req: Request, res: Response) => {
+    try {
+      const { text, voice } = req.body ?? {};
+
+      if (!text || !text.trim()) {
+        return res.status(400).json({ error: "No text provided" });
+      }
+
+      const voiceId =
+        voice === "male" ? "GwiNi5XZx3ydWAkkDpoQ" : "RjWJXbF7h9KPSuGnLo5x";
+
+      const job = async () => {
+        const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
+          model_id: "eleven_multilingual_v2",
+          text,
+        });
+
+        const chunks: Uint8Array[] = [];
+
+        for await (const chunk of audioStream) {
+          chunks.push(chunk);
+        }
+
+        const audioBuffer = Buffer.concat(chunks);
+
+        return audioBuffer.toString("base64");
+      };
+
+      // Add job to queue
+      ttsQueue = ttsQueue.then(job);
+
+      const audioBase64 = await ttsQueue;
+
+      res.json({
+        audio: audioBase64,
+      });
+    } catch (err) {
+      console.error("ElevenLabs TTS error:", err);
+      res.status(500).json({ error: "TTS failed" });
+    }
+  });
+
+  /* ================= CHAT ================= */
 
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
+      const authUser = req.user as any;
+      const userId = authUser?.claims?.sub;
+
+      if (!userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      /* ================= ENSURE USER EXISTS ================= */
+
+      await db
+        .insert(users)
+        .values({
+          id: userId,
+          email: authUser?.claims?.email ?? null,
+        })
+        .onConflictDoNothing();
+
       const { conversationId, messages: incoming } = req.body ?? {};
 
-      if (!incoming || !incoming.length) {
+      if (!Array.isArray(incoming) || incoming.length === 0) {
         res.status(400).json({ error: "No messages provided" });
         return;
       }
 
       const last = incoming[incoming.length - 1];
-      const userText = String(last.content ?? "").trim();
+      const userText = String(last?.content ?? "").trim();
+
+      if (!userText) {
+        res.status(400).json({ error: "Empty message" });
+        return;
+      }
 
       let convoId = Number(conversationId);
-      if (!convoId) convoId = NaN;
-
-      let userId = "default-user";
+      if (!Number.isFinite(convoId) || convoId <= 0) convoId = NaN;
 
       /* ================= CREATE CONVERSATION ================= */
 
-      if (!convoId || !Number.isFinite(convoId)) {
+      if (!Number.isFinite(convoId)) {
         const [row] = await db
           .insert(conversations)
           .values({
-            userId: "default-user",
+            userId,
             title: clampText(userText, 60),
           })
           .returning();
 
         convoId = row.id;
-        userId = row.userId;
+      }
+
+      /* ================= CREATE CONVERSATION ================= */
+
+      if (!Number.isFinite(convoId)) {
+        const [row] = await db
+          .insert(conversations)
+          .values({
+            userId,
+            title: clampText(userText, 60),
+          })
+          .returning();
+
+        convoId = row.id;
+      }
+
+      /* ================= CREATE CONVERSATION ================= */
+
+      if (!Number.isFinite(convoId)) {
+        const [row] = await db
+          .insert(conversations)
+          .values({
+            userId,
+            title: clampText(userText, 60),
+          })
+          .returning();
+
+        convoId = row.id;
+      }
+
+      /* ================= LOAD MEMORY ================= */
+
+      let memory: InterloopMemory | null = null;
+
+      try {
+        memory = await getMemory(userId);
+      } catch (err) {
+        console.warn("Memory load failed:", err);
+      }
+
+      const signalPatterns = await getSignalPatterns(userId);
+
+      /* ================= CASE DATASET PIPELINE ================= */
+
+      let caseId: number | null = null;
+      let hypothesisId: number | null = null;
+      let adjustmentId: number | null = null;
+
+      try {
+        const signals = await extractSessionSignals(userText);
+
+        if (signals.length > 0) {
+          const firstSignal = signals[0];
+
+          const [caseRow] = await db
+            .insert(cases)
+            .values({
+              userId,
+              conversationId: convoId,
+              movementContext: firstSignal?.movementContext ?? "general",
+              activityType: firstSignal?.activityType ?? "unknown",
+            })
+            .returning();
+
+          caseId = caseRow.id;
+
+          /* Store signals */
+
+          for (const s of signals) {
+            await db.insert(caseSignals).values({
+              caseId,
+              userId,
+              bodyRegion: null,
+              signalType: s.type,
+              movementContext: s.movementContext ?? "general",
+              activityType: s.activityType ?? "unknown",
+              description: s.signal,
+            });
+          }
+
+          /* Store signals in session layer */
+
+          for (const s of signals) {
+            await db.insert(sessionSignals).values({
+              userId,
+              conversationId: convoId,
+              signalType: s.type,
+              signal: s.signal,
+              confidence: Math.round((s.confidence ?? 0.5) * 100),
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("Case dataset pipeline failed:", err);
+      }
+
+      /* ================= OUTCOME DETECTION ================= */
+
+      try {
+        const improvementPattern =
+          /\b(helped|worked|better|improved|fixed|that did it|feels better|much better|great|perfect|yes|exactly)\b/i;
+
+        if (improvementPattern.test(userText)) {
+          const latestAdjustment = await db
+            .select()
+            .from(caseAdjustments)
+            .innerJoin(cases, eq(caseAdjustments.caseId, cases.id))
+            .where(eq(cases.userId, userId))
+            .orderBy(desc(caseAdjustments.id))
+            .limit(1);
+
+          if (latestAdjustment.length > 0) {
+            const adj = latestAdjustment[0].case_adjustments;
+
+            await db.insert(caseOutcomes).values({
+              caseId: adj.caseId,
+              adjustmentId: adj.id,
+              result: "Improved",
+              userFeedback: userText,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("Outcome detection failed:", err);
       }
 
       /* ================= SAVE USER MESSAGE ================= */
@@ -443,79 +540,87 @@ export async function registerRoutes(
         .where(eq(messages.conversationId, convoId))
         .orderBy(asc(messages.createdAt));
 
-      const chatMessages: ChatCompletionMessageParam[] = [
-        { role: "system", content: SYSTEM_PROMPT },
+      const memoryBlock =
+        memory && Object.keys(memory).length
+          ? `User Memory:\n${JSON.stringify(memory, null, 2)}`
+          : "";
 
-        ...previous.map((m) => ({
+      const chatMessages: ChatCompletionMessageParam[] = [
+        {
+          role: "system",
+          content: SYSTEM_PROMPT + (memoryBlock ? `\n\n${memoryBlock}` : ""),
+        },
+        ...previous.slice(-12).map((m) => ({
           role: m.role as "user" | "assistant",
           content: String(m.content ?? ""),
         })),
       ];
 
-      /* ================= MEMORY ================= */
+      /* ================= STREAM SETUP ================= */
 
-      try {
-        const memory = await getMemory(userId);
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
 
-        const extracted = await extractMemory(
-          userText,
-          MEMORY_EXTRACTION_PROMPT,
-        );
+      const stream = await openai.chat.completions.create({
+        model: "gpt-4o",
+        temperature: 0.15,
+        max_tokens: 900,
+        messages: chatMessages,
+        stream: true,
+      });
 
-        if (extracted) {
-          await updateMemory(userId, extracted);
-        }
-      } catch (err) {
-        console.warn("Memory update failed", err);
-      }
+      let assistantText = "";
+      let sentenceBuffer = "";
+      let lastDelta = "";
 
-      /* ================= STREAM ================= */
+      /* ================= STREAM METADATA ================= */
 
-      try {
-
-        res.setHeader("Content-Type", "text/event-stream");
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
-
-        const stream = await openai.chat.completions.create({
-          model: "gpt-4o",
-          temperature: 0.15,
-          max_tokens: 900,
-          messages: chatMessages,
-          stream: true,
-        });
-
-        let assistantText = "";
-
-        for await (const chunk of stream) {
-
-          const delta = chunk.choices?.[0]?.delta?.content;
-
-          if (!delta) continue;
-
-          assistantText += delta;
-
-          res.write(
-            `data: ${JSON.stringify({ content: delta })}\n\n`
-          );
-
-        }
-
-        res.write(`data: [DONE]\n\n`);
-        res.end();
-
-      } catch (err) {
-
-        console.error("STREAM ERROR:", err);
-
+      if (caseId || convoId) {
         res.write(
           `data: ${JSON.stringify({
-            error: "Server error occurred"
-          })}\n\n`
+            meta: {
+              caseId,
+              conversationId: convoId,
+            },
+          })}\n\n`,
         );
+      }
 
-        res.end();
+      /* ================= STREAM RESPONSE ================= */
 
+      for await (const chunk of stream) {
+        const delta = chunk.choices?.[0]?.delta?.content;
+
+        if (!delta) continue;
+        if (delta === lastDelta) continue;
+
+        lastDelta = delta;
+
+        assistantText += delta;
+        sentenceBuffer += delta;
+
+        const sentenceMatch = sentenceBuffer.match(/(.+?[.!?])(\s|$)/);
+
+        if (sentenceMatch) {
+          const sentence = sentenceMatch[1];
+
+          res.write(
+            `data: ${JSON.stringify({
+              content: sentence,
+            })}\n\n`,
+          );
+
+          sentenceBuffer = sentenceBuffer.slice(sentence.length);
+        }
+      }
+
+      if (sentenceBuffer.trim()) {
+        res.write(
+          `data: ${JSON.stringify({
+            content: sentenceBuffer,
+          })}\n\n`,
+        );
       }
 
       /* ================= SAVE ASSISTANT MESSAGE ================= */
@@ -526,20 +631,135 @@ export async function registerRoutes(
         content: assistantText,
       });
 
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      /* ================= SESSION SUMMARY UPDATE ================= */
 
+      let updatedSessionSummary: string | null = null;
+
+      try {
+        updatedSessionSummary = await generateSessionSummary(
+          userText + "\n\n" + assistantText,
+          signalPatterns,
+        );
+      } catch (err) {
+        console.warn("Session summary generation failed:", err);
+      }
+
+      /* ================= HYPOTHESIS GENERATION ================= */
+
+      let generatedHypothesis: string | null = null;
+
+      try {
+        const hypothesisContext =
+          "User Input:\n" +
+          userText +
+          "\n\nAssistant Response:\n" +
+          assistantText +
+          "\n\nSession Summary:\n" +
+          (updatedSessionSummary ?? "") +
+          "\n\nSignal Patterns:\n" +
+          JSON.stringify(signalPatterns ?? {}, null, 2);
+
+        generatedHypothesis = await generateHypothesis(
+          hypothesisContext,
+          signalPatterns,
+        );
+      } catch (err) {
+        console.warn("Hypothesis generation failed:", err);
+      }
+
+      /* ================= STORE HYPOTHESIS ================= */
+
+      if (generatedHypothesis && caseId) {
+        const [row] = await db
+          .insert(caseHypotheses)
+          .values({
+            caseId,
+            hypothesis: generatedHypothesis,
+            confidence: "medium",
+          })
+          .returning();
+
+        hypothesisId = row.id;
+      }
+
+      /* ================= ADJUSTMENT GENERATION ================= */
+
+      if (caseId && hypothesisId && generatedHypothesis) {
+        const [row] = await db
+          .insert(caseAdjustments)
+          .values({
+            caseId,
+            hypothesisId,
+            adjustmentType: "movement_cue",
+            cue: assistantText.slice(0, 300),
+            mechanicalFocus: "general",
+          })
+          .returning();
+
+        adjustmentId = row.id;
+      }
+
+      /* ================= MEMORY UPDATE ================= */
+
+      try {
+        const extracted = (await extractMemory(
+          userText,
+          MEMORY_EXTRACTION_PROMPT,
+        )) as Partial<InterloopMemory>;
+
+        if (extracted && Object.keys(extracted).length > 0) {
+          await updateMemory(userId, (currentMemory: InterloopMemory) => {
+            const merged = mergeExtracted(currentMemory, extracted);
+            Object.assign(currentMemory, merged);
+          });
+        }
+      } catch (err) {
+        console.warn("Memory update failed:", err);
+      }
+
+      res.write(`data: [DONE]\n\n`);
       res.end();
     } catch (err) {
       console.error("[/api/chat error]", err);
 
-      res.write(
-        `data: ${JSON.stringify({
-          content: "Server error occurred.",
-          done: true,
-        })}\n\n`,
-      );
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: "Server error occurred.",
+        });
+      } else {
+        try {
+          res.end();
+        } catch {}
+      }
+    }
+  });
 
-      res.end();
+  /* ================= OUTCOME CAPTURE ================= */
+
+  app.post("/api/outcome", async (req: Request, res: Response) => {
+    try {
+      const { caseId, adjustmentId, result, userFeedback } = req.body ?? {};
+
+      if (!caseId || !result) {
+        return res.status(400).json({
+          error: "Missing required fields",
+        });
+      }
+
+      await db.insert(caseOutcomes).values({
+        caseId,
+        adjustmentId: adjustmentId ?? null,
+        result,
+        userFeedback: userFeedback ?? null,
+      });
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("Outcome capture failed:", err);
+
+      res.status(500).json({
+        error: "Failed to store outcome",
+      });
     }
   });
 }

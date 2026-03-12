@@ -8,9 +8,9 @@ import {
   type MutableRefObject,
 } from "react";
 import { motion } from "framer-motion";
-import { Mic, Square, Volume2 } from "lucide-react";
+import { Volume2 } from "lucide-react";
 import { type ChatMessage } from "@/pages/home";
-import { sendMessage, transcribeAudio, streamTTS } from "@/lib/api";
+import { sendMessage, streamTTS } from "@/lib/api";
 import type { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
 
 interface ChatViewProps {
@@ -27,6 +27,36 @@ function nextChatId() {
   return String(++msgCounter);
 }
 
+/* =====================================================
+   STREAM MERGE FIX
+===================================================== */
+
+function mergeStream(existing: string, incoming: string) {
+  const maxOverlap = Math.min(existing.length, incoming.length);
+
+  for (let i = maxOverlap; i > 0; i--) {
+    if (existing.endsWith(incoming.slice(0, i))) {
+      return existing + incoming.slice(i);
+    }
+  }
+
+  return existing + incoming;
+}
+
+/* =====================================================
+   FORMAT TEXT
+   Fixes collapsed numbered lists
+===================================================== */
+
+function formatAssistantText(text: string) {
+  if (!text) return text;
+
+  return text
+    .replace(/(\d+)\./g, "\n$1. ") // force new line before numbers
+    .replace(/\n{2,}/g, "\n\n") // prevent runaway newlines
+    .trim();
+}
+
 export function ChatView({
   messages,
   setMessages,
@@ -40,7 +70,6 @@ export function ChatView({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
   const conversationIdRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -75,16 +104,12 @@ export function ChatView({
         conversationIdRef.current,
         trimmed,
 
-        /* conversation id callback */
-
         (id: number) => {
           conversationIdRef.current = id;
         },
 
-        /* streaming token callback */
-
         (chunk: string) => {
-          assistantText += chunk;
+          assistantText = mergeStream(assistantText, chunk);
 
           setMessages((prev) =>
             prev.map((m) =>
@@ -154,9 +179,21 @@ export function ChatView({
                 msg.role === "user" ? "justify-end" : "justify-start"
               }`}
             >
-              <p className="max-w-[85%] whitespace-pre-wrap text-lg font-light text-[#e0e0e0]">
-                {msg.text}
-              </p>
+              <div
+                className="
+                  max-w-[85%]
+                  whitespace-pre-wrap
+                  break-words
+                  text-lg
+                  font-light
+                  text-[#e0e0e0]
+                  leading-relaxed
+                "
+              >
+                {msg.role === "assistant"
+                  ? formatAssistantText(msg.text)
+                  : msg.text}
+              </div>
             </div>
           ))}
 
@@ -177,7 +214,13 @@ export function ChatView({
               }
             }}
             placeholder="Type here"
-            className="flex-1 bg-transparent resize-none outline-none text-[#e0e0e0]"
+            className="
+              flex-1
+              bg-transparent
+              resize-none
+              outline-none
+              text-[#e0e0e0]
+            "
             rows={1}
           />
 

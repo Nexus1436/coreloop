@@ -1,7 +1,7 @@
 /**
  * ======================================================
  * CLIENT API — INTERLOOP
- * Persistent Conversation Version
+ * Persistent Conversation Version — M3.3
  * ======================================================
  */
 
@@ -10,6 +10,7 @@ let activeConversationId: number | null = null;
 /* ======================================================
    SEND MESSAGE (Streaming SSE)
 ====================================================== */
+
 export async function sendMessage(
   conversationId: number | null,
   content: string,
@@ -27,7 +28,7 @@ export async function sendMessage(
   });
 
   if (!res.ok || !res.body) {
-    throw new Error("Failed to send message");
+    throw new Error("Chat stream failed");
   }
 
   const reader = res.body.getReader();
@@ -36,62 +37,58 @@ export async function sendMessage(
   let buffer = "";
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { value, done } = await reader.read();
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
 
-    const events = buffer.split("\n\n");
-    buffer = events.pop() ?? "";
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
 
-    for (const evt of events) {
-      const line = evt.trim();
+    for (const part of parts) {
+      const line = part.trim();
       if (!line.startsWith("data:")) continue;
 
       const payload = line.slice(5).trim();
       if (!payload) continue;
 
+      if (payload === "[DONE]") {
+        reader.cancel();
+        return;
+      }
+
       try {
         const event = JSON.parse(payload);
 
-        /* conversation id */
-
-        if (event.conversationId) {
-          activeConversationId = event.conversationId;
-          onConversationId(event.conversationId);
+        if (event.meta?.conversationId) {
+          activeConversationId = event.meta.conversationId;
+          onConversationId(event.meta.conversationId);
           continue;
         }
-
-        /* streaming assistant text */
 
         if (event.content) {
           onChunk(event.content);
-          continue;
-        }
-
-        /* stream finished */
-
-        if (event.done) {
-          reader.cancel();
-          return;
         }
       } catch {
-        // ignore malformed partial chunks
+        // ignore malformed chunk
       }
     }
   }
 }
 
 /* ======================================================
-   TRANSCRIBE AUDIO (OpenAI Whisper)
+   TRANSCRIBE AUDIO (Whisper)
 ====================================================== */
+
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   const base64Audio = await new Promise<string>((resolve) => {
     const reader = new FileReader();
+
     reader.onload = () => {
       const result = reader.result as string;
       resolve(result.split(",")[1]);
     };
+
     reader.readAsDataURL(audioBlob);
   });
 
@@ -107,12 +104,30 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   }
 
   const data = await res.json();
-  return data.transcript ?? "";
+  return data?.transcript ?? "";
 }
 
 /* ======================================================
-   ELEVENLABS TTS
+   SENTENCE SEGMENTER
+   Preserves numbered lists and abbreviations
 ====================================================== */
+
+function segmentText(text: string): string[] {
+  if (!text) return [];
+
+  // Normalize numbered lists
+  const normalized = text.replace(/(\d+)\.\s*/g, "\n$1. ");
+
+  // Split only on clear sentence endings
+  const parts = normalized.split(/(?<=[.!?])\s+/);
+
+  return parts.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/* ======================================================
+   TTS (Sequential — preserves order for ElevenLabs)
+====================================================== */
+
 export async function streamTTS(
   text: string,
   onChunk: (audioChunk: string) => void,
@@ -120,29 +135,31 @@ export async function streamTTS(
 ): Promise<void> {
   if (!text || !text.trim()) return;
 
-  const res = await fetch("/api/tts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({
-      text,
-      voice: options?.voice ?? "female",
-    }),
-  });
+  const voice = options?.voice ?? "female";
 
-  if (!res.ok) {
-    throw new Error("TTS failed");
+  const sentences = segmentText(text);
+
+  for (const sentence of sentences) {
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          text: sentence,
+          voice,
+        }),
+      });
+
+      if (!res.ok) continue;
+
+      const data = await res.json();
+
+      if (data?.audio) {
+        onChunk(data.audio);
+      }
+    } catch {
+      console.error("TTS request failed");
+    }
   }
-
-  const arrayBuffer = await res.arrayBuffer();
-  const uint8Array = new Uint8Array(arrayBuffer);
-
-  let binary = "";
-  for (let i = 0; i < uint8Array.length; i++) {
-    binary += String.fromCharCode(uint8Array[i]);
-  }
-
-  const base64Audio = btoa(binary);
-
-  onChunk(base64Audio);
 }

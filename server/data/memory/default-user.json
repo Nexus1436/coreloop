@@ -1,0 +1,54 @@
+{
+  "identity": {
+    "name": "Tim",
+    "dominantHand": null,
+    "age": null,
+    "height": null,
+    "weight": null
+  },
+  "anthropometry": {
+    "limbLengthBias": null,
+    "notes": []
+  },
+  "body": {
+    "injuries": [],
+    "chronicTensionZones": [],
+    "instabilityZones": []
+  },
+  "sportContext": {
+    "primarySport": "racquetball",
+    "secondarySports": [],
+    "yearsExperience": null,
+    "competitionLevel": null
+  },
+  "movementPatterns": {
+    "confirmed": [],
+    "suspected": [],
+    "recurringThemes": []
+  },
+  "signalHistory": {
+    "recurringPainSignals": [],
+    "recurringConfusionSignals": [],
+    "fearTriggers": []
+  },
+  "experiments": {
+    "successful": [],
+    "failed": [],
+    "neutral": []
+  },
+  "performanceTrends": {
+    "improvements": [],
+    "regressions": [],
+    "consistencyNotes": []
+  },
+  "cognitivePatterns": {
+    "overanalysis": false,
+    "rushTendency": false,
+    "hesitationPattern": false,
+    "notes": []
+  },
+  "sessionMeta": {
+    "totalSessions": 0,
+    "lastSession": null
+  }
+}

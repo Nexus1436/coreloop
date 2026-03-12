@@ -52,7 +52,7 @@ export const messages = pgTable(
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
 
-    role: text("role").notNull(), // "user" | "assistant"
+    role: text("role").notNull(),
 
     content: text("content").notNull(),
 
@@ -70,9 +70,7 @@ export const messages = pgTable(
 );
 
 /* =====================================================
-   TRANSCRIPTS  ✅  (LANE 2 — DEBUG / AUDIT ONLY)
-   This does NOT affect model memory or chat flow.
-   This stores raw STT captures for developer inspection.
+   TRANSCRIPTS (STT DEBUG STORAGE)
 ===================================================== */
 
 export const transcripts = pgTable(
@@ -130,6 +128,205 @@ export const userMemory = pgTable(
 );
 
 /* =====================================================
+   SESSION SIGNALS
+===================================================== */
+
+export const sessionSignals = pgTable(
+  "session_signals",
+  {
+    id: serial("id").primaryKey(),
+
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
+    conversationId: integer("conversation_id").references(
+      () => conversations.id,
+      { onDelete: "cascade" },
+    ),
+
+    signalType: text("signal_type").notNull(),
+
+    signal: text("signal").notNull(),
+
+    confidence: integer("confidence"),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    signalUserIdx: index("session_signals_user_idx").on(table.userId),
+  }),
+);
+
+/* =====================================================
+   CASE DATASET (INTERLOOP MOVEMENT ENGINE)
+===================================================== */
+
+export const cases = pgTable(
+  "cases",
+  {
+    id: serial("id").primaryKey(),
+
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
+    conversationId: integer("conversation_id").references(
+      () => conversations.id,
+      { onDelete: "cascade" },
+    ),
+
+    movementContext: text("movement_context"),
+
+    activityType: text("activity_type"),
+
+    status: text("status").default("open").notNull(),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+
+    updatedAt: timestamp("updated_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    caseUserIdx: index("cases_user_idx").on(table.userId),
+  }),
+);
+
+/* =====================================================
+   CASE SIGNALS
+===================================================== */
+
+export const caseSignals = pgTable(
+  "case_signals",
+  {
+    id: serial("id").primaryKey(),
+
+    caseId: integer("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
+    bodyRegion: text("body_region"),
+
+    signalType: text("signal_type"),
+
+    movementContext: text("movement_context"),
+
+    activityType: text("activity_type"),
+
+    description: text("description"),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    caseSignalIdx: index("case_signals_case_idx").on(table.caseId),
+  }),
+);
+
+/* =====================================================
+   CASE HYPOTHESES
+===================================================== */
+
+export const caseHypotheses = pgTable(
+  "case_hypotheses",
+  {
+    id: serial("id").primaryKey(),
+
+    caseId: integer("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+
+    signalId: integer("signal_id").references(() => caseSignals.id, {
+      onDelete: "set null",
+    }),
+
+    hypothesis: text("hypothesis").notNull(),
+
+    confidence: text("confidence"),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    caseHypothesisIdx: index("case_hypotheses_case_idx").on(table.caseId),
+  }),
+);
+
+/* =====================================================
+   CASE ADJUSTMENTS
+===================================================== */
+
+export const caseAdjustments = pgTable(
+  "case_adjustments",
+  {
+    id: serial("id").primaryKey(),
+
+    caseId: integer("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+
+    hypothesisId: integer("hypothesis_id").references(() => caseHypotheses.id, {
+      onDelete: "set null",
+    }),
+
+    adjustmentType: text("adjustment_type"),
+
+    cue: text("cue"),
+
+    mechanicalFocus: text("mechanical_focus"),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    caseAdjustmentIdx: index("case_adjustments_case_idx").on(table.caseId),
+  }),
+);
+
+/* =====================================================
+   CASE OUTCOMES
+===================================================== */
+
+export const caseOutcomes = pgTable(
+  "case_outcomes",
+  {
+    id: serial("id").primaryKey(),
+
+    caseId: integer("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+
+    adjustmentId: integer("adjustment_id").references(
+      () => caseAdjustments.id,
+      { onDelete: "set null" },
+    ),
+
+    result: text("result"),
+
+    userFeedback: text("user_feedback"),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    caseOutcomeIdx: index("case_outcomes_case_idx").on(table.caseId),
+  }),
+);
+
+/* =====================================================
    INSERT SCHEMAS
 ===================================================== */
 
@@ -168,6 +365,8 @@ export type InsertTranscript = z.infer<typeof insertTranscriptSchema>;
 
 export type UserMemory = typeof userMemory.$inferSelect;
 export type InsertUserMemory = z.infer<typeof insertUserMemorySchema>;
+
+export type SessionSignal = typeof sessionSignals.$inferSelect;
 
 /* =====================================================
    AUTH EXPORT

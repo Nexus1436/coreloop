@@ -2,6 +2,7 @@
  * React hook for handling SSE voice streaming responses.
  * Converts audio blob to base64 and sends as JSON to match server expectations.
  */
+
 import { useCallback } from "react";
 import { useAudioPlayback } from "./useAudioPlayback";
 
@@ -17,75 +18,93 @@ export function useVoiceStream(callbacks: StreamCallbacks = {}) {
 
   const streamVoiceResponse = useCallback(
     async (url: string, audioBlob: Blob) => {
-      await playback.init();
-      playback.clear();
+      try {
+        // Ensure playback system ready
+        await playback.init();
+        playback.stop();
+        playback.clear();
 
-      // Convert blob to base64 for JSON body (server expects express.json())
-      const base64Audio = await new Promise<string>((resolve) => {
-        const fileReader = new FileReader();
-        fileReader.onload = () => {
-          const result = fileReader.result as string;
-          resolve(result.split(",")[1]); // Remove data URL prefix
-        };
-        fileReader.readAsDataURL(audioBlob);
-      });
+        // Convert blob → base64
+        const base64Audio = await new Promise<string>((resolve) => {
+          const fileReader = new FileReader();
 
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audio: base64Audio }),
-      });
-      if (!response.ok) throw new Error("Voice request failed");
+          fileReader.onload = () => {
+            const result = fileReader.result as string;
+            resolve(result.split(",")[1]);
+          };
 
-      const streamReader = response.body?.getReader();
-      if (!streamReader) throw new Error("No response body");
+          fileReader.readAsDataURL(audioBlob);
+        });
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let fullTranscript = "";
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audio: base64Audio }),
+        });
 
-      while (true) {
-        const { done, value } = await streamReader.read();
-        if (done) break;
+        if (!response.ok) throw new Error("Voice request failed");
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("No response body");
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
+        const decoder = new TextDecoder();
 
-          try {
-            const event = JSON.parse(line.slice(6));
+        let buffer = "";
+        let fullTranscript = "";
 
-            switch (event.type) {
-              case "user_transcript":
-                callbacks.onUserTranscript?.(event.data);
-                break;
-              case "transcript":
-                fullTranscript += event.data;
-                callbacks.onTranscript?.(event.data, fullTranscript);
-                break;
-              case "audio":
-                playback.pushAudio(event.data);
-                break;
-              case "done":
-                playback.signalComplete();
-                callbacks.onComplete?.(fullTranscript);
-                break;
-              case "error":
-                throw new Error(event.error);
-            }
-          } catch (e) {
-            if (!(e instanceof SyntaxError)) {
-              callbacks.onError?.(e as Error);
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+
+            try {
+              const event = JSON.parse(line.slice(6));
+
+              switch (event.type) {
+                case "user_transcript":
+                  callbacks.onUserTranscript?.(event.data);
+                  break;
+
+                case "transcript":
+                  fullTranscript += event.data;
+                  callbacks.onTranscript?.(event.data, fullTranscript);
+                  break;
+
+                case "audio":
+                  playback.pushAudio(event.data);
+                  break;
+
+                case "done":
+                  playback.signalComplete();
+                  callbacks.onComplete?.(fullTranscript);
+                  break;
+
+                case "error":
+                  throw new Error(event.error);
+              }
+            } catch (e) {
+              if (!(e instanceof SyntaxError)) {
+                callbacks.onError?.(e as Error);
+              }
             }
           }
         }
+      } catch (err) {
+        callbacks.onError?.(err as Error);
       }
     },
-    [playback, callbacks]
+    [playback, callbacks],
   );
 
-  return { streamVoiceResponse, playbackState: playback.state };
+  return {
+    streamVoiceResponse,
+    playbackState: playback.state,
+  };
 }

@@ -8,7 +8,7 @@ import { createServer } from "http";
 
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
-import setupVite from "./vite";   // ✅ FIX
+import setupVite from "./vite"; // ✅ FIX
 
 // 🔐 Replit Auth
 import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
@@ -111,24 +111,39 @@ function errorHandler(
 
 async function boot() {
   try {
-    // AUTH
+    /* =====================================================
+       AUTH
+    ===================================================== */
+
     await setupAuth(app);
     registerAuthRoutes(app);
 
-    // ROUTES
+    /* =====================================================
+       API ROUTES
+    ===================================================== */
+
     await registerRoutes(httpServer, app);
 
-    // ERROR HANDLER
+    /* =====================================================
+       ERROR HANDLER
+    ===================================================== */
+
     app.use(errorHandler);
 
-    // DEV / PROD
+    /* =====================================================
+       DEV / PROD
+    ===================================================== */
+
     if (process.env.NODE_ENV === "production") {
       serveStatic(app);
     } else {
-      await setupVite(httpServer, app); // ✅ FIXED CALL
+      await setupVite(httpServer, app);
     }
 
-    // PORT
+    /* =====================================================
+       PORT
+    ===================================================== */
+
     const port = 5000;
 
     console.log("ENV PORT:", process.env.PORT);
@@ -144,7 +159,10 @@ async function boot() {
       process.exit(1);
     });
 
-    // CLEAN SHUTDOWN
+    /* =====================================================
+       CLEAN SHUTDOWN
+    ===================================================== */
+
     const shutdown = (signal: string) => {
       log(`${signal} received — shutting down`);
 
@@ -165,3 +183,21 @@ async function boot() {
 }
 
 boot();
+
+/* =====================================================
+   CLEAN SHUTDOWN
+===================================================== */
+
+const shutdown = (signal: string) => {
+  log(`${signal} received — shutting down`);
+
+  httpServer.close(() => {
+    log("server closed");
+    process.exit(0);
+  });
+
+  setTimeout(() => process.exit(1), 5000);
+};
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

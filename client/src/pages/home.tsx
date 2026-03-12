@@ -17,6 +17,23 @@ function nextId() {
 }
 
 /* =====================================================
+   STREAM MERGE FIX
+   Prevents duplicated SSE token overlaps
+===================================================== */
+
+function mergeStream(existing: string, incoming: string) {
+  const maxOverlap = Math.min(existing.length, incoming.length);
+
+  for (let i = maxOverlap; i > 0; i--) {
+    if (existing.endsWith(incoming.slice(0, i))) {
+      return existing + incoming.slice(i);
+    }
+  }
+
+  return existing + incoming;
+}
+
+/* =====================================================
    STREAM CHAT
 ===================================================== */
 
@@ -60,8 +77,11 @@ async function sendChat(
       try {
         const obj = JSON.parse(line.slice(5));
 
-        if (obj?.conversationId) {
-          onConversationId(Number(obj.conversationId));
+        if (obj?.meta?.conversationId) {
+          const id = Number(obj.meta.conversationId);
+          if (Number.isFinite(id)) {
+            onConversationId(id);
+          }
         }
 
         if (obj?.content) {
@@ -72,9 +92,7 @@ async function sendChat(
           reader.cancel();
           return;
         }
-      } catch {
-        // ignore malformed chunk
-      }
+      } catch {}
     }
   }
 }
@@ -85,15 +103,21 @@ async function sendChat(
 
 export default function Home() {
   const [mode, setMode] = useState<"A" | "B">("A");
+
   const [conversationId, setConversationId] = useState<number | null>(null);
   const conversationIdRef = useRef<number | null>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [voiceGender, setVoiceGender] = useState<"male" | "female">("male");
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  const [voiceGender, setVoiceGender] = useState<"male" | "female">("female");
 
   const playback = useAudioPlayback();
+  const stopRequestedRef = useRef(false);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -115,12 +139,6 @@ export default function Home() {
 
         if (!resp.ok) return;
 
-        const contentType = resp.headers.get("content-type");
-        if (!contentType || !contentType.includes("application/json")) {
-          console.warn("Expected JSON but received:", contentType);
-          return;
-        }
-
         const data = await resp.json();
         const convs = data?.conversations;
 
@@ -134,12 +152,6 @@ export default function Home() {
         });
 
         if (!msgResp.ok) return;
-
-        const msgContentType = msgResp.headers.get("content-type");
-        if (!msgContentType || !msgContentType.includes("application/json")) {
-          console.warn("Expected JSON but received:", msgContentType);
-          return;
-        }
 
         const msgData = await msgResp.json();
         const rows = msgData?.messages;
@@ -165,18 +177,35 @@ export default function Home() {
   }, []);
 
   /* =====================================================
+     SPEAKING STATE SYNC
+  ===================================================== */
+
+  useEffect(() => {
+    if (playback.state === "ended" || playback.state === "idle") {
+      setIsSpeaking(false);
+    }
+  }, [playback.state]);
+
+  /* =====================================================
      RECORDING
   ===================================================== */
 
   const startRecording = async () => {
+    stopRequestedRef.current = true;
+    playback.stop();
+    setIsSpeaking(false);
+
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
     const recorder = new MediaRecorder(stream);
 
     mediaRecorderRef.current = recorder;
     chunksRef.current = [];
 
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
+      if (e.data.size > 0) {
+        chunksRef.current.push(e.data);
+      }
     };
 
     recorder.start();
@@ -185,6 +214,7 @@ export default function Home() {
 
   const stopRecording = async (): Promise<Blob> => {
     const recorder = mediaRecorderRef.current;
+
     if (!recorder) return new Blob();
 
     await new Promise<void>((resolve) => {
@@ -193,6 +223,7 @@ export default function Home() {
     });
 
     recorder.stream.getTracks().forEach((t) => t.stop());
+
     setIsRecording(false);
 
     return new Blob(chunksRef.current, { type: "audio/webm" });
@@ -203,6 +234,14 @@ export default function Home() {
   ===================================================== */
 
   const handleTap = async () => {
+    if (isSpeaking) {
+      stopRequestedRef.current = true;
+      playback.stop();
+      setIsSpeaking(false);
+      setIsProcessing(false);
+      return;
+    }
+
     if (isProcessing) return;
 
     if (!isRecording) {
@@ -244,7 +283,7 @@ export default function Home() {
           setConversationId(id);
         },
         (chunk) => {
-          assistantText += chunk;
+          assistantText = mergeStream(assistantText, chunk);
 
           setMessages((prev) =>
             prev.map((m) =>
@@ -260,15 +299,27 @@ export default function Home() {
       }
 
       await playback.init();
-      playback.stop();
 
-      await streamTTS(
-        assistantText,
-        (audioChunk: string) => playback.pushAudio(audioChunk),
-        { voice: voiceGender },
-      );
+      stopRequestedRef.current = false;
+      setIsSpeaking(true);
 
-      playback.signalComplete();
+      try {
+        await streamTTS(
+          assistantText,
+          (audioChunk: string) => {
+            if (!stopRequestedRef.current) {
+              playback.pushAudio(audioChunk);
+            }
+          },
+          { voice: voiceGender },
+        );
+
+        if (!stopRequestedRef.current) {
+          playback.signalComplete();
+        }
+      } catch (err) {
+        console.error("TTS error:", err);
+      }
     } catch (err) {
       console.error("Flow failed:", err);
     } finally {
@@ -283,20 +334,33 @@ export default function Home() {
   const handleRepeat = useCallback(
     async (e: React.MouseEvent) => {
       e.stopPropagation();
+
       if (!lastResponse) return;
 
       await playback.init();
-      playback.stop();
 
-      await streamTTS(
-        lastResponse,
-        (audioChunk: string) => playback.pushAudio(audioChunk),
-        { voice: voiceGender },
-      );
+      stopRequestedRef.current = false;
+      setIsSpeaking(true);
 
-      playback.signalComplete();
+      try {
+        await streamTTS(
+          lastResponse,
+          (audioChunk: string) => {
+            if (!stopRequestedRef.current) {
+              playback.pushAudio(audioChunk);
+            }
+          },
+          { voice: voiceGender },
+        );
+
+        if (!stopRequestedRef.current) {
+          playback.signalComplete();
+        }
+      } catch (err) {
+        console.error("Repeat TTS error:", err);
+      }
     },
-    [lastResponse, voiceGender],
+    [lastResponse, voiceGender, playback],
   );
 
   /* =====================================================
@@ -324,16 +388,29 @@ export default function Home() {
     <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center relative">
       <div className="relative mb-12">
         <CentralForm isActive={isRecording} isDimmed={false} />
+
         <button
-          onClick={handleTap}
+          onClick={() => {
+            if (isSpeaking) {
+              stopRequestedRef.current = true;
+              playback.stop();
+              setIsSpeaking(false);
+              setIsProcessing(false);
+              return;
+            }
+
+            handleTap();
+          }}
           className="absolute inset-0 flex items-center justify-center"
         >
           <span className="text-sm text-gray-400">
-            {isRecording
-              ? "Listening..."
-              : isProcessing
-                ? "Reflecting..."
-                : "Press here"}
+            {isSpeaking
+              ? "Stop"
+              : isRecording
+                ? "Listening..."
+                : isProcessing
+                  ? "Reflecting..."
+                  : "Press here"}
           </span>
         </button>
       </div>
