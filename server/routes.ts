@@ -5,7 +5,7 @@ import OpenAI from "openai";
 import { ElevenLabsClient } from "elevenlabs";
 import { toFile } from "openai/uploads";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { eq, asc, desc } from "drizzle-orm";
+import { eq, asc, desc, and } from "drizzle-orm";
 
 import { db } from "./db";
 
@@ -48,6 +48,7 @@ const openai = new OpenAI({
 const elevenlabs = new ElevenLabsClient({
   apiKey: process.env.ELEVENLABS_API_KEY!,
 });
+
 /* =====================================================
    SYSTEM PROMPT
 ===================================================== */
@@ -241,12 +242,6 @@ Outcome
 `;
 
 /* =====================================================
-   MEMORY EXTRACTION PROMPT
-===================================================== */
-
-const MEMORY_EXTRACTION_PROMPT = `...UNCHANGED...`;
-
-/* =====================================================
    HELPERS
 ===================================================== */
 
@@ -298,10 +293,6 @@ export async function registerRoutes(
 
   /* ================= TTS ================= */
 
-  /*
-     Global synthesis queue
-     Ensures ElevenLabs requests finish in order
-  */
   let ttsQueue: Promise<any> = Promise.resolve();
 
   app.post("/api/tts", async (req: Request, res: Response) => {
@@ -328,23 +319,90 @@ export async function registerRoutes(
         }
 
         const audioBuffer = Buffer.concat(chunks);
-
         return audioBuffer.toString("base64");
       };
 
-      // Add job to queue
       ttsQueue = ttsQueue.then(job);
-
       const audioBase64 = await ttsQueue;
 
-      res.json({
-        audio: audioBase64,
-      });
+      res.json({ audio: audioBase64 });
     } catch (err) {
       console.error("ElevenLabs TTS error:", err);
       res.status(500).json({ error: "TTS failed" });
     }
   });
+
+  /* ================= CONVERSATIONS LIST ================= */
+
+  app.get("/api/conversations", async (req: Request, res: Response) => {
+    try {
+      const authUser = req.user as any;
+      const userId = authUser?.claims?.sub;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const convs = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.userId, userId))
+        .orderBy(desc(conversations.id))
+        .limit(20);
+
+      res.json({ conversations: convs });
+    } catch (err) {
+      console.error("Failed to load conversations:", err);
+      res.status(500).json({ error: "Failed to load conversations" });
+    }
+  });
+
+  /* ================= CONVERSATION HISTORY ================= */
+
+  app.get(
+    "/api/conversations/:id/messages",
+    async (req: Request, res: Response) => {
+      try {
+        const authUser = req.user as any;
+        const userId = authUser?.claims?.sub;
+
+        if (!userId) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const convoId = Number(req.params.id);
+        if (!Number.isFinite(convoId) || convoId <= 0) {
+          return res.status(400).json({ error: "Invalid conversation ID" });
+        }
+
+        const convo = await db
+          .select()
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.id, convoId),
+              eq(conversations.userId, userId),
+            ),
+          )
+          .limit(1);
+
+        if (convo.length === 0) {
+          return res.status(404).json({ error: "Conversation not found" });
+        }
+
+        const history = await db
+          .select()
+          .from(messages)
+          .where(eq(messages.conversationId, convoId))
+          .orderBy(asc(messages.createdAt));
+
+        res.json({ messages: history });
+      } catch (err) {
+        console.error("Failed to load conversation history:", err);
+        res.status(500).json({ error: "Failed to load history" });
+      }
+    },
+  );
 
   /* ================= CHAT ================= */
 
@@ -357,8 +415,6 @@ export async function registerRoutes(
         res.status(401).json({ error: "Unauthorized" });
         return;
       }
-
-      /* ================= ENSURE USER EXISTS ================= */
 
       await db
         .insert(users)
@@ -386,8 +442,6 @@ export async function registerRoutes(
       let convoId = Number(conversationId);
       if (!Number.isFinite(convoId) || convoId <= 0) convoId = NaN;
 
-      /* ================= CREATE CONVERSATION ================= */
-
       if (!Number.isFinite(convoId)) {
         const [row] = await db
           .insert(conversations)
@@ -399,36 +453,6 @@ export async function registerRoutes(
 
         convoId = row.id;
       }
-
-      /* ================= CREATE CONVERSATION ================= */
-
-      if (!Number.isFinite(convoId)) {
-        const [row] = await db
-          .insert(conversations)
-          .values({
-            userId,
-            title: clampText(userText, 60),
-          })
-          .returning();
-
-        convoId = row.id;
-      }
-
-      /* ================= CREATE CONVERSATION ================= */
-
-      if (!Number.isFinite(convoId)) {
-        const [row] = await db
-          .insert(conversations)
-          .values({
-            userId,
-            title: clampText(userText, 60),
-          })
-          .returning();
-
-        convoId = row.id;
-      }
-
-      /* ================= LOAD MEMORY ================= */
 
       let memory: InterloopMemory | null = null;
 
@@ -439,8 +463,6 @@ export async function registerRoutes(
       }
 
       const signalPatterns = await getSignalPatterns(userId);
-
-      /* ================= CASE DATASET PIPELINE ================= */
 
       let caseId: number | null = null;
       let hypothesisId: number | null = null;
@@ -464,8 +486,6 @@ export async function registerRoutes(
 
           caseId = caseRow.id;
 
-          /* Store signals */
-
           for (const s of signals) {
             await db.insert(caseSignals).values({
               caseId,
@@ -477,8 +497,6 @@ export async function registerRoutes(
               description: s.signal,
             });
           }
-
-          /* Store signals in session layer */
 
           for (const s of signals) {
             await db.insert(sessionSignals).values({
@@ -493,8 +511,6 @@ export async function registerRoutes(
       } catch (err) {
         console.warn("Case dataset pipeline failed:", err);
       }
-
-      /* ================= OUTCOME DETECTION ================= */
 
       try {
         const improvementPattern =
@@ -524,15 +540,11 @@ export async function registerRoutes(
         console.warn("Outcome detection failed:", err);
       }
 
-      /* ================= SAVE USER MESSAGE ================= */
-
       await db.insert(messages).values({
         conversationId: convoId,
         role: "user",
         content: userText,
       });
-
-      /* ================= LOAD HISTORY ================= */
 
       const previous = await db
         .select()
@@ -556,8 +568,6 @@ export async function registerRoutes(
         })),
       ];
 
-      /* ================= STREAM SETUP ================= */
-
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
@@ -574,20 +584,14 @@ export async function registerRoutes(
       let sentenceBuffer = "";
       let lastDelta = "";
 
-      /* ================= STREAM METADATA ================= */
-
-      if (caseId || convoId) {
-        res.write(
-          `data: ${JSON.stringify({
-            meta: {
-              caseId,
-              conversationId: convoId,
-            },
-          })}\n\n`,
-        );
-      }
-
-      /* ================= STREAM RESPONSE ================= */
+      res.write(
+        `data: ${JSON.stringify({
+          meta: {
+            caseId,
+            conversationId: convoId,
+          },
+        })}\n\n`,
+      );
 
       for await (const chunk of stream) {
         const delta = chunk.choices?.[0]?.delta?.content;
@@ -623,15 +627,11 @@ export async function registerRoutes(
         );
       }
 
-      /* ================= SAVE ASSISTANT MESSAGE ================= */
-
       await db.insert(messages).values({
         conversationId: convoId,
         role: "assistant",
         content: assistantText,
       });
-
-      /* ================= SESSION SUMMARY UPDATE ================= */
 
       let updatedSessionSummary: string | null = null;
 
@@ -643,8 +643,6 @@ export async function registerRoutes(
       } catch (err) {
         console.warn("Session summary generation failed:", err);
       }
-
-      /* ================= HYPOTHESIS GENERATION ================= */
 
       let generatedHypothesis: string | null = null;
 
@@ -667,8 +665,6 @@ export async function registerRoutes(
         console.warn("Hypothesis generation failed:", err);
       }
 
-      /* ================= STORE HYPOTHESIS ================= */
-
       if (generatedHypothesis && caseId) {
         const [row] = await db
           .insert(caseHypotheses)
@@ -681,8 +677,6 @@ export async function registerRoutes(
 
         hypothesisId = row.id;
       }
-
-      /* ================= ADJUSTMENT GENERATION ================= */
 
       if (caseId && hypothesisId && generatedHypothesis) {
         const [row] = await db
@@ -699,12 +693,9 @@ export async function registerRoutes(
         adjustmentId = row.id;
       }
 
-      /* ================= MEMORY UPDATE ================= */
-
       try {
         const extracted = (await extractMemory(
           userText,
-          MEMORY_EXTRACTION_PROMPT,
         )) as Partial<InterloopMemory>;
 
         if (extracted && Object.keys(extracted).length > 0) {

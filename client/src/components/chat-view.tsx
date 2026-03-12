@@ -52,9 +52,31 @@ function formatAssistantText(text: string) {
   if (!text) return text;
 
   return text
-    .replace(/(\d+)\./g, "\n$1. ") // force new line before numbers
-    .replace(/\n{2,}/g, "\n\n") // prevent runaway newlines
+    .replace(/(\d+)\./g, "\n$1. ")
+    .replace(/\n{2,}/g, "\n\n")
     .trim();
+}
+
+/* =====================================================
+   STORAGE HELPERS
+===================================================== */
+
+const STORAGE_KEY = "interloop_conversation_id";
+
+function getStoredConversationId(): number | null {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    const parsed = stored ? Number(stored) : null;
+    return parsed && Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function setStoredConversationId(id: number) {
+  try {
+    localStorage.setItem(STORAGE_KEY, String(id));
+  } catch {}
 }
 
 export function ChatView({
@@ -67,10 +89,52 @@ export function ChatView({
 }: ChatViewProps) {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const conversationIdRef = useRef<number | null>(null);
+  const conversationIdRef = useRef<number | null>(getStoredConversationId());
+
+  /* ================= LOAD HISTORY ON MOUNT ================= */
+
+  useEffect(() => {
+    const storedId = conversationIdRef.current;
+    if (!storedId) return;
+
+    setIsLoadingHistory(true);
+
+    fetch(`/api/conversations/${storedId}/messages`, {
+      credentials: "include",
+    })
+      .then((res) => {
+        if (!res.ok) {
+          // Conversation no longer exists — clear the stored ID
+          localStorage.removeItem(STORAGE_KEY);
+          conversationIdRef.current = null;
+          return null;
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (!data || !Array.isArray(data.messages)) return;
+
+        const loaded: ChatMessage[] = data.messages.map((m: any) => ({
+          id: nextChatId(),
+          role: m.role as "user" | "assistant",
+          text: String(m.content ?? ""),
+        }));
+
+        if (loaded.length > 0) {
+          setMessages(loaded);
+        }
+      })
+      .catch(() => {
+        // Silently fail — user just starts fresh
+      })
+      .finally(() => {
+        setIsLoadingHistory(false);
+      });
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -106,6 +170,7 @@ export function ChatView({
 
         (id: number) => {
           conversationIdRef.current = id;
+          setStoredConversationId(id);
         },
 
         (chunk: string) => {
@@ -172,6 +237,12 @@ export function ChatView({
     >
       <div className="flex-1 overflow-y-auto px-6">
         <div className="max-w-xl mx-auto space-y-5">
+          {isLoadingHistory && (
+            <div className="text-center text-[#444] text-sm pt-8">
+              Loading conversation...
+            </div>
+          )}
+
           {messages.map((msg) => (
             <div
               key={msg.id}
