@@ -310,7 +310,7 @@ export async function registerRoutes(
       }
 
       const voiceId =
-        voice === "male" ? "GwiNi5XZx3ydWAkkDpoQ" : "RjWJXbF7h9KPSuGnLo5x";
+        voice === "male" ? "3WZjQ5NUrKH37Zw6Vgp7" : "RjWJXbF7h9KPSuGnLo5x";
 
       const job = async () => {
         const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
