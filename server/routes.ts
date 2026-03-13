@@ -612,6 +612,19 @@ export async function registerRoutes(
         console.warn("Recent session context load failed:", err);
       }
 
+      // DEBUG — remove after confirming memory injection works
+      console.log(
+        "[MEMORY DEBUG] userId:",
+        userId,
+        "| convoId:",
+        convoId,
+        "| storedSessionHistory length:",
+        storedSessionHistory.length,
+        "| preview:",
+        storedSessionHistory.slice(0, 400) ||
+          "(empty — no past sessions found)",
+      );
+
       const memoryBlock =
         memory && Object.keys(memory).length
           ? `\n\n=== USER MEMORY ===\n${JSON.stringify(memory, null, 2)}`
