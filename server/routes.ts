@@ -559,7 +559,8 @@ export async function registerRoutes(
         .where(eq(messages.conversationId, convoId))
         .orderBy(asc(messages.createdAt));
 
-      // Load recent messages from previous conversations for cross-session context
+      // Load recent conversations for cross-session context
+      // Uses summary if available, otherwise falls back to full message history
       let storedSessionHistory = "";
       try {
         const recentConvos = await db
@@ -572,32 +573,38 @@ export async function registerRoutes(
             ),
           )
           .orderBy(desc(conversations.id))
-          .limit(5);
+          .limit(6);
 
         if (recentConvos.length > 0) {
           const sessionBlocks: string[] = [];
 
           for (const convo of recentConvos) {
-            const msgs = await db
-              .select()
-              .from(messages)
-              .where(eq(messages.conversationId, convo.id))
-              .orderBy(desc(messages.createdAt))
-              .limit(8);
+            if (convo.summary) {
+              // Use the stored summary for this conversation
+              sessionBlocks.push(
+                `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\nSummary: ${convo.summary}`,
+              );
+            } else {
+              // No summary yet — fall back to full message history
+              const msgs = await db
+                .select()
+                .from(messages)
+                .where(eq(messages.conversationId, convo.id))
+                .orderBy(asc(messages.createdAt));
 
-            if (msgs.length === 0) continue;
+              if (msgs.length === 0) continue;
 
-            const chronological = msgs.reverse();
-            const lines = chronological
-              .map(
-                (m) =>
-                  `  ${m.role === "user" ? "User" : "Interloop"}: ${String(m.content ?? "").slice(0, 300)}`,
-              )
-              .join("\n");
+              const lines = msgs
+                .map(
+                  (m) =>
+                    `  ${m.role === "user" ? "User" : "Interloop"}: ${String(m.content ?? "")}`,
+                )
+                .join("\n");
 
-            sessionBlocks.push(
-              `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\n${lines}`,
-            );
+              sessionBlocks.push(
+                `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\n${lines}`,
+              );
+            }
           }
 
           if (sessionBlocks.length > 0) {
