@@ -5,7 +5,7 @@ import OpenAI from "openai";
 import { ElevenLabsClient } from "elevenlabs";
 import { toFile } from "openai/uploads";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { eq, asc, desc, and } from "drizzle-orm";
+import { eq, asc, desc, and, ne } from "drizzle-orm";
 
 import { db } from "./db";
 
@@ -546,11 +546,64 @@ export async function registerRoutes(
         content: userText,
       });
 
+      // Load current conversation messages
       const previous = await db
         .select()
         .from(messages)
         .where(eq(messages.conversationId, convoId))
         .orderBy(asc(messages.createdAt));
+
+      // Load recent messages from previous conversations for cross-session context
+      let recentSessionContext = "";
+      try {
+        const recentConvos = await db
+          .select()
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.userId, userId),
+              ne(conversations.id, convoId),
+            ),
+          )
+          .orderBy(desc(conversations.id))
+          .limit(5);
+
+        if (recentConvos.length > 0) {
+          const recentConvoIds = recentConvos.map((c) => c.id);
+          const recentMessages: {
+            role: string;
+            content: string;
+            conversationId: number;
+          }[] = [];
+
+          for (const cid of recentConvoIds) {
+            const msgs = await db
+              .select()
+              .from(messages)
+              .where(eq(messages.conversationId, cid))
+              .orderBy(desc(messages.createdAt))
+              .limit(6);
+
+            for (const m of msgs.reverse()) {
+              recentMessages.push({
+                role: m.role,
+                content: String(m.content ?? ""),
+                conversationId: cid,
+              });
+            }
+          }
+
+          if (recentMessages.length > 0) {
+            recentSessionContext =
+              "\n\nRecent Session Context (previous conversations, most recent first):\n" +
+              recentMessages
+                .map((m) => `[${m.role}]: ${m.content.slice(0, 200)}`)
+                .join("\n");
+          }
+        }
+      } catch (err) {
+        console.warn("Recent session context load failed:", err);
+      }
 
       const memoryBlock =
         memory && Object.keys(memory).length
@@ -560,7 +613,10 @@ export async function registerRoutes(
       const chatMessages: ChatCompletionMessageParam[] = [
         {
           role: "system",
-          content: SYSTEM_PROMPT + (memoryBlock ? `\n\n${memoryBlock}` : ""),
+          content:
+            SYSTEM_PROMPT +
+            (memoryBlock ? `\n\n${memoryBlock}` : "") +
+            recentSessionContext,
         },
         ...previous.slice(-12).map((m) => ({
           role: m.role as "user" | "assistant",
@@ -642,6 +698,18 @@ export async function registerRoutes(
         );
       } catch (err) {
         console.warn("Session summary generation failed:", err);
+      }
+
+      // Save session summary back to the conversation record
+      if (updatedSessionSummary) {
+        try {
+          await db
+            .update(conversations)
+            .set({ summary: updatedSessionSummary })
+            .where(eq(conversations.id, convoId));
+        } catch (err) {
+          console.warn("Session summary save failed:", err);
+        }
       }
 
       let generatedHypothesis: string | null = null;

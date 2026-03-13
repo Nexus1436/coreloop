@@ -6,6 +6,8 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL must be set");
 }
 
+console.log("ACTIVE DATABASE:", process.env.DATABASE_URL);
+
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
 });
