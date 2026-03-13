@@ -54,7 +54,7 @@ const elevenlabs = new ElevenLabsClient({
 ===================================================== */
 
 const SYSTEM_PROMPT = `
-INTERLOOP BASE NARRATIVE — VERSION M3.3
+INTERLOOP BASE NARRATIVE — VERSION M3.4
 
 SECTION 1: SYSTEM IDENTITY & CORE MANDATE
 
@@ -102,7 +102,13 @@ If enough information already exists to form a hypothesis or test an adjustment,
 
 Memory Discipline
 
-Use prior sessions only when they sharpen the current investigation. Do not repeat stored information unless it improves the current hypothesis.
+Your system context includes stored records of previous sessions with this user labeled "STORED SESSION HISTORY." This is real data from actual past conversations — not hypothetical or inferred content.
+
+When the user asks about a previous session, a past conversation, or what was discussed before, you MUST reference the stored session history provided in your context. Do not say you lack access to past conversations if session history is present in your context.
+
+If no session history is present in your context, say so directly and honestly. Do not fabricate or reconstruct past sessions.
+
+Use prior session content actively when it sharpens the current investigation. Reference it by what was actually said, not by general inference.
 
 Dominant Hypothesis
 
@@ -554,7 +560,7 @@ export async function registerRoutes(
         .orderBy(asc(messages.createdAt));
 
       // Load recent messages from previous conversations for cross-session context
-      let recentSessionContext = "";
+      let storedSessionHistory = "";
       try {
         const recentConvos = await db
           .select()
@@ -569,36 +575,37 @@ export async function registerRoutes(
           .limit(5);
 
         if (recentConvos.length > 0) {
-          const recentConvoIds = recentConvos.map((c) => c.id);
-          const recentMessages: {
-            role: string;
-            content: string;
-            conversationId: number;
-          }[] = [];
+          const sessionBlocks: string[] = [];
 
-          for (const cid of recentConvoIds) {
+          for (const convo of recentConvos) {
             const msgs = await db
               .select()
               .from(messages)
-              .where(eq(messages.conversationId, cid))
+              .where(eq(messages.conversationId, convo.id))
               .orderBy(desc(messages.createdAt))
-              .limit(6);
+              .limit(8);
 
-            for (const m of msgs.reverse()) {
-              recentMessages.push({
-                role: m.role,
-                content: String(m.content ?? ""),
-                conversationId: cid,
-              });
-            }
+            if (msgs.length === 0) continue;
+
+            const chronological = msgs.reverse();
+            const lines = chronological
+              .map(
+                (m) =>
+                  `  ${m.role === "user" ? "User" : "Interloop"}: ${String(m.content ?? "").slice(0, 300)}`,
+              )
+              .join("\n");
+
+            sessionBlocks.push(
+              `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\n${lines}`,
+            );
           }
 
-          if (recentMessages.length > 0) {
-            recentSessionContext =
-              "\n\nRecent Session Context (previous conversations, most recent first):\n" +
-              recentMessages
-                .map((m) => `[${m.role}]: ${m.content.slice(0, 200)}`)
-                .join("\n");
+          if (sessionBlocks.length > 0) {
+            storedSessionHistory =
+              "\n\n=== STORED SESSION HISTORY ===\n" +
+              "The following are real stored records of previous conversations with this user. " +
+              "Use this data when the user asks about past sessions.\n\n" +
+              sessionBlocks.join("\n\n");
           }
         }
       } catch (err) {
@@ -607,16 +614,13 @@ export async function registerRoutes(
 
       const memoryBlock =
         memory && Object.keys(memory).length
-          ? `User Memory:\n${JSON.stringify(memory, null, 2)}`
+          ? `\n\n=== USER MEMORY ===\n${JSON.stringify(memory, null, 2)}`
           : "";
 
       const chatMessages: ChatCompletionMessageParam[] = [
         {
           role: "system",
-          content:
-            SYSTEM_PROMPT +
-            (memoryBlock ? `\n\n${memoryBlock}` : "") +
-            recentSessionContext,
+          content: SYSTEM_PROMPT + memoryBlock + storedSessionHistory,
         },
         ...previous.slice(-12).map((m) => ({
           role: m.role as "user" | "assistant",
