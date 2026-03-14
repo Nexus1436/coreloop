@@ -24,6 +24,42 @@ import {
    - caseOutcomes: id, caseId, adjustmentId, result, userFeedback, createdAt
 ===================================================== */
 
+// ── Body region extraction from signal text ───────────────────
+// Maps keyword patterns to canonical body region names.
+// Order matters: more specific terms should come first.
+const BODY_REGION_KEYWORDS: { region: string; keywords: string[] }[] = [
+  { region: "Ankle", keywords: ["ankle", "ankles"] },
+  { region: "Knee", keywords: ["knee", "knees", "knock-kneed", "popliteal"] },
+  { region: "Hip", keywords: ["hip", "hips"] },
+  {
+    region: "Lower Back",
+    keywords: ["lower back", "lumbar", "tailbone", "sacrum", "disc", "discs"],
+  },
+  { region: "Back", keywords: ["back", "spine", "spinal", "vertebra"] },
+  { region: "Glutes", keywords: ["glute", "glutes", "gluteal"] },
+  { region: "Hamstrings", keywords: ["hamstring", "hamstrings"] },
+  { region: "Quads", keywords: ["quad", "quads", "quadricep"] },
+  { region: "Calves", keywords: ["calf", "calves"] },
+  { region: "Legs", keywords: ["leg", "legs"] },
+  { region: "Shoulder", keywords: ["shoulder", "shoulders", "rotator"] },
+  { region: "Neck", keywords: ["neck", "cervical"] },
+  { region: "Foot", keywords: ["foot", "feet", "plantar", "heel", "arch"] },
+  { region: "Wrist", keywords: ["wrist", "wrists"] },
+  { region: "Elbow", keywords: ["elbow", "elbows"] },
+  { region: "Core", keywords: ["core", "abdom", "abs"] },
+];
+
+function extractBodyRegion(signal: string | null | undefined): string {
+  if (!signal) return "General";
+  const lower = signal.toLowerCase();
+  for (const { region, keywords } of BODY_REGION_KEYWORDS) {
+    for (const kw of keywords) {
+      if (lower.includes(kw)) return region;
+    }
+  }
+  return "General";
+}
+
 export function registerAnalyticsRoutes(app: Express): void {
   // CORS preflight
   app.options("/api/analytics", (_req: Request, res: Response) => {
@@ -55,11 +91,11 @@ export function registerAnalyticsRoutes(app: Express): void {
         .from(cases)
         .orderBy(desc(cases.createdAt));
 
-      // caseSignals.description is the signal text (not caseSignals.signal)
+      // caseSignals.description is the signal text
       const allSignals = await db
         .select({
           caseId: caseSignals.caseId,
-          signal: caseSignals.description, // ← correct column name
+          signal: caseSignals.description,
           bodyRegion: caseSignals.bodyRegion,
           signalType: caseSignals.signalType,
           movementContext: caseSignals.movementContext,
@@ -126,14 +162,28 @@ export function registerAnalyticsRoutes(app: Express): void {
         const adjustment = adjustmentByCase.get(c.id) ?? null;
         const outcome = outcomeByCase.get(c.id) ?? null;
 
-        // Use activityType as the "sport" label for the dashboard
-        const sport = c.activityType ?? c.movementContext ?? "General";
+        const signalText = primarySignal?.signal ?? null;
+
+        // Use stored bodyRegion if available; otherwise extract from signal text
+        const storedRegion = primarySignal?.bodyRegion;
+        const body_region =
+          storedRegion && storedRegion.trim() !== ""
+            ? storedRegion
+            : extractBodyRegion(signalText);
+
+        // Use activityType as the activity/sport label
+        const sport =
+          c.activityType ??
+          primarySignal?.activityType ??
+          c.movementContext ??
+          "General";
 
         return {
           case_id: `CASE-${String(c.id).padStart(4, "0")}`,
           raw_id: c.id,
-          signal: primarySignal?.signal ?? "Unknown signal",
-          body_region: primarySignal?.bodyRegion ?? "Unknown",
+          user_id: c.userId, // ← included so dashboard can group by user
+          signal: signalText ?? "Unknown signal",
+          body_region,
           signal_type: primarySignal?.signalType ?? "Unknown",
           sport,
           movement_context:
@@ -181,7 +231,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       // ── 6. Body Region Distribution ───────────────────────
       const regionMap = new Map<string, number>();
       for (const c of caseRecords) {
-        if (c.body_region && c.body_region !== "Unknown") {
+        if (c.body_region && c.body_region !== "General") {
           regionMap.set(c.body_region, (regionMap.get(c.body_region) ?? 0) + 1);
         }
       }
@@ -393,7 +443,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         const sport = c.sport ?? "General";
         if (!sportMap.has(sport)) sportMap.set(sport, new Map());
         const regionEntry = sportMap.get(sport)!;
-        const region = c.body_region ?? "Unknown";
+        const region = c.body_region ?? "General";
         regionEntry.set(region, (regionEntry.get(region) ?? 0) + 1);
       }
       const sportBodyRegionCorrelation = Array.from(sportMap.entries())
@@ -453,21 +503,27 @@ export function registerAnalyticsRoutes(app: Express): void {
         caseRecords.map((c) => c.signal).filter((s) => s !== "Unknown signal"),
       ).size;
       const uniqueRegions = new Set(
-        caseRecords.map((c) => c.body_region).filter((r) => r !== "Unknown"),
+        caseRecords.map((c) => c.body_region).filter((r) => r !== "General"),
       ).size;
 
       const kpi = {
         totalCases: total,
-        improvedCount,
-        improvedPct:
+        // Overall rate: improved / all cases
+        improvedPctOverall:
+          total > 0 ? Math.round((improvedCount / total) * 100) : 0,
+        // Closed-case rate: improved / cases with outcomes
+        improvedPctClosed:
           casesWithOutcome > 0
             ? Math.round((improvedCount / casesWithOutcome) * 100)
             : 0,
+        // Legacy field kept for compatibility
+        improvedPct: total > 0 ? Math.round((improvedCount / total) * 100) : 0,
+        improvedCount,
+        casesWithOutcome,
         uniqueSignals,
         uniqueRegions,
         avgMessagesToAdjustment: 3,
         // Fields expected by neonDb.ts AnalyticsPayload
-        casesWithOutcome,
         improvedCases: improvedCount,
         avgMessages: 3,
       };
@@ -479,23 +535,18 @@ export function registerAnalyticsRoutes(app: Express): void {
         kpi,
         signalFrequency,
         outcomeDistribution,
-        // neonDb.ts expects "bodyRegion" key
         bodyRegion: bodyRegionDistribution,
         bodyRegionDistribution,
         adjustmentEffectiveness,
-        // neonDb.ts expects "hypothesisRates" key
         hypothesisRates: hypothesisSuccessRates,
         hypothesisSuccessRates,
-        // neonDb.ts expects "signalMapping" key
         signalMapping: signalToAdjustmentMapping,
         signalToAdjustmentMapping,
-        // neonDb.ts expects "funnel" key
         funnel: investigationFunnel,
         investigationFunnel,
         adoptionRate,
         signalVocabulary,
         returnUserMetrics,
-        // neonDb.ts expects "sportCorrelation" key
         sportCorrelation: sportBodyRegionCorrelation,
         sportBodyRegionCorrelation,
         outcomeTiming: timingCounts,
