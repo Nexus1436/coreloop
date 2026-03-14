@@ -32,6 +32,7 @@ import { extractMemory, extractSessionSignals } from "./memory/extract";
 import { getSignalPatterns } from "./memory/signals";
 import { generateSessionSummary } from "./memory/sessionSummary";
 import { generateHypothesis } from "./memory/hypotheses";
+import { registerAnalyticsRoutes } from "./analyticsRoutes";
 
 /* =====================================================
    OPENAI CLIENT
@@ -265,6 +266,10 @@ export async function registerRoutes(
   _httpServer: HTTPServer,
   app: Express,
 ): Promise<void> {
+  /* ================= ANALYTICS (registered first, before Vite catch-all) ================= */
+
+  registerAnalyticsRoutes(app);
+
   /* ================= HEALTH ================= */
 
   app.get("/api/health", (_req: Request, res: Response) => {
@@ -498,6 +503,7 @@ export async function registerRoutes(
               userId,
               bodyRegion: null,
               signalType: s.type,
+              signal: s.signal,
               movementContext: s.movementContext ?? "general",
               activityType: s.activityType ?? "unknown",
               description: s.signal,
@@ -560,7 +566,6 @@ export async function registerRoutes(
         .orderBy(asc(messages.createdAt));
 
       // Load recent conversations for cross-session context
-      // Uses summary if available, otherwise falls back to full message history
       let storedSessionHistory = "";
       try {
         const recentConvos = await db
@@ -580,12 +585,10 @@ export async function registerRoutes(
 
           for (const convo of recentConvos) {
             if (convo.summary) {
-              // Use the stored summary for this conversation
               sessionBlocks.push(
                 `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\nSummary: ${convo.summary}`,
               );
             } else {
-              // No summary yet — fall back to full message history
               const msgs = await db
                 .select()
                 .from(messages)
@@ -724,7 +727,6 @@ export async function registerRoutes(
         console.warn("Session summary generation failed:", err);
       }
 
-      // Save session summary back to the conversation record
       if (updatedSessionSummary) {
         try {
           await db
