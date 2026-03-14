@@ -98,6 +98,14 @@ async function sendChat(
 }
 
 /* =====================================================
+   ONBOARDING MESSAGE
+   Shown once to brand-new users with no conversations
+===================================================== */
+
+const ONBOARDING_TEXT =
+  "I'm Interloop. I investigate the signals your body produces during movement — tension, fatigue, restriction, imbalance — and I test small, precise adjustments to understand what's driving them. My value builds over time. The more we work together, the sharper the analysis gets. When you're ready, describe a movement or a sensation you've been noticing. We'll start from there.";
+
+/* =====================================================
    COMPONENT
 ===================================================== */
 
@@ -127,7 +135,7 @@ export default function Home() {
   }, [messages]);
 
   /* =====================================================
-     LOAD LATEST CONVERSATION
+     LOAD LATEST CONVERSATION (+ ONBOARDING FOR NEW USERS)
   ===================================================== */
 
   useEffect(() => {
@@ -142,8 +150,42 @@ export default function Home() {
         const data = await resp.json();
         const convs = data?.conversations;
 
-        if (!Array.isArray(convs) || convs.length === 0) return;
+        // NEW USER — no conversations yet: show onboarding message
+        if (!Array.isArray(convs) || convs.length === 0) {
+          setMessages([
+            {
+              id: nextId(),
+              role: "assistant",
+              text: ONBOARDING_TEXT,
+            },
+          ]);
 
+          // Speak the onboarding message
+          try {
+            await playback.init();
+            stopRequestedRef.current = false;
+            setIsSpeaking(true);
+            await streamTTS(
+              ONBOARDING_TEXT,
+              (audioChunk: string) => {
+                if (!stopRequestedRef.current) {
+                  playback.pushAudio(audioChunk);
+                }
+              },
+              { voice: voiceGender },
+            );
+            if (!stopRequestedRef.current) {
+              playback.signalComplete();
+            }
+          } catch (err) {
+            console.error("Onboarding TTS failed:", err);
+            setIsSpeaking(false);
+          }
+
+          return;
+        }
+
+        // RETURNING USER — load their latest conversation
         const latestId = Number(convs[0].id);
         if (!Number.isFinite(latestId)) return;
 
@@ -174,6 +216,7 @@ export default function Home() {
     }
 
     loadLatestConversation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* =====================================================
@@ -257,9 +300,43 @@ export default function Home() {
 
     try {
       const blob = await stopRecording();
+
+      // ── Acknowledgment — 2s natural delay then "I hear you." ──
+      const hearYouId = nextId();
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+
+      setMessages((prev) => [
+        ...prev,
+        { id: hearYouId, role: "assistant", text: "I hear you." },
+      ]);
+
+      // Speak the acknowledgment (non-blocking — fire and forget)
+      playback.init().then(() => {
+        stopRequestedRef.current = false;
+        setIsSpeaking(true);
+        streamTTS(
+          "I hear you.",
+          (audioChunk: string) => {
+            if (!stopRequestedRef.current) {
+              playback.pushAudio(audioChunk);
+            }
+          },
+          { voice: voiceGender },
+        )
+          .then(() => {
+            if (!stopRequestedRef.current) {
+              playback.signalComplete();
+            }
+          })
+          .catch(() => {});
+      });
+
       const transcript = await transcribeAudio(blob);
 
       if (!transcript) {
+        // Remove the "I hear you." placeholder if nothing was transcribed
+        setMessages((prev) => prev.filter((m) => m.id !== hearYouId));
         setIsProcessing(false);
         return;
       }
@@ -267,8 +344,9 @@ export default function Home() {
       const userId = nextId();
       const assistantId = nextId();
 
+      // Replace "I hear you." with the real user message + empty assistant slot
       setMessages((prev) => [
-        ...prev,
+        ...prev.filter((m) => m.id !== hearYouId),
         { id: userId, role: "user", text: transcript },
         { id: assistantId, role: "assistant", text: "" },
       ]);
@@ -387,7 +465,12 @@ export default function Home() {
   return (
     <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center relative">
       <div className="relative mb-12">
-        <CentralForm isActive={isRecording} isDimmed={false} />
+        <CentralForm
+          isActive={isRecording}
+          isDimmed={false}
+          isSpeaking={isSpeaking}
+          getAmplitude={playback.getAmplitude}
+        />
 
         <button
           onClick={() => {
@@ -404,13 +487,11 @@ export default function Home() {
           className="absolute inset-0 flex items-center justify-center"
         >
           <span className="text-sm text-gray-400">
-            {isSpeaking
-              ? "Stop"
-              : isRecording
-                ? "Listening..."
-                : isProcessing
-                  ? "Reflecting..."
-                  : "Press here"}
+            {isRecording
+              ? "Listening..."
+              : isProcessing
+                ? "Reflecting..."
+                : "Press here"}
           </span>
         </button>
       </div>
@@ -428,7 +509,7 @@ export default function Home() {
           }
           className="text-sm text-gray-400 hover:text-white"
         >
-          Voice: {voiceGender}
+          Voice: {voiceGender === "female" ? "male" : "female"}
         </button>
 
         {lastResponse ? (
