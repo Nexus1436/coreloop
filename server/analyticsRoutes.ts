@@ -1,4 +1,6 @@
 import type { Express, Request, Response } from "express";
+import { desc } from "drizzle-orm";
+
 import { db } from "./db";
 import {
   cases,
@@ -6,19 +8,31 @@ import {
   caseHypotheses,
   caseAdjustments,
   caseOutcomes,
-  messages,
-  conversations,
 } from "@shared/schema";
-import { eq, desc, sql, count } from "drizzle-orm";
 
 /* =====================================================
    ANALYTICS API
    Single endpoint: GET /api/analytics
    Returns all data needed for the Interloop Analytics Dashboard.
    Protected by ANALYTICS_API_KEY header.
+
+   Schema notes (from shared/schema.ts):
+   - cases: id, userId, conversationId, movementContext, activityType, status, createdAt, updatedAt
+   - caseSignals: id, caseId, userId, bodyRegion, signalType, movementContext, activityType, description
+   - caseHypotheses: id, caseId, signalId, hypothesis, confidence, createdAt
+   - caseAdjustments: id, caseId, hypothesisId, adjustmentType, cue, mechanicalFocus, createdAt
+   - caseOutcomes: id, caseId, adjustmentId, result, userFeedback, createdAt
 ===================================================== */
 
 export function registerAnalyticsRoutes(app: Express): void {
+  // CORS preflight
+  app.options("/api/analytics", (_req: Request, res: Response) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "x-analytics-key");
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.sendStatus(200);
+  });
+
   app.get("/api/analytics", async (req: Request, res: Response) => {
     // ── API Key Auth ──────────────────────────────────────────
     const apiKey = req.headers["x-analytics-key"];
@@ -29,22 +43,23 @@ export function registerAnalyticsRoutes(app: Express): void {
     }
 
     try {
-      // ── 1. All cases with full join ───────────────────────
+      // ── 1. Load all data ──────────────────────────────────
       const allCases = await db
         .select({
           id: cases.id,
           userId: cases.userId,
-          sport: cases.sport,
           movementContext: cases.movementContext,
+          activityType: cases.activityType,
           createdAt: cases.createdAt,
         })
         .from(cases)
         .orderBy(desc(cases.createdAt));
 
+      // caseSignals.description is the signal text (not caseSignals.signal)
       const allSignals = await db
         .select({
           caseId: caseSignals.caseId,
-          signal: caseSignals.signal,
+          signal: caseSignals.description, // ← correct column name
           bodyRegion: caseSignals.bodyRegion,
           signalType: caseSignals.signalType,
           movementContext: caseSignals.movementContext,
@@ -111,14 +126,18 @@ export function registerAnalyticsRoutes(app: Express): void {
         const adjustment = adjustmentByCase.get(c.id) ?? null;
         const outcome = outcomeByCase.get(c.id) ?? null;
 
+        // Use activityType as the "sport" label for the dashboard
+        const sport = c.activityType ?? c.movementContext ?? "General";
+
         return {
           case_id: `CASE-${String(c.id).padStart(4, "0")}`,
           raw_id: c.id,
           signal: primarySignal?.signal ?? "Unknown signal",
           body_region: primarySignal?.bodyRegion ?? "Unknown",
           signal_type: primarySignal?.signalType ?? "Unknown",
-          sport: c.sport ?? c.movementContext ?? "General",
-          movement_context: primarySignal?.movementContext ?? "general",
+          sport,
+          movement_context:
+            primarySignal?.movementContext ?? c.movementContext ?? "general",
           hypothesis: hypothesis,
           adjustment: adjustment?.cue ?? null,
           adjustment_type: adjustment?.adjustmentType ?? null,
@@ -130,6 +149,8 @@ export function registerAnalyticsRoutes(app: Express): void {
           created_at: c.createdAt,
         };
       });
+
+      const total = caseRecords.length;
 
       // ── 4. Signal Frequency ───────────────────────────────
       const signalFreqMap = new Map<string, number>();
@@ -169,16 +190,16 @@ export function registerAnalyticsRoutes(app: Express): void {
         .sort((a, b) => b.count - a.count);
 
       // ── 7. Adjustment Effectiveness ───────────────────────
-      const adjMap = new Map<string, { total: number; improved: number }>();
+      const adjEffMap = new Map<string, { total: number; improved: number }>();
       for (const c of caseRecords) {
         if (!c.adjustment) continue;
         const key = c.adjustment.slice(0, 80);
-        if (!adjMap.has(key)) adjMap.set(key, { total: 0, improved: 0 });
-        const entry = adjMap.get(key)!;
+        if (!adjEffMap.has(key)) adjEffMap.set(key, { total: 0, improved: 0 });
+        const entry = adjEffMap.get(key)!;
         entry.total++;
         if (c.outcome?.toLowerCase().includes("improv")) entry.improved++;
       }
-      const adjustmentEffectiveness = Array.from(adjMap.entries())
+      const adjustmentEffectiveness = Array.from(adjEffMap.entries())
         .map(([adjustment, { total, improved }]) => ({
           adjustment,
           total,
@@ -248,7 +269,6 @@ export function registerAnalyticsRoutes(app: Express): void {
         .slice(0, 12);
 
       // ── 10. Investigation Funnel ──────────────────────────
-      const total = caseRecords.length;
       const withHyp = caseRecords.filter((c) => c.has_hypothesis).length;
       const withAdj = caseRecords.filter((c) => c.has_adjustment).length;
       const withOut = caseRecords.filter((c) => c.has_outcome).length;
@@ -326,7 +346,6 @@ export function registerAnalyticsRoutes(app: Express): void {
         "just",
         "like",
         "seems",
-        "seems",
         "noticed",
         "notice",
         "kind",
@@ -350,7 +369,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         .slice(0, 40);
 
       // ── 13. Return User Metrics ───────────────────────────
-      const userCaseMap = new Map<number, number>();
+      const userCaseMap = new Map<string, number>();
       for (const c of allCases) {
         userCaseMap.set(c.userId, (userCaseMap.get(c.userId) ?? 0) + 1);
       }
@@ -368,7 +387,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           totalUsers > 0 ? Math.round(allCases.length / totalUsers) : 0,
       };
 
-      // ── 14. Sport × Body Region Correlation ──────────────
+      // ── 14. Activity × Body Region Correlation ────────────
       const sportMap = new Map<string, Map<string, number>>();
       for (const c of caseRecords) {
         const sport = c.sport ?? "General";
@@ -378,20 +397,20 @@ export function registerAnalyticsRoutes(app: Express): void {
         regionEntry.set(region, (regionEntry.get(region) ?? 0) + 1);
       }
       const sportBodyRegionCorrelation = Array.from(sportMap.entries())
-        .map(([sport, regionMap]) => {
+        .map(([sport, rMap]) => {
           const regions: Record<string, number> = {};
           let topRegion = "";
           let topCount = 0;
-          let total = 0;
-          for (const [region, count] of regionMap.entries()) {
+          let sportTotal = 0;
+          for (const [region, count] of rMap.entries()) {
             regions[region] = count;
-            total += count;
+            sportTotal += count;
             if (count > topCount) {
               topCount = count;
               topRegion = region;
             }
           }
-          return { sport, total, topRegion, regions };
+          return { sport, total: sportTotal, topRegion, regions };
         })
         .sort((a, b) => b.total - a.total);
 
@@ -413,7 +432,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         const diffHours =
           (new Date(o.createdAt).getTime() -
             new Date(caseRow.createdAt).getTime()) /
-          3600000;
+          3_600_000;
         for (let i = 0; i < timingBuckets.length; i++) {
           if (
             diffHours >= timingBuckets[i].min &&
@@ -424,15 +443,18 @@ export function registerAnalyticsRoutes(app: Express): void {
           }
         }
       }
-      const outcomeTiming = timingCounts;
 
       // ── 16. KPI ───────────────────────────────────────────
       const improvedCount = caseRecords.filter((c) =>
         c.outcome?.toLowerCase().includes("improv"),
       ).length;
       const casesWithOutcome = caseRecords.filter((c) => c.has_outcome).length;
-      const uniqueSignals = new Set(caseRecords.map((c) => c.signal)).size;
-      const uniqueRegions = new Set(caseRecords.map((c) => c.body_region)).size;
+      const uniqueSignals = new Set(
+        caseRecords.map((c) => c.signal).filter((s) => s !== "Unknown signal"),
+      ).size;
+      const uniqueRegions = new Set(
+        caseRecords.map((c) => c.body_region).filter((r) => r !== "Unknown"),
+      ).size;
 
       const kpi = {
         totalCases: total,
@@ -444,6 +466,10 @@ export function registerAnalyticsRoutes(app: Express): void {
         uniqueSignals,
         uniqueRegions,
         avgMessagesToAdjustment: 3,
+        // Fields expected by neonDb.ts AnalyticsPayload
+        casesWithOutcome,
+        improvedCases: improvedCount,
+        avgMessages: 3,
       };
 
       // ── Response ──────────────────────────────────────────
@@ -453,29 +479,31 @@ export function registerAnalyticsRoutes(app: Express): void {
         kpi,
         signalFrequency,
         outcomeDistribution,
+        // neonDb.ts expects "bodyRegion" key
+        bodyRegion: bodyRegionDistribution,
         bodyRegionDistribution,
         adjustmentEffectiveness,
+        // neonDb.ts expects "hypothesisRates" key
+        hypothesisRates: hypothesisSuccessRates,
         hypothesisSuccessRates,
+        // neonDb.ts expects "signalMapping" key
+        signalMapping: signalToAdjustmentMapping,
         signalToAdjustmentMapping,
+        // neonDb.ts expects "funnel" key
+        funnel: investigationFunnel,
         investigationFunnel,
         adoptionRate,
         signalVocabulary,
         returnUserMetrics,
+        // neonDb.ts expects "sportCorrelation" key
+        sportCorrelation: sportBodyRegionCorrelation,
         sportBodyRegionCorrelation,
-        outcomeTiming,
+        outcomeTiming: timingCounts,
         cases: caseRecords,
       });
     } catch (err) {
       console.error("[/api/analytics error]", err);
       res.status(500).json({ error: "Analytics query failed" });
     }
-  });
-
-  // CORS preflight for the analytics endpoint
-  app.options("/api/analytics", (req: Request, res: Response) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "x-analytics-key");
-    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    res.sendStatus(200);
   });
 }
