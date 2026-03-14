@@ -103,7 +103,7 @@ async function sendChat(
 ===================================================== */
 
 const ONBOARDING_TEXT =
-  "I'm Interloop. I investigate the signals your body produces during movement — tension, fatigue, restriction, imbalance — and I test small, precise adjustments to understand what's driving them. My value builds over time. The more we work together, the sharper the analysis gets. When you're ready, describe a movement or a sensation you've been noticing. We'll start from there.";
+  "Welcome to Interloop. Hi, I’m Interloop. I’m going to be your movement companion over time, helping you investigate how your body moves and how small adjustments affect it. Think of this as an ongoing process. We’ll notice movement signals together, try small experiments, and see what changes. The more you use me — and the more clearly you tell me what you notice and what happens after you try something — the better I can help you. I work best when you describe things in your own words. You don’t need to be concise. You can ramble a little if you want and talk through what you’re feeling, what movements feel strange, and what you’ve already tried. If you ever feel stuck or unsure what to say, just ask. I’ll guide you. For example, you might say: “When I go downstairs my knee feels like it catches near the bottom step.” Or, “My shoulder feels fine until I raise my arm above my head, then it feels tight in the front.” So let’s start here: What movement or sensation have you noticed recently that feels off, different, or uncomfortable? Just talk it through. I’m listening.";
 
 /* =====================================================
    COMPONENT
