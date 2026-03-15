@@ -337,11 +337,13 @@ export default function Home() {
 
       const transcript = await transcriptPromise;
 
+      // Stop acknowledgement if transcript already returned
+      if (ackTimerRef.current !== null) {
+        window.clearTimeout(ackTimerRef.current);
+        ackTimerRef.current = null;
+      }
+
       if (!transcript) {
-        if (ackTimerRef.current !== null) {
-          window.clearTimeout(ackTimerRef.current);
-          ackTimerRef.current = null;
-        }
         setIsProcessing(false);
         return;
       }
