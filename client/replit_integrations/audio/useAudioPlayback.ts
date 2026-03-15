@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 
 export type PlaybackState = "idle" | "playing" | "ended";
 
@@ -42,7 +42,7 @@ export function useAudioPlayback() {
       analyserRef.current = analyser;
     }
 
-    // Connect the audio element to the analyser (only once)
+    // Connect audio element to analyser (once)
     if (
       audioRef.current &&
       audioCtxRef.current &&
@@ -55,14 +55,18 @@ export function useAudioPlayback() {
       sourceConnectedRef.current = true;
     }
 
-    // Resume context if suspended (browser autoplay policy)
+    // Resume context if browser suspended it
     if (audioCtxRef.current?.state === "suspended") {
       await audioCtxRef.current.resume();
     }
   }, []);
 
+  /* ================= AUTO INIT ================= */
+  useEffect(() => {
+    init();
+  }, [init]);
+
   /* ================= GET AMPLITUDE ================= */
-  // Returns a normalized amplitude value 0.0 – 1.0
   const getAmplitude = useCallback((): number => {
     const analyser = analyserRef.current;
     const dataArray = dataArrayRef.current;
@@ -70,28 +74,34 @@ export function useAudioPlayback() {
 
     analyser.getByteFrequencyData(dataArray);
 
-    // Average the lower half of frequency bins (voice range)
     const slice = Math.floor(dataArray.length / 2);
     let sum = 0;
     for (let i = 0; i < slice; i++) {
       sum += dataArray[i];
     }
-    return sum / (slice * 255); // normalize to 0–1
+
+    return sum / (slice * 255);
   }, []);
 
   /* ================= PLAY NEXT ================= */
   const playNext = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
+
     const next = queueRef.current.shift();
+
     if (!next) {
       setState("ended");
       return;
     }
+
     playingRef.current = true;
     setState("playing");
+
     audio.src = `data:audio/mpeg;base64,${next}`;
+
     const playPromise = audio.play();
+
     if (playPromise !== undefined) {
       playPromise.catch(() => {});
     }
@@ -101,11 +111,14 @@ export function useAudioPlayback() {
   const pushAudio = useCallback(
     (base64Audio: string) => {
       queueRef.current.push(base64Audio);
+
       if (!playingRef.current) {
         playNext();
         return;
       }
+
       const audio = audioRef.current;
+
       if (audio && queueRef.current.length === 1) {
         const preload = new Audio(`data:audio/mpeg;base64,${base64Audio}`);
         preload.preload = "auto";
@@ -118,11 +131,14 @@ export function useAudioPlayback() {
   const stop = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
+
     queueRef.current = [];
     playingRef.current = false;
+
     audio.pause();
     audio.currentTime = 0;
     audio.src = "";
+
     setState("idle");
   }, []);
 
@@ -130,11 +146,14 @@ export function useAudioPlayback() {
   const clear = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
+
     queueRef.current = [];
     playingRef.current = false;
+
     audio.pause();
     audio.currentTime = 0;
     audio.src = "";
+
     setState("idle");
   }, []);
 

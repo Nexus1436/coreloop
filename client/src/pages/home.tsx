@@ -18,7 +18,6 @@ function nextId() {
 
 /* =====================================================
    STREAM MERGE FIX
-   Prevents duplicated SSE token overlaps
 ===================================================== */
 
 function mergeStream(existing: string, incoming: string) {
@@ -73,6 +72,7 @@ async function sendChat(
     for (const part of parts) {
       const line = part.trim();
       if (!line.startsWith("data:")) continue;
+      if (line === "data: [DONE]") return;
 
       try {
         const obj = JSON.parse(line.slice(5));
@@ -99,11 +99,10 @@ async function sendChat(
 
 /* =====================================================
    ONBOARDING MESSAGE
-   Shown once to brand-new users with no conversations
 ===================================================== */
 
 const ONBOARDING_TEXT =
-  "Welcome to Interloop. Hi, I’m Interloop. I’m going to be your movement companion over time, helping you investigate how your body moves and how small adjustments affect it. Think of this as an ongoing process. We’ll notice movement signals together, try small experiments, and see what changes. The more you use me — and the more clearly you tell me what you notice and what happens after you try something — the better I can help you. I work best when you describe things in your own words. You don’t need to be concise. You can ramble a little if you want and talk through what you’re feeling, what movements feel strange, and what you’ve already tried. If you ever feel stuck or unsure what to say, just ask. I’ll guide you. For example, you might say: “When I go downstairs my knee feels like it catches near the bottom step.” Or, “My shoulder feels fine until I raise my arm above my head, then it feels tight in the front.” So let’s start here: What movement or sensation have you noticed recently that feels off, different, or uncomfortable? Just talk it through. I’m listening.";
+  "Welcome to Interloop. Hi, I’m Interloop. I’m going to be your movement companion over time, helping you investigate how your body moves and how small adjustments affect it. Think of this as an ongoing process. We’ll notice movement signals together, try small experiments, and see what changes. The more you use me — and the more clearly you tell me what you notice and what happens after you try something — the better I can help you. I work best when you describe things in your own words. You don’t need to be concise. You can ramble a little if you want and talk through what you’re feeling, what movements feel strange, and what you’ve already tried. If you ever feel stuck or unsure what to say, just ask. I’ll guide you.";
 
 /* =====================================================
    COMPONENT
@@ -125,6 +124,7 @@ export default function Home() {
 
   const playback = useAudioPlayback();
   const stopRequestedRef = useRef(false);
+  const ackTimerRef = useRef<number | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -135,7 +135,7 @@ export default function Home() {
   }, [messages]);
 
   /* =====================================================
-     LOAD LATEST CONVERSATION (+ ONBOARDING FOR NEW USERS)
+     LOAD LATEST CONVERSATION
   ===================================================== */
 
   useEffect(() => {
@@ -144,48 +144,33 @@ export default function Home() {
         const resp = await fetch("/api/conversations", {
           credentials: "include",
         });
-
         if (!resp.ok) return;
 
         const data = await resp.json();
         const convs = data?.conversations;
 
-        // NEW USER — no conversations yet: show onboarding message
         if (!Array.isArray(convs) || convs.length === 0) {
           setMessages([
-            {
-              id: nextId(),
-              role: "assistant",
-              text: ONBOARDING_TEXT,
-            },
+            { id: nextId(), role: "assistant", text: ONBOARDING_TEXT },
           ]);
 
-          // Speak the onboarding message
-          try {
-            await playback.init();
-            stopRequestedRef.current = false;
-            setIsSpeaking(true);
-            await streamTTS(
-              ONBOARDING_TEXT,
-              (audioChunk: string) => {
-                if (!stopRequestedRef.current) {
-                  playback.pushAudio(audioChunk);
-                }
-              },
-              { voice: voiceGender },
-            );
-            if (!stopRequestedRef.current) {
-              playback.signalComplete();
-            }
-          } catch (err) {
-            console.error("Onboarding TTS failed:", err);
-            setIsSpeaking(false);
-          }
+          stopRequestedRef.current = false;
+          setIsSpeaking(true);
 
+          await streamTTS(
+            ONBOARDING_TEXT,
+            (audioChunk: string) => {
+              if (!stopRequestedRef.current) playback.pushAudio(audioChunk);
+            },
+            { voice: voiceGender },
+          );
+
+          if (!stopRequestedRef.current) {
+            playback.signalComplete();
+          }
           return;
         }
 
-        // RETURNING USER — load their latest conversation
         const latestId = Number(convs[0].id);
         if (!Number.isFinite(latestId)) return;
 
@@ -216,12 +201,13 @@ export default function Home() {
     }
 
     loadLatestConversation();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  /* =====================================================
-     SPEAKING STATE SYNC
-  ===================================================== */
+    return () => {
+      if (ackTimerRef.current !== null) {
+        window.clearTimeout(ackTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (playback.state === "ended" || playback.state === "idle") {
@@ -234,21 +220,23 @@ export default function Home() {
   ===================================================== */
 
   const startRecording = async () => {
+    if (ackTimerRef.current !== null) {
+      window.clearTimeout(ackTimerRef.current);
+      ackTimerRef.current = null;
+    }
+
     stopRequestedRef.current = true;
     playback.stop();
     setIsSpeaking(false);
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
     const recorder = new MediaRecorder(stream);
 
     mediaRecorderRef.current = recorder;
     chunksRef.current = [];
 
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) {
-        chunksRef.current.push(e.data);
-      }
+      if (e.data.size > 0) chunksRef.current.push(e.data);
     };
 
     recorder.start();
@@ -257,7 +245,6 @@ export default function Home() {
 
   const stopRecording = async (): Promise<Blob> => {
     const recorder = mediaRecorderRef.current;
-
     if (!recorder) return new Blob();
 
     await new Promise<void>((resolve) => {
@@ -266,7 +253,6 @@ export default function Home() {
     });
 
     recorder.stream.getTracks().forEach((t) => t.stop());
-
     setIsRecording(false);
 
     return new Blob(chunksRef.current, { type: "audio/webm" });
@@ -278,6 +264,11 @@ export default function Home() {
 
   const handleTap = async () => {
     if (isSpeaking) {
+      if (ackTimerRef.current !== null) {
+        window.clearTimeout(ackTimerRef.current);
+        ackTimerRef.current = null;
+      }
+
       stopRequestedRef.current = true;
       playback.stop();
       setIsSpeaking(false);
@@ -301,42 +292,56 @@ export default function Home() {
     try {
       const blob = await stopRecording();
 
-      // ── Acknowledgment — 2s natural delay then "I hear you." ──
-      const hearYouId = nextId();
+      // Start transcription immediately.
+      const transcriptPromise = transcribeAudio(blob);
 
-      await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-
-      setMessages((prev) => [
-        ...prev,
-        { id: hearYouId, role: "assistant", text: "I hear you." },
-      ]);
-
-      // Speak the acknowledgment (non-blocking — fire and forget)
-      playback.init().then(() => {
+      // Fire acknowledgement exactly 2 seconds after recording stops,
+      // without blocking transcription or chat preparation.
+      ackTimerRef.current = window.setTimeout(async () => {
         stopRequestedRef.current = false;
         setIsSpeaking(true);
-        streamTTS(
-          "I hear you.",
-          (audioChunk: string) => {
-            if (!stopRequestedRef.current) {
-              playback.pushAudio(audioChunk);
-            }
-          },
-          { voice: voiceGender },
-        )
-          .then(() => {
-            if (!stopRequestedRef.current) {
-              playback.signalComplete();
-            }
-          })
-          .catch(() => {});
-      });
 
-      const transcript = await transcribeAudio(blob);
+        try {
+          // First phrase
+          await streamTTS(
+            "I hear you.",
+            (audioChunk: string) => {
+              if (!stopRequestedRef.current) {
+                playback.pushAudio(audioChunk);
+              }
+            },
+            { voice: voiceGender },
+          );
+
+          // Natural thinking pause
+          await new Promise((r) => setTimeout(r, 800));
+
+          // Second phrase
+          await streamTTS(
+            "Let me think about that.",
+            (audioChunk: string) => {
+              if (!stopRequestedRef.current) {
+                playback.pushAudio(audioChunk);
+              }
+            },
+            { voice: voiceGender },
+          );
+
+          if (!stopRequestedRef.current) {
+            playback.signalComplete();
+          }
+        } catch (err) {
+          console.error("Acknowledgment TTS failed:", err);
+        }
+      }, 2000);
+
+      const transcript = await transcriptPromise;
 
       if (!transcript) {
-        // Remove the "I hear you." placeholder if nothing was transcribed
-        setMessages((prev) => prev.filter((m) => m.id !== hearYouId));
+        if (ackTimerRef.current !== null) {
+          window.clearTimeout(ackTimerRef.current);
+          ackTimerRef.current = null;
+        }
         setIsProcessing(false);
         return;
       }
@@ -344,9 +349,8 @@ export default function Home() {
       const userId = nextId();
       const assistantId = nextId();
 
-      // Replace "I hear you." with the real user message + empty assistant slot
       setMessages((prev) => [
-        ...prev.filter((m) => m.id !== hearYouId),
+        ...prev,
         { id: userId, role: "user", text: transcript },
         { id: assistantId, role: "assistant", text: "" },
       ]);
@@ -362,7 +366,6 @@ export default function Home() {
         },
         (chunk) => {
           assistantText = mergeStream(assistantText, chunk);
-
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId ? { ...m, text: assistantText } : m,
@@ -376,27 +379,19 @@ export default function Home() {
         return;
       }
 
-      await playback.init();
-
       stopRequestedRef.current = false;
       setIsSpeaking(true);
 
-      try {
-        await streamTTS(
-          assistantText,
-          (audioChunk: string) => {
-            if (!stopRequestedRef.current) {
-              playback.pushAudio(audioChunk);
-            }
-          },
-          { voice: voiceGender },
-        );
+      await streamTTS(
+        assistantText,
+        (audioChunk: string) => {
+          if (!stopRequestedRef.current) playback.pushAudio(audioChunk);
+        },
+        { voice: voiceGender },
+      );
 
-        if (!stopRequestedRef.current) {
-          playback.signalComplete();
-        }
-      } catch (err) {
-        console.error("TTS error:", err);
+      if (!stopRequestedRef.current) {
+        playback.signalComplete();
       }
     } catch (err) {
       console.error("Flow failed:", err);
@@ -412,10 +407,7 @@ export default function Home() {
   const handleRepeat = useCallback(
     async (e: React.MouseEvent) => {
       e.stopPropagation();
-
       if (!lastResponse) return;
-
-      await playback.init();
 
       stopRequestedRef.current = false;
       setIsSpeaking(true);
@@ -424,9 +416,7 @@ export default function Home() {
         await streamTTS(
           lastResponse,
           (audioChunk: string) => {
-            if (!stopRequestedRef.current) {
-              playback.pushAudio(audioChunk);
-            }
+            if (!stopRequestedRef.current) playback.pushAudio(audioChunk);
           },
           { voice: voiceGender },
         );
@@ -438,7 +428,7 @@ export default function Home() {
         console.error("Repeat TTS error:", err);
       }
     },
-    [lastResponse, voiceGender, playback],
+    [lastResponse, playback, voiceGender],
   );
 
   /* =====================================================
@@ -459,7 +449,7 @@ export default function Home() {
   }
 
   /* =====================================================
-     MAIN UI
+     UI
   ===================================================== */
 
   return (
@@ -473,17 +463,7 @@ export default function Home() {
         />
 
         <button
-          onClick={() => {
-            if (isSpeaking) {
-              stopRequestedRef.current = true;
-              playback.stop();
-              setIsSpeaking(false);
-              setIsProcessing(false);
-              return;
-            }
-
-            handleTap();
-          }}
+          onClick={handleTap}
           className="absolute inset-0 flex items-center justify-center"
         >
           <span className="text-sm text-gray-400">
