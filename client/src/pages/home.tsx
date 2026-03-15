@@ -263,6 +263,17 @@ export default function Home() {
   ===================================================== */
 
   const handleTap = async () => {
+    // Unlock browser audio on first tap
+    try {
+      const ctx = new (window.AudioContext ||
+        (window as any).webkitAudioContext)();
+      await ctx.resume();
+      ctx.close();
+    } catch {}
+
+    if (isSpeaking) {
+    }
+
     if (isSpeaking) {
       if (ackTimerRef.current !== null) {
         window.clearTimeout(ackTimerRef.current);
