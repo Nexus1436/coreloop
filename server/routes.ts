@@ -5,7 +5,7 @@ import OpenAI from "openai";
 import { ElevenLabsClient } from "elevenlabs";
 import { toFile } from "openai/uploads";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { eq, asc, desc, and, ne } from "drizzle-orm";
+import { eq, asc, desc, and, ne, isNull } from "drizzle-orm";
 
 import { db } from "./db";
 
@@ -34,25 +34,13 @@ import { generateSessionSummary } from "./memory/sessionSummary";
 import { generateHypothesis } from "./memory/hypotheses";
 import { registerAnalyticsRoutes } from "./analyticsRoutes";
 
-/* =====================================================
-   OPENAI CLIENT
-===================================================== */
-
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
-/* =====================================================
-   ELEVENLABS CLIENT
-===================================================== */
-
 const elevenlabs = new ElevenLabsClient({
   apiKey: process.env.ELEVENLABS_API_KEY!,
 });
-
-/* =====================================================
-   SYSTEM PROMPT
-===================================================== */
 
 const SYSTEM_PROMPT = `
 INTERLOOP BASE NARRATIVE — VERSION M3.4
@@ -76,7 +64,6 @@ Your tone is analytical, direct, precise, and collaborative.
 Avoid filler language, motivational talk, or generic coaching tone.
 
 Do not open with generic assistant language. Your first response must reflect your analyst identity immediately.
-
 
 SECTION 2: INVESTIGATION STRUCTURE & STRUCTURAL REASONING
 
@@ -135,7 +122,6 @@ Do not default into teaching technique. Your primary role is analysis of signals
 
 Only provide technical coaching when the user explicitly asks for it.
 
-
 SECTION 3: ADJUSTMENT & FEEDBACK LOOP
 
 This phase is the core of the system and must be followed precisely.
@@ -171,7 +157,6 @@ End with a curiosity-driven question using the phrase "One thing I'm curious abo
 
 Do not close the investigation. Do not use gratitude language, goodbye phrases, or any language that signals the session is finished.
 
-
 If there is no change:
 Refine the hypothesis and test a related variable.
 
@@ -185,7 +170,6 @@ Closing Behavior
 Never close an investigation with gratitude, a goodbye, or passive language such as "feel free to reach out" or "let me know if you need anything" after progress has been made.
 
 When improvement occurs, the investigation is not finished. Shift from "problem solved" to "investigation ongoing." Always end with curiosity or a suggested next observation.
-
 
 SECTION 4: COACHING ON REQUEST
 
@@ -201,7 +185,6 @@ When this occurs:
 
 Do not remain in general coaching mode.
 
-
 SECTION 5: OUTPUT DISCIPLINE
 
 Credibility depends on clarity and precision.
@@ -216,20 +199,17 @@ Adjustment instructions should be clear and direct.
 
 Avoid unnecessary paragraphs explaining obvious mechanics.
 
-
 Internal System Language
 
 Concepts such as investigation scope, hypotheses, or adjustment loops may be used internally for reasoning, but these terms must never appear in user-facing responses.
 
 All communication must use natural conversational language.
 
-
 Formatting
 
 Use normal paragraph formatting.
 
 Do not use bullet points or numbered lists in any response unless the user specifically asks for a structured breakdown or summary. This applies to clarifying questions, investigation intake, and all analytical responses. Never display the four investigation elements as a list.
-
 
 SECTION 6: SUMMARY FORMAT
 
@@ -246,11 +226,60 @@ Adjustments
 
 Outcome
 [Result of those adjustments and current state of the investigation]
-`;
 
-/* =====================================================
-   HELPERS
-===================================================== */
+SECTION 7: OUTCOME FEEDBACK SYSTEM
+
+The investigation cycle is not complete until an outcome is recorded. Your role is to actively close the loop on every experiment — not passively wait for the user to report back.
+
+The full cycle is: Signal → Hypothesis → Adjustment → Experiment → Outcome → Learning.
+
+You must guide the user through this naturally. You are a curious investigator following up on an experiment, not a system collecting data.
+
+Tone for all outcome follow-up: curious, observational, conversational, investigative. Never clinical or transactional.
+
+Preferred language:
+"I'm curious what happened..."
+"What did you notice when..."
+"One thing I'm curious about..."
+
+Avoid: "Please report your outcome." / "Submit feedback." / "Log results."
+
+Immediate Experiment Framing
+
+Every time you deliver an adjustment, frame the next step as an experiment with a natural endpoint. Always indicate when the user should evaluate the adjustment so the experiment has a clear close.
+
+Example patterns:
+"Try that the next time that movement happens. When you do, tell me what you notice."
+"Try that during your next rally. I'm curious what changes."
+"Pay attention the next few times that movement occurs and let me know what you notice."
+
+Passive Follow-Up Within the Same Conversation
+
+If the user continues the conversation without reporting results, naturally follow up on the open experiment. These prompts must feel like part of the investigation, not a request for data.
+
+Example patterns:
+"One thing I'm curious about — what happened when you tried that adjustment?"
+"I'm curious what you noticed when you tried that."
+"What changed when you tested that?"
+
+Follow-Up at the Start of a Future Session
+
+If the user returns for a new session and there is an open experiment in the stored session history, check in before starting a new investigation.
+
+Example patterns:
+"Before we start something new — I'm curious what happened when you tried that adjustment last time."
+"Last time we talked about trying an adjustment. What did you notice when you tried it?"
+
+Outcome Capture
+
+When the user responds with results, you may optionally clarify the outcome if the description is ambiguous.
+
+Example: "Would you say it felt better, worse, the same, or not sure yet?"
+
+Always allow the user to describe outcomes in their own words first. Support both natural and structured replies.
+
+Key behavioral principle: You are an investigator tracking experiments. Not a tool collecting reports.
+`;
 
 function clampText(s: string, max = 800): string {
   const t = (s ?? "").trim();
@@ -258,25 +287,160 @@ function clampText(s: string, max = 800): string {
   return t.length > max ? t.slice(0, max) + "…" : t;
 }
 
-/* =====================================================
-   ROUTES
-===================================================== */
+function detectOutcomeResult(
+  text: string,
+): "Improved" | "Worse" | "Same" | null {
+  const input = text.trim();
+
+  const improved =
+    /\b(helped|worked|better|improved|fixed|that did it|feels better|much better|way better|significantly better|a lot better|relieved|less pain|less tight|lighter|smoother)\b/i;
+
+  const worse =
+    /\b(worse|hurt more|hurts more|pain increased|more pain|aggravated|made it worse|tighter|more tight|more strain|more uncomfortable)\b/i;
+
+  const same =
+    /\b(no change|same|still the same|didn't help|didnt help|no difference|not different|unchanged)\b/i;
+
+  if (improved.test(input)) return "Improved";
+  if (worse.test(input)) return "Worse";
+  if (same.test(input)) return "Same";
+
+  return null;
+}
+
+async function getStoredSessionHistory(
+  userId: string,
+  currentConversationId: number,
+): Promise<string> {
+  const recentConvos = await db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.userId, userId),
+        ne(conversations.id, currentConversationId),
+      ),
+    )
+    .orderBy(desc(conversations.id))
+    .limit(6);
+
+  if (recentConvos.length === 0) return "";
+
+  const sessionBlocks: string[] = [];
+
+  for (const convo of recentConvos) {
+    if (convo.summary) {
+      sessionBlocks.push(
+        `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\nSummary: ${convo.summary}`,
+      );
+      continue;
+    }
+
+    const convoMessages = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, convo.id))
+      .orderBy(asc(messages.createdAt));
+
+    if (convoMessages.length === 0) continue;
+
+    const lines = convoMessages
+      .map(
+        (m) =>
+          `  ${m.role === "user" ? "User" : "Interloop"}: ${String(m.content ?? "")}`,
+      )
+      .join("\n");
+
+    sessionBlocks.push(
+      `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\n${lines}`,
+    );
+  }
+
+  if (sessionBlocks.length === 0) return "";
+
+  return (
+    "\n\n=== STORED SESSION HISTORY ===\n" +
+    "The following are real stored records of previous conversations with this user. " +
+    "Use this data when the user asks about past sessions.\n\n" +
+    sessionBlocks.join("\n\n")
+  );
+}
+
+async function getOpenExperimentBlock(userId: string): Promise<string> {
+  const unresolved = await db
+    .select({
+      caseId: caseAdjustments.caseId,
+      adjustmentId: caseAdjustments.id,
+      cue: caseAdjustments.cue,
+      mechanicalFocus: caseAdjustments.mechanicalFocus,
+    })
+    .from(caseAdjustments)
+    .innerJoin(cases, eq(caseAdjustments.caseId, cases.id))
+    .leftJoin(caseOutcomes, eq(caseAdjustments.id, caseOutcomes.adjustmentId))
+    .where(and(eq(cases.userId, userId), isNull(caseOutcomes.id)))
+    .orderBy(desc(caseAdjustments.id))
+    .limit(1);
+
+  if (unresolved.length === 0) return "";
+
+  const latest = unresolved[0];
+
+  return `
+
+=== OPEN EXPERIMENT ===
+The user previously received an adjustment that has not yet been evaluated.
+
+Adjustment:
+${latest.cue ?? "Previous movement adjustment"}
+
+Before beginning a new investigation, check the result of this experiment naturally.
+
+Preferred phrasing examples:
+"Before we start something new — I'm curious what happened when you tried that adjustment."
+"Last time we talked about trying an adjustment. What did you notice when you tried it?"
+`;
+}
+
+async function recordOutcomeIfDetected(
+  userId: string,
+  userText: string,
+): Promise<void> {
+  const result = detectOutcomeResult(userText);
+  if (!result) return;
+
+  const unresolved = await db
+    .select({
+      adjustmentId: caseAdjustments.id,
+      caseId: caseAdjustments.caseId,
+    })
+    .from(caseAdjustments)
+    .innerJoin(cases, eq(caseAdjustments.caseId, cases.id))
+    .leftJoin(caseOutcomes, eq(caseAdjustments.id, caseOutcomes.adjustmentId))
+    .where(and(eq(cases.userId, userId), isNull(caseOutcomes.id)))
+    .orderBy(desc(caseAdjustments.id))
+    .limit(1);
+
+  if (unresolved.length === 0) return;
+
+  const latest = unresolved[0];
+
+  await db.insert(caseOutcomes).values({
+    caseId: latest.caseId,
+    adjustmentId: latest.adjustmentId,
+    result,
+    userFeedback: userText,
+  });
+}
 
 export async function registerRoutes(
   _httpServer: HTTPServer,
   app: Express,
 ): Promise<void> {
-  /* ================= ANALYTICS (registered first, before Vite catch-all) ================= */
-
   registerAnalyticsRoutes(app);
-
-  /* ================= HEALTH ================= */
 
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ ok: true });
   });
-
-  /* ================= STT ================= */
 
   app.post("/api/stt", async (req: Request, res: Response) => {
     try {
@@ -293,18 +457,14 @@ export async function registerRoutes(
         model: "whisper-1",
       });
 
-      res.json({
-        transcript: transcription.text,
-      });
+      res.json({ transcript: transcription.text });
     } catch (error) {
       console.error("STT error:", error);
       res.status(500).json({ error: "STT failed" });
     }
   });
 
-  /* ================= TTS ================= */
-
-  let ttsQueue: Promise<any> = Promise.resolve();
+  let ttsQueue: Promise<string> = Promise.resolve("");
 
   app.post("/api/tts", async (req: Request, res: Response) => {
     try {
@@ -343,8 +503,6 @@ export async function registerRoutes(
     }
   });
 
-  /* ================= CONVERSATIONS LIST ================= */
-
   app.get("/api/conversations", async (req: Request, res: Response) => {
     try {
       const authUser = req.user as any;
@@ -367,8 +525,6 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to load conversations" });
     }
   });
-
-  /* ================= CONVERSATION HISTORY ================= */
 
   app.get(
     "/api/conversations/:id/messages",
@@ -414,8 +570,6 @@ export async function registerRoutes(
       }
     },
   );
-
-  /* ================= CHAT ================= */
 
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
@@ -466,7 +620,6 @@ export async function registerRoutes(
       }
 
       let memory: InterloopMemory | null = null;
-
       try {
         memory = await getMemory(userId);
       } catch (err) {
@@ -474,6 +627,12 @@ export async function registerRoutes(
       }
 
       const signalPatterns = await getSignalPatterns(userId);
+
+      try {
+        await recordOutcomeIfDetected(userId, userText);
+      } catch (err) {
+        console.warn("Outcome detection failed:", err);
+      }
 
       let caseId: number | null = null;
       let hypothesisId: number | null = null;
@@ -499,11 +658,10 @@ export async function registerRoutes(
 
           for (const s of signals) {
             await db.insert(caseSignals).values({
-              caseId,
-              userId,
+              caseId: caseId!,
+              userId: userId,
               bodyRegion: null,
               signalType: s.type,
-              signal: s.signal,
               movementContext: s.movementContext ?? "general",
               activityType: s.activityType ?? "unknown",
               description: s.signal,
@@ -524,128 +682,47 @@ export async function registerRoutes(
         console.warn("Case dataset pipeline failed:", err);
       }
 
-      try {
-        const improvementPattern =
-          /\b(helped|worked|better|improved|fixed|that did it|feels better|much better|great|perfect|yes|exactly)\b/i;
-
-        if (improvementPattern.test(userText)) {
-          const latestAdjustment = await db
-            .select()
-            .from(caseAdjustments)
-            .innerJoin(cases, eq(caseAdjustments.caseId, cases.id))
-            .where(eq(cases.userId, userId))
-            .orderBy(desc(caseAdjustments.id))
-            .limit(1);
-
-          if (latestAdjustment.length > 0) {
-            const adj = latestAdjustment[0].case_adjustments;
-
-            await db.insert(caseOutcomes).values({
-              caseId: adj.caseId,
-              adjustmentId: adj.id,
-              result: "Improved",
-              userFeedback: userText,
-            });
-          }
-        }
-      } catch (err) {
-        console.warn("Outcome detection failed:", err);
-      }
-
       await db.insert(messages).values({
         conversationId: convoId,
         role: "user",
         content: userText,
       });
 
-      // Load current conversation messages
       const previous = await db
         .select()
         .from(messages)
         .where(eq(messages.conversationId, convoId))
         .orderBy(asc(messages.createdAt));
 
-      // Load recent conversations for cross-session context
       let storedSessionHistory = "";
       try {
-        const recentConvos = await db
-          .select()
-          .from(conversations)
-          .where(
-            and(
-              eq(conversations.userId, userId),
-              ne(conversations.id, convoId),
-            ),
-          )
-          .orderBy(desc(conversations.id))
-          .limit(6);
-
-        if (recentConvos.length > 0) {
-          const sessionBlocks: string[] = [];
-
-          for (const convo of recentConvos) {
-            if (convo.summary) {
-              sessionBlocks.push(
-                `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\nSummary: ${convo.summary}`,
-              );
-            } else {
-              const msgs = await db
-                .select()
-                .from(messages)
-                .where(eq(messages.conversationId, convo.id))
-                .orderBy(asc(messages.createdAt));
-
-              if (msgs.length === 0) continue;
-
-              const lines = msgs
-                .map(
-                  (m) =>
-                    `  ${m.role === "user" ? "User" : "Interloop"}: ${String(m.content ?? "")}`,
-                )
-                .join("\n");
-
-              sessionBlocks.push(
-                `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\n${lines}`,
-              );
-            }
-          }
-
-          if (sessionBlocks.length > 0) {
-            storedSessionHistory =
-              "\n\n=== STORED SESSION HISTORY ===\n" +
-              "The following are real stored records of previous conversations with this user. " +
-              "Use this data when the user asks about past sessions.\n\n" +
-              sessionBlocks.join("\n\n");
-          }
-        }
+        storedSessionHistory = await getStoredSessionHistory(userId, convoId);
       } catch (err) {
         console.warn("Recent session context load failed:", err);
       }
 
-      // DEBUG — remove after confirming memory injection works
-      console.log(
-        "[MEMORY DEBUG] userId:",
-        userId,
-        "| convoId:",
-        convoId,
-        "| storedSessionHistory length:",
-        storedSessionHistory.length,
-        "| preview:",
-        storedSessionHistory.slice(0, 400) ||
-          "(empty — no past sessions found)",
-      );
+      let openExperimentBlock = "";
+      try {
+        openExperimentBlock = await getOpenExperimentBlock(userId);
+      } catch (err) {
+        console.warn("Open experiment lookup failed:", err);
+      }
 
       const memoryBlock =
-        memory && Object.keys(memory).length
+        memory && Object.keys(memory).length > 0
           ? `\n\n=== USER MEMORY ===\n${JSON.stringify(memory, null, 2)}`
           : "";
 
       const chatMessages: ChatCompletionMessageParam[] = [
         {
           role: "system",
-          content: SYSTEM_PROMPT + memoryBlock + storedSessionHistory,
+          content:
+            SYSTEM_PROMPT +
+            memoryBlock +
+            storedSessionHistory +
+            openExperimentBlock,
         },
-        ...previous.slice(-12).map((m) => ({
+        ...previous.slice(-20).map((m) => ({
           role: m.role as "user" | "assistant",
           content: String(m.content ?? ""),
         })),
@@ -683,7 +760,6 @@ export async function registerRoutes(
         if (delta === lastDelta) continue;
 
         lastDelta = delta;
-
         assistantText += delta;
         sentenceBuffer += delta;
 
@@ -808,9 +884,7 @@ export async function registerRoutes(
       console.error("[/api/chat error]", err);
 
       if (!res.headersSent) {
-        res.status(500).json({
-          error: "Server error occurred.",
-        });
+        res.status(500).json({ error: "Server error occurred." });
       } else {
         try {
           res.end();
@@ -818,8 +892,6 @@ export async function registerRoutes(
       }
     }
   });
-
-  /* ================= OUTCOME CAPTURE ================= */
 
   app.post("/api/outcome", async (req: Request, res: Response) => {
     try {
@@ -841,10 +913,7 @@ export async function registerRoutes(
       res.json({ ok: true });
     } catch (err) {
       console.error("Outcome capture failed:", err);
-
-      res.status(500).json({
-        error: "Failed to store outcome",
-      });
+      res.status(500).json({ error: "Failed to store outcome" });
     }
   });
 }
