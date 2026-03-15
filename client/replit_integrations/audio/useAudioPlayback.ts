@@ -84,7 +84,7 @@ export function useAudioPlayback() {
   }, []);
 
   /* ================= PLAY NEXT ================= */
-  const playNext = useCallback(() => {
+  const playNext = useCallback(async () => {
     const audio = audioRef.current;
     if (!audio) return;
 
@@ -93,6 +93,13 @@ export function useAudioPlayback() {
     if (!next) {
       setState("ended");
       return;
+    }
+
+    // Ensure AudioContext is active before playback
+    if (audioCtxRef.current?.state === "suspended") {
+      try {
+        await audioCtxRef.current.resume();
+      } catch {}
     }
 
     playingRef.current = true;
