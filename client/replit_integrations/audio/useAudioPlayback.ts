@@ -116,7 +116,14 @@ export function useAudioPlayback() {
 
   /* ================= PUSH AUDIO ================= */
   const pushAudio = useCallback(
-    (base64Audio: string) => {
+    async (base64Audio: string) => {
+      // Ensure AudioContext is active before any playback
+      if (audioCtxRef.current?.state === "suspended") {
+        try {
+          await audioCtxRef.current.resume();
+        } catch {}
+      }
+
       queueRef.current.push(base64Audio);
 
       if (!playingRef.current) {
