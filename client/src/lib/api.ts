@@ -1,7 +1,7 @@
 /**
  * ======================================================
  * CLIENT API — INTERLOOP
- * Persistent Conversation Version — M3.3
+ * Persistent Conversation Version — M3.5
  * ======================================================
  */
 
@@ -61,12 +61,17 @@ export async function sendMessage(
         const event = JSON.parse(payload);
 
         if (event.meta?.conversationId) {
-          activeConversationId = event.meta.conversationId;
-          onConversationId(event.meta.conversationId);
+          const id = Number(event.meta.conversationId);
+          activeConversationId = Number.isFinite(id) ? id : null;
+
+          if (Number.isFinite(id)) {
+            onConversationId(id);
+          }
+
           continue;
         }
 
-        if (event.content) {
+        if (typeof event.content === "string" && event.content.length > 0) {
           onChunk(event.content);
         }
       } catch {
@@ -104,28 +109,37 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   }
 
   const data = await res.json();
-  return data?.transcript ?? "";
+  return typeof data?.transcript === "string" ? data.transcript : "";
 }
 
 /* ======================================================
    SENTENCE SEGMENTER
-   Preserves numbered lists and abbreviations
 ====================================================== */
 
 function segmentText(text: string): string[] {
   if (!text) return [];
 
-  // Normalize numbered lists
   const normalized = text.replace(/(\d+)\.\s*/g, "\n$1. ");
-
-  // Split only on clear sentence endings
   const parts = normalized.split(/(?<=[.!?])\s+/);
 
   return parts.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /* ======================================================
-   TTS (Sequential — preserves order for ElevenLabs)
+   BASE64 NORMALIZATION
+====================================================== */
+
+function normalizeBase64Audio(input: string): string {
+  if (!input || typeof input !== "string") return "";
+
+  return input
+    .replace(/^data:audio\/[a-zA-Z0-9.+-]+;base64,/, "")
+    .replace(/\s+/g, "")
+    .trim();
+}
+
+/* ======================================================
+   TTS (Sequential — stable)
 ====================================================== */
 
 export async function streamTTS(
@@ -136,8 +150,9 @@ export async function streamTTS(
   if (!text || !text.trim()) return;
 
   const voice = options?.voice ?? "female";
-
   const sentences = segmentText(text);
+
+  let successCount = 0;
 
   for (const sentence of sentences) {
     try {
@@ -151,15 +166,34 @@ export async function streamTTS(
         }),
       });
 
-      if (!res.ok) continue;
+      if (!res.ok) {
+        console.error("TTS request failed:", res.status, res.statusText);
+        continue;
+      }
 
       const data = await res.json();
 
-      if (data?.audio) {
-        onChunk(data.audio);
+      if (!data?.audio || typeof data.audio !== "string") {
+        console.error("Invalid TTS response:", data);
+        continue;
       }
-    } catch {
-      console.error("TTS request failed");
+
+      const normalized = normalizeBase64Audio(data.audio);
+
+      if (!normalized) {
+        console.error("TTS audio normalization failed");
+        continue;
+      }
+
+      successCount += 1;
+      console.log("TTS chunk received:", normalized.slice(0, 50));
+      onChunk(normalized);
+    } catch (err) {
+      console.error("TTS request failed:", err);
     }
+  }
+
+  if (successCount === 0) {
+    throw new Error("TTS produced zero audio chunks");
   }
 }

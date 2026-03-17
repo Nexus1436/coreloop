@@ -6,65 +6,135 @@ export function useAudioPlayback() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const queueRef = useRef<string[]>([]);
   const playingRef = useRef(false);
+  const streamCompleteRef = useRef(false);
+
   const [state, setState] = useState<PlaybackState>("idle");
 
-  // Web Audio API refs for real-time amplitude
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceConnectedRef = useRef(false);
   const dataArrayRef = useRef<Uint8Array | null>(null);
 
+  /* ================= CHECK IF DONE ================= */
+  const checkIfDone = useCallback(() => {
+    if (
+      streamCompleteRef.current &&
+      !playingRef.current &&
+      queueRef.current.length === 0
+    ) {
+      setState("ended");
+    }
+  }, []);
+
+  /* ================= PLAY NEXT ================= */
+  const playNextRef = useRef<(() => Promise<void>) | undefined>(undefined);
+
+  const playNext = useCallback(async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const next = queueRef.current.shift();
+
+    if (!next) {
+      playingRef.current = false;
+      checkIfDone();
+      return;
+    }
+
+    if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
+      try {
+        await audioCtxRef.current.resume();
+      } catch (e) {
+        console.error("AudioContext resume failed:", e);
+      }
+    }
+
+    playingRef.current = true;
+    setState("playing");
+
+    audio.onended = () => {
+      playingRef.current = false;
+      playNextRef.current?.();
+    };
+
+    audio.onerror = () => {
+      console.error("AUDIO ERROR:", audio.error);
+      console.error("BAD SRC SAMPLE:", audio.src?.slice(0, 80));
+      playingRef.current = false;
+      checkIfDone();
+    };
+
+    audio.src = `data:audio/mpeg;base64,${next}`;
+
+    try {
+      await audio.play();
+      console.log("audio.play() SUCCESS");
+    } catch (err) {
+      console.error("audio.play() FAILED:", err);
+      playingRef.current = false;
+      checkIfDone();
+    }
+  }, [checkIfDone]);
+
+  useEffect(() => {
+    playNextRef.current = playNext;
+  }, [playNext]);
+
   /* ================= INIT ================= */
   const init = useCallback(async () => {
+    // MUST be called from user gesture (tap)
+
     if (!audioRef.current) {
       const audio = new Audio();
       audio.preload = "auto";
       audio.volume = 1.0;
-      audio.crossOrigin = "anonymous";
-      audio.onended = () => {
-        playingRef.current = false;
-        playNext();
-      };
       audioRef.current = audio;
     }
 
-    // Set up Web Audio analyser once
     if (!audioCtxRef.current) {
       const ctx = new AudioContext();
+
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.75;
+
       const bufferLength = analyser.frequencyBinCount;
       dataArrayRef.current = new Uint8Array(bufferLength);
 
       analyser.connect(ctx.destination);
+
       audioCtxRef.current = ctx;
       analyserRef.current = analyser;
     }
 
-    // Connect audio element to analyser (once)
     if (
       audioRef.current &&
       audioCtxRef.current &&
       !sourceConnectedRef.current
     ) {
-      const source = audioCtxRef.current.createMediaElementSource(
-        audioRef.current,
-      );
-      source.connect(analyserRef.current!);
-      sourceConnectedRef.current = true;
+      try {
+        const source = audioCtxRef.current.createMediaElementSource(
+          audioRef.current,
+        );
+        source.connect(analyserRef.current!);
+        sourceConnectedRef.current = true;
+      } catch {}
     }
 
-    // Resume context if browser suspended it
-    if (audioCtxRef.current?.state === "suspended") {
-      await audioCtxRef.current.resume();
+    if (audioCtxRef.current.state === "suspended") {
+      try {
+        await audioCtxRef.current.resume();
+      } catch (e) {
+        console.error("AudioContext resume failed:", e);
+      }
     }
   }, []);
 
-  /* ================= AUTO INIT ================= */
-  useEffect(() => {
-    init();
-  }, [init]);
+  /* ❌ CRITICAL FIX: REMOVE AUTO INIT */
+  // DO NOT auto-init on mount
+  // useEffect(() => {
+  //   init();
+  // }, [init]);
 
   /* ================= GET AMPLITUDE ================= */
   const getAmplitude = useCallback((): number => {
@@ -76,6 +146,7 @@ export function useAudioPlayback() {
 
     const slice = Math.floor(dataArray.length / 2);
     let sum = 0;
+
     for (let i = 0; i < slice; i++) {
       sum += dataArray[i];
     }
@@ -83,42 +154,10 @@ export function useAudioPlayback() {
     return sum / (slice * 255);
   }, []);
 
-  /* ================= PLAY NEXT ================= */
-  const playNext = useCallback(async () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const next = queueRef.current.shift();
-
-    if (!next) {
-      setState("ended");
-      return;
-    }
-
-    // Ensure AudioContext is active before playback
-    if (audioCtxRef.current?.state === "suspended") {
-      try {
-        await audioCtxRef.current.resume();
-      } catch {}
-    }
-
-    playingRef.current = true;
-    setState("playing");
-
-    audio.src = `data:audio/mpeg;base64,${next}`;
-
-    const playPromise = audio.play();
-
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {});
-    }
-  }, []);
-
   /* ================= PUSH AUDIO ================= */
   const pushAudio = useCallback(
     async (base64Audio: string) => {
-      // Ensure AudioContext is active before any playback
-      if (audioCtxRef.current?.state === "suspended") {
+      if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
         try {
           await audioCtxRef.current.resume();
         } catch {}
@@ -128,14 +167,6 @@ export function useAudioPlayback() {
 
       if (!playingRef.current) {
         playNext();
-        return;
-      }
-
-      const audio = audioRef.current;
-
-      if (audio && queueRef.current.length === 1) {
-        const preload = new Audio(`data:audio/mpeg;base64,${base64Audio}`);
-        preload.preload = "auto";
       }
     },
     [playNext],
@@ -148,7 +179,9 @@ export function useAudioPlayback() {
 
     queueRef.current = [];
     playingRef.current = false;
+    streamCompleteRef.current = false;
 
+    audio.onended = null;
     audio.pause();
     audio.currentTime = 0;
     audio.src = "";
@@ -163,7 +196,9 @@ export function useAudioPlayback() {
 
     queueRef.current = [];
     playingRef.current = false;
+    streamCompleteRef.current = false;
 
+    audio.onended = null;
     audio.pause();
     audio.currentTime = 0;
     audio.src = "";
@@ -173,10 +208,9 @@ export function useAudioPlayback() {
 
   /* ================= SIGNAL COMPLETE ================= */
   const signalComplete = useCallback(() => {
-    if (!playingRef.current && queueRef.current.length === 0) {
-      setState("ended");
-    }
-  }, []);
+    streamCompleteRef.current = true;
+    checkIfDone();
+  }, [checkIfDone]);
 
   return {
     state,

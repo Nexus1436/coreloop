@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 
 import { CentralForm } from "@/components/central-form";
 import { ChatView } from "@/components/chat-view";
@@ -19,10 +19,6 @@ function nextId() {
   return String(++messageCounter);
 }
 
-/* =====================================================
-   STREAM MERGE FIX
-===================================================== */
-
 function mergeStream(existing: string, incoming: string) {
   const maxOverlap = Math.min(existing.length, incoming.length);
 
@@ -34,10 +30,6 @@ function mergeStream(existing: string, incoming: string) {
 
   return existing + incoming;
 }
-
-/* =====================================================
-   STREAM CHAT
-===================================================== */
 
 async function sendChat(
   conversationId: number | null,
@@ -94,18 +86,6 @@ async function sendChat(
   }
 }
 
-/* =====================================================
-   ONBOARDING MESSAGE
-   Shown once to brand-new users with no conversations
-===================================================== */
-
-const ONBOARDING_TEXT =
-  "Welcome to Interloop. Hi, I'm Interloop. I'm going to be your movement companion over time, helping you investigate how your body moves and how small adjustments affect it. Think of this as an ongoing process. We'll notice movement signals together, try small experiments, and see what changes. The more you use me — and the more clearly you tell me what you notice and what happens after you try something — the better I can help you. I work best when you describe things in your own words. You don't need to be concise. You can ramble a little if you want and talk through what you're feeling, what movements feel strange, and what you've already tried. If you ever feel stuck or unsure what to say, just ask me. I'll guide you. For example, you might say something like: When I go downstairs my knee feels like it catches near the bottom step. Or, My shoulder feels fine until I raise my arm above my head, then it feels tight in the front. So let's start with this: What movement or sensation have you noticed recently that feels off, different, or uncomfortable? Just talk it through. I'm listening.";
-
-/* =====================================================
-   COMPONENT
-===================================================== */
-
 export default function Home() {
   const [mode, setMode] = useState<"A" | "B">("A");
 
@@ -117,13 +97,14 @@ export default function Home() {
   }, [conversationId]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasExchanged, setHasExchanged] = useState(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   const [voiceGender, setVoiceGender] = useState<"male" | "female">("female");
-  const voiceGenderRef = useRef<"male" | "female">(voiceGender);
+  const voiceGenderRef = useRef(voiceGender);
 
   useEffect(() => {
     voiceGenderRef.current = voiceGender;
@@ -133,72 +114,43 @@ export default function Home() {
   const recorder = useVoiceRecorder();
 
   const stopRequestedRef = useRef(false);
+  const playbackStateRef = useRef(playback.state);
+
+  const lastSpokenTextRef = useRef<string>("");
   const lastAudioChunksRef = useRef<string[]>([]);
 
-  const lastResponse = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") return messages[i].text;
-    }
-    return null;
-  }, [messages]);
-
-  /* =====================================================
-     LOAD LATEST CONVERSATION (+ ONBOARDING FOR NEW USERS)
-  ===================================================== */
-
+  /* ================= LOAD PREVIOUS CONVERSATION ================= */
   useEffect(() => {
-    async function loadLatestConversation() {
+    async function loadConversation() {
       try {
-        const resp = await fetch("/api/conversations", {
-          credentials: "include",
-        });
+        let conversationIdToUse: number | null = null;
 
-        if (!resp.ok) return;
+        const storedId = localStorage.getItem("conversationId");
 
-        const data = await resp.json();
-        const convs = data?.conversations;
+        if (storedId && Number.isFinite(Number(storedId))) {
+          conversationIdToUse = Number(storedId);
+        } else {
+          const resp = await fetch("/api/conversations", {
+            credentials: "include",
+          });
 
-        // NEW USER — no conversations yet: show onboarding message
-        if (!Array.isArray(convs) || convs.length === 0) {
-          setMessages([
-            {
-              id: nextId(),
-              role: "assistant",
-              text: ONBOARDING_TEXT,
-            },
-          ]);
+          if (!resp.ok) return;
 
-          try {
-            await playback.init();
-            stopRequestedRef.current = false;
-            setIsSpeaking(true);
-            await streamTTS(
-              ONBOARDING_TEXT,
-              (audioChunk: string) => {
-                if (!stopRequestedRef.current) {
-                  playback.pushAudio(audioChunk);
-                }
-              },
-              { voice: voiceGenderRef.current },
-            );
-            if (!stopRequestedRef.current) {
-              playback.signalComplete();
-            }
-          } catch (err) {
-            console.error("Onboarding TTS failed:", err);
-            setIsSpeaking(false);
-          }
+          const data = await resp.json();
+          const convs = data?.conversations;
 
-          return;
+          if (!Array.isArray(convs) || convs.length === 0) return;
+
+          const latestId = Number(convs[0].id);
+          if (!Number.isFinite(latestId)) return;
+
+          conversationIdToUse = latestId;
         }
 
-        // RETURNING USER — load their latest conversation
-        const latestId = Number(convs[0].id);
-        if (!Number.isFinite(latestId)) return;
-
-        const msgResp = await fetch(`/api/conversations/${latestId}/messages`, {
-          credentials: "include",
-        });
+        const msgResp = await fetch(
+          `/api/conversations/${conversationIdToUse}/messages`,
+          { credentials: "include" },
+        );
 
         if (!msgResp.ok) return;
 
@@ -207,41 +159,98 @@ export default function Home() {
 
         if (!Array.isArray(rows)) return;
 
-        conversationIdRef.current = latestId;
-        setConversationId(latestId);
+        conversationIdRef.current = conversationIdToUse;
+        setConversationId(conversationIdToUse);
+        localStorage.setItem("conversationId", String(conversationIdToUse));
 
-        setMessages(
-          rows.map((m: any) => ({
-            id: String(m.id),
-            role: m.role,
-            text: m.content,
-          })),
-        );
+        const loaded = rows.map((m: any) => ({
+          id: String(m.id),
+          role: m.role,
+          text: m.content,
+        }));
+
+        setMessages(loaded);
+
+        messageCounter = loaded.length; // ✅ FIX #1
+
+        if (loaded.some((m) => m.role === "user")) {
+          setHasExchanged(true);
+        }
       } catch (err) {
         console.error("Load conversation failed:", err);
       }
     }
 
-    loadLatestConversation();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    loadConversation();
   }, []);
 
-  /* =====================================================
-     SPEAKING STATE SYNC
-  ===================================================== */
-
   useEffect(() => {
+    playbackStateRef.current = playback.state;
+
     if (playback.state === "ended" || playback.state === "idle") {
       setIsSpeaking(false);
     }
   }, [playback.state]);
 
-  /* =====================================================
-     CASE REVIEW
-  ===================================================== */
+  const waitForPlaybackToFinish = useCallback(async () => {
+    while (
+      playbackStateRef.current === "playing" &&
+      !stopRequestedRef.current
+    ) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }, []);
+
+  const stopSpeech = useCallback(() => {
+    stopRequestedRef.current = true;
+    playback.stop();
+    setIsSpeaking(false);
+    setIsProcessing(false);
+    setIsRecording(false);
+  }, [playback]);
+
+  const speakText = useCallback(
+    async (text: string) => {
+      if (!text?.trim()) return;
+
+      lastSpokenTextRef.current = text;
+
+      stopRequestedRef.current = false;
+
+      await playback.init();
+      playback.stop();
+
+      setIsSpeaking(true);
+
+      try {
+        await streamTTS(
+          text,
+          (chunk) => {
+            if (!stopRequestedRef.current) {
+              playback.pushAudio(chunk);
+            }
+          },
+          { voice: voiceGenderRef.current },
+        );
+
+        if (!stopRequestedRef.current) {
+          playback.signalComplete();
+        }
+
+        await waitForPlaybackToFinish();
+      } catch (err) {
+        console.error("TTS failed:", err);
+      } finally {
+        if (!stopRequestedRef.current) {
+          setIsSpeaking(false);
+        }
+      }
+    },
+    [playback, waitForPlaybackToFinish],
+  );
 
   const runCaseReview = async () => {
-    if (isProcessing || isRecording) return;
+    if (isProcessing || isRecording || isSpeaking) return;
 
     setIsProcessing(true);
 
@@ -257,33 +266,13 @@ export default function Home() {
     let assistantText = "";
 
     try {
-      stopRequestedRef.current = false;
-      playback.stop();
-      // Clear isProcessing so label shows "Press here to stop" not "Reflecting..."
-      setIsProcessing(false);
-      setIsSpeaking(true);
-
-      await streamTTS(
-        "I've been reflecting on your case. Give me a minute and I'll let you know what I found.",
-        (chunk) => {
-          if (!stopRequestedRef.current) playback.pushAudio(chunk);
-        },
-        { voice: voiceGenderRef.current },
-      );
-
-      if (!stopRequestedRef.current) playback.signalComplete();
-      if (stopRequestedRef.current) return;
-
-      // Re-enter processing state for the AI call (label: "Reflecting...")
-      setIsSpeaking(false);
-      setIsProcessing(true);
-
       await sendChat(
         conversationIdRef.current,
         "Case review",
         (id) => {
           conversationIdRef.current = id;
           setConversationId(id);
+          localStorage.setItem("conversationId", String(id));
         },
         (chunk) => {
           assistantText = mergeStream(assistantText, chunk);
@@ -296,126 +285,47 @@ export default function Home() {
         },
       );
 
-      if (stopRequestedRef.current) return;
+      lastSpokenTextRef.current = assistantText; // ✅ FIX #2
 
-      // Back to speaking for the full response
       setIsProcessing(false);
-      playback.stop();
-      setIsSpeaking(true);
 
-      await streamTTS(
-        assistantText,
-        (audioChunk) => {
-          if (!stopRequestedRef.current) playback.pushAudio(audioChunk);
-        },
-        { voice: voiceGenderRef.current },
-      );
-
-      if (!stopRequestedRef.current) playback.signalComplete();
-    } catch (err) {
-      console.error("Case review failed:", err);
+      if (assistantText.trim()) {
+        await speakText(assistantText);
+      }
     } finally {
       setIsProcessing(false);
-      setIsSpeaking(false);
     }
   };
 
-  /* =====================================================
-     REPEAT RESPONSE
-  ===================================================== */
-
-  const repeatLast = async () => {
-    if (!lastResponse) return;
-
-    playback.stop();
-    stopRequestedRef.current = false;
-    setIsSpeaking(true);
-
-    await streamTTS(lastResponse, (chunk) => playback.pushAudio(chunk), {
-      voice: voiceGenderRef.current,
-    });
-
-    playback.signalComplete();
-  };
-
-  /* =====================================================
-     TAP FLOW
-  ===================================================== */
-
   const handleTap = useCallback(async () => {
-    // If speaking — stop
     if (isSpeaking) {
-      stopRequestedRef.current = true;
-      playback.stop();
-      setIsSpeaking(false);
-      setIsProcessing(false);
+      stopSpeech();
       return;
     }
 
     if (isProcessing) return;
 
-    // START RECORDING
     if (!isRecording) {
-      try {
-        stopRequestedRef.current = true;
-        playback.stop();
-        setIsSpeaking(false);
-        await recorder.startRecording();
-        setIsRecording(true);
-      } catch (err) {
-        console.error("Mic failed:", err);
-      }
+      await playback.init();
+      await recorder.startRecording();
+      setIsRecording(true);
       return;
     }
 
-    // STOP RECORDING → process
     setIsRecording(false);
     setIsProcessing(true);
 
     try {
       const blob = await recorder.stopRecording();
-
-      // ── 2s natural delay then "I hear you." ──
-      const hearYouId = nextId();
-      await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-
-      setMessages((prev) => [
-        ...prev,
-        { id: hearYouId, role: "assistant", text: "I hear you." },
-      ]);
-
-      // Speak "I hear you." non-blocking
-      playback.init().then(() => {
-        stopRequestedRef.current = false;
-        setIsSpeaking(true);
-        streamTTS(
-          "I hear you.",
-          (audioChunk: string) => {
-            if (!stopRequestedRef.current) {
-              playback.pushAudio(audioChunk);
-            }
-          },
-          { voice: voiceGenderRef.current },
-        )
-          .then(() => {
-            if (!stopRequestedRef.current) playback.signalComplete();
-          })
-          .catch(() => {});
-      });
-
       const transcript = await transcribeAudio(blob);
 
-      if (!transcript) {
-        setMessages((prev) => prev.filter((m) => m.id !== hearYouId));
-        setIsProcessing(false);
-        return;
-      }
+      if (!transcript) return;
 
       const userId = nextId();
       const assistantId = nextId();
 
       setMessages((prev) => [
-        ...prev.filter((m) => m.id !== hearYouId),
+        ...prev,
         { id: userId, role: "user", text: transcript },
         { id: assistantId, role: "assistant", text: "" },
       ]);
@@ -428,9 +338,11 @@ export default function Home() {
         (id) => {
           conversationIdRef.current = id;
           setConversationId(id);
+          localStorage.setItem("conversationId", String(id));
         },
         (chunk) => {
           assistantText = mergeStream(assistantText, chunk);
+
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId ? { ...m, text: assistantText } : m,
@@ -439,47 +351,33 @@ export default function Home() {
         },
       );
 
-      stopRequestedRef.current = false;
-      await playback.init();
-      setIsSpeaking(true);
+      lastSpokenTextRef.current = assistantText; // ✅ FIX #2
 
-      lastAudioChunksRef.current = [];
+      setHasExchanged(true);
+      setIsProcessing(false);
 
-      await streamTTS(
-        assistantText,
-        (audioChunk: string) => {
-          if (!stopRequestedRef.current) {
-            lastAudioChunksRef.current.push(audioChunk);
-            playback.pushAudio(audioChunk);
-          }
-        },
-        { voice: voiceGenderRef.current },
-      );
-
-      if (!stopRequestedRef.current) {
-        playback.signalComplete();
+      if (assistantText.trim()) {
+        await speakText(assistantText);
       }
-    } catch (err) {
-      console.error("Voice interaction failed:", err);
     } finally {
       setIsProcessing(false);
+      setIsRecording(false);
     }
-  }, [isSpeaking, isProcessing, isRecording, playback, recorder]);
-
-  /* =====================================================
-     RENDER
-  ===================================================== */
+  }, [
+    isSpeaking,
+    isProcessing,
+    isRecording,
+    recorder,
+    speakText,
+    stopSpeech,
+    playback,
+  ]);
 
   return (
     <div className="min-h-screen w-full bg-black relative overflow-hidden">
       {mode === "A" ? (
         <>
-          {/* Logo + label: absolutely centered on screen */}
-          <div
-            className="absolute inset-0 flex items-center justify-center"
-            style={{ paddingBottom: "80px" }}
-          >
-            {/* Wrapper that is exactly the CentralForm size so we can overlay the label */}
+          <div className="absolute inset-0 flex items-center justify-center pb-24">
             <div
               className="relative"
               style={{ width: "600px", height: "600px", cursor: "pointer" }}
@@ -491,66 +389,47 @@ export default function Home() {
                 isSpeaking={isSpeaking}
                 getAmplitude={playback.getAmplitude}
               />
-              {/* Label centered inside the logo */}
-              <span
-                className="absolute inset-0 flex items-center justify-center text-sm text-gray-400"
-                style={{ pointerEvents: "none" }}
-              >
-                {isRecording
+
+              <span className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">
+                {isSpeaking
+                  ? "Stop"
+                  : isRecording
                   ? "Listening..."
                   : isProcessing
-                    ? "Reflecting..."
-                    : isSpeaking
-                      ? "Stop"
-                      : "Press here"}
+                  ? "Reflecting..."
+                  : "Press here"}
               </span>
             </div>
           </div>
 
-          {/* Case Review: top left */}
-          <div className="absolute top-4 left-4">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                runCaseReview();
-              }}
-              className="text-sm text-gray-400 hover:text-white"
-            >
-              Case review
-            </button>
-          </div>
-
-          {/* Bottom bar: pinned to bottom, always visible */}
-          <div className="absolute bottom-12 left-0 right-0 flex justify-between px-8">
-            <div onClick={() => setMode("B")} className="cursor-pointer">
-              <p className="text-lg text-gray-500 hover:text-white">
-                Prefer typing?
-              </p>
+          {hasExchanged && (
+            <div className="absolute top-4 left-4">
+              <button onClick={runCaseReview}>Case review</button>
             </div>
+          )}
+
+          <div className="absolute bottom-6 left-0 right-0 flex justify-between px-8 text-gray-400 text-sm">
+            <button onClick={() => setMode("B")}>Prefer typing?</button>
+
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setVoiceGender((prev) => (prev === "male" ? "female" : "male"));
-              }}
-              className="text-sm text-gray-400 hover:text-white"
+              onClick={() =>
+                setVoiceGender((v) => (v === "female" ? "male" : "female"))
+              }
             >
               Prefer {voiceGender === "female" ? "male" : "female"}
             </button>
-            {lastResponse ? (
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  repeatLast();
-                }}
-                className="cursor-pointer"
-              >
-                <p className="text-lg text-gray-500 hover:text-white">
-                  Repeat response
-                </p>
-              </div>
-            ) : (
-              <div />
-            )}
+
+            <button
+              onClick={() => {
+                if (isSpeaking) {
+                  stopSpeech();
+                } else if (lastSpokenTextRef.current) {
+                  speakText(lastSpokenTextRef.current);
+                }
+              }}
+            >
+              {isSpeaking ? "Stop" : "Repeat response"}
+            </button>
           </div>
         </>
       ) : (
@@ -558,9 +437,9 @@ export default function Home() {
           messages={messages}
           setMessages={setMessages}
           playback={playback}
-          lastAudioChunksRef={lastAudioChunksRef}
           voiceGender={voiceGender}
           onBack={() => setMode("A")}
+          lastAudioChunksRef={lastAudioChunksRef}
         />
       )}
     </div>
