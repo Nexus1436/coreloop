@@ -677,13 +677,26 @@ export async function registerRoutes(
       }
 
       // === USER UPSERT ===
+      const fullName = authUser?.claims?.name ?? "";
+      const firstName =
+        fullName && typeof fullName === "string"
+          ? fullName.split(" ")[0]
+          : null;
+
       await db
         .insert(users)
         .values({
           id: userId,
           email: authUser?.claims?.email ?? null,
+          firstName,
         })
-        .onConflictDoNothing();
+        .onConflictDoUpdate({
+          target: users.id,
+          set: {
+            email: authUser?.claims?.email ?? null,
+            firstName,
+          },
+        });
 
       // === INPUT ===
       const { conversationId, messages: incoming } = req.body ?? {};
@@ -733,16 +746,38 @@ export async function registerRoutes(
       const openExperimentBlock = await getOpenExperimentBlock(userId);
 
       // === USER IDENTITY ===
-      const [userRow] = await db
+      let [userRow] = await db
         .select()
         .from(users)
         .where(eq(users.id, userId))
         .limit(1);
 
-      const identityBlock = userRow?.firstName
-        ? `\n\n=== USER IDENTITY ===\nUser's first name is ${userRow.firstName}. Use it naturally when it adds presence or emphasis. Do not overuse it.`
-        : "";
+      // Capture name if missing
+      if (!userRow?.firstName) {
+        const possibleName = userText.split(" ")[0];
 
+        if (possibleName && possibleName.length < 20) {
+          await db
+            .update(users)
+            .set({ firstName: possibleName })
+            .where(eq(users.id, userId));
+
+          // 🔥 re-fetch so it's immediately usable
+          [userRow] = await db
+            .select()
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1);
+        }
+      }
+
+      let identityBlock = "";
+
+      if (!userRow?.firstName) {
+        identityBlock = `\n\n=== USER IDENTITY ===\nYou do not know the user's name yet. Ask once, naturally: "What should I call you?" Then continue normally.`;
+      } else {
+        identityBlock = `\n\n=== USER IDENTITY ===\nUser's first name is ${userRow.firstName}. Use it naturally when it adds presence or emphasis. Do not overuse it.`;
+      }
       // === MODEL INPUT ===
       const chatMessages: ChatCompletionMessageParam[] = [
         {
