@@ -752,28 +752,23 @@ export async function registerRoutes(
         .where(eq(users.id, userId))
         .limit(1);
 
-      // Capture name ONLY if user gives a clean name (not a sentence)
-      if (!userRow?.firstName) {
-        const words = userText.split(" ").filter(Boolean);
+      // Capture name from natural language (not just single word)
+      const match = userText.match(/\b([A-Z][a-z]{1,19})\b/);
 
-        if (
-          words.length === 1 &&
-          words[0].length > 1 &&
-          words[0].length < 20 &&
-          /^[a-zA-Z]+$/.test(words[0])
-        ) {
-          await db
-            .update(users)
-            .set({ firstName: words[0] })
-            .where(eq(users.id, userId));
+      if (!userRow?.firstName && match) {
+        const possibleName = match[1];
 
-          // re-fetch
-          [userRow] = await db
-            .select()
-            .from(users)
-            .where(eq(users.id, userId))
-            .limit(1);
-        }
+        await db
+          .update(users)
+          .set({ firstName: possibleName })
+          .where(eq(users.id, userId));
+
+        // re-fetch so it's immediately usable
+        [userRow] = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
       }
 
       let identityBlock = "";
