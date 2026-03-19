@@ -1,3 +1,7 @@
+// ==============================
+// IMPORTS & SETUP
+// ==============================
+
 import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
 
@@ -34,6 +38,10 @@ import { generateSessionSummary } from "./memory/sessionSummary";
 import { generateHypothesis } from "./memory/hypotheses";
 import { registerAnalyticsRoutes } from "./analyticsRoutes";
 
+// ==============================
+// EXTERNAL CLIENTS
+// ==============================
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
@@ -42,8 +50,12 @@ const elevenlabs = new ElevenLabsClient({
   apiKey: process.env.ELEVENLABS_API_KEY!,
 });
 
+// ==============================
+// SYSTEM PROMPT (BASE NARRATIVE)
+// ==============================
+
 const SYSTEM_PROMPT = `
-INTERLOOP BASE NARRATIVE — VERSION M3.4
+INTERLOOP BASE NARRATIVE — VERSION M3.5
 
 SECTION 1: SYSTEM IDENTITY & CORE MANDATE
 
@@ -61,9 +73,24 @@ You build a dynamic model of the user's body over time. Your value increases wit
 
 Your tone is analytical, direct, precise, and collaborative.
 
-Avoid filler language, motivational talk, or generic coaching tone.
+Avoid filler language, motivational talk, generic coaching tone, and generic assistant phrasing.
 
-Do not open with generic assistant language. Your first response must reflect your analyst identity immediately.
+Do not open with generic assistant framing.
+Never begin responses with phrases such as:
+- "Let's focus on..."
+- "Here's a summary..."
+- "Based on what I know..."
+- "We can..."
+- "I'd be happy to..."
+- "Sure..."
+- "Absolutely..."
+
+Every response must begin directly with one of the following:
+- a question tied to a signal
+- a direct analytical statement
+- a hypothesis connected to the current investigation
+
+No soft introductions.
 
 SECTION 2: INVESTIGATION STRUCTURE & STRUCTURAL REASONING
 
@@ -96,7 +123,38 @@ When the user asks about a previous session, a past conversation, or what was di
 
 If no session history is present in your context, say so directly and honestly. Do not fabricate or reconstruct past sessions.
 
-Use prior session content actively when it sharpens the current investigation. Reference it by what was actually said, not by general inference.
+Use prior session content only when it sharpens the current investigation. Reference it by what was actually said, not by general inference.
+
+Memory is for:
+- improving hypotheses
+- guiding follow-up questions
+- informing investigation direction
+
+Memory is not for:
+- profile summaries
+- list-building about the user
+- presenting stored traits as a dataset
+- summarizing user history for its own sake
+
+Profile Mode Prohibition
+
+Do not switch into profile mode.
+
+Never generate:
+- a user profile
+- a stored-memory summary
+- a trait list
+- a history recap unless the user explicitly asks for a summary of a specific session or movement investigation
+
+If the user asks what you know about them:
+- do not generate a profile
+- do not list stored memory
+- do not summarize user history
+
+Instead:
+- respond briefly and naturally
+- reference only what is relevant to movement if applicable
+- redirect immediately into signal-based investigation
 
 Dominant Hypothesis
 
@@ -211,6 +269,15 @@ Use normal paragraph formatting.
 
 Do not use bullet points or numbered lists in any response unless the user specifically asks for a structured breakdown or summary. This applies to clarifying questions, investigation intake, and all analytical responses. Never display the four investigation elements as a list.
 
+Non-Movement Input Handling
+
+If the user input is not movement-related or does not materially advance the investigation:
+- do not engage in small talk
+- do not answer socially
+- do not drift into generic assistant mode
+
+Respond briefly, naturally, and redirect immediately into movement investigation without sounding robotic or scripted.
+
 SECTION 6: SUMMARY FORMAT
 
 When the user asks for a summary, always use this structure.
@@ -281,11 +348,19 @@ Always allow the user to describe outcomes in their own words first. Support bot
 Key behavioral principle: You are an investigator tracking experiments. Not a tool collecting reports.
 `;
 
+// ==============================
+// UTILITY: TEXT CLAMP
+// ==============================
+
 function clampText(s: string, max = 800): string {
   const t = (s ?? "").trim();
   if (!t) return "";
   return t.length > max ? t.slice(0, max) + "…" : t;
 }
+
+// ==============================
+// OUTCOME DETECTION
+// ==============================
 
 function detectOutcomeResult(
   text: string,
@@ -308,6 +383,10 @@ function detectOutcomeResult(
   return null;
 }
 
+// ==============================
+// STORED SESSION HISTORY BUILDER
+// ==============================
+
 async function getStoredSessionHistory(
   userId: string,
   currentConversationId: number,
@@ -329,42 +408,45 @@ async function getStoredSessionHistory(
   const sessionBlocks: string[] = [];
 
   for (const convo of recentConvos) {
+    let block = `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\n`;
+
+    // INCLUDE summary if it exists (DO NOT SKIP)
     if (convo.summary) {
-      sessionBlocks.push(
-        `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\nSummary: ${convo.summary}`,
-      );
-      continue;
+      block += `Summary: ${convo.summary}\n`;
     }
 
+    // ALSO INCLUDE real excerpts (preserve user language)
     const convoMessages = await db
       .select()
       .from(messages)
       .where(eq(messages.conversationId, convo.id))
-      .orderBy(asc(messages.createdAt));
+      .orderBy(asc(messages.createdAt))
+      .limit(12);
 
-    if (convoMessages.length === 0) continue;
+    if (convoMessages.length > 0) {
+      const lines = convoMessages
+        .map(
+          (m) =>
+            `  ${m.role === "user" ? "User" : "Interloop"}: ${String(m.content ?? "")}`,
+        )
+        .join("\n");
 
-    const lines = convoMessages
-      .map(
-        (m) =>
-          `  ${m.role === "user" ? "User" : "Interloop"}: ${String(m.content ?? "")}`,
-      )
-      .join("\n");
+      block += `\nKey Excerpts:\n${lines}`;
+    }
 
-    sessionBlocks.push(
-      `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\n${lines}`,
-    );
+    sessionBlocks.push(block);
   }
-
-  if (sessionBlocks.length === 0) return "";
 
   return (
     "\n\n=== STORED SESSION HISTORY ===\n" +
-    "The following are real stored records of previous conversations with this user. " +
-    "Use this data when the user asks about past sessions.\n\n" +
+    "Real prior conversations. Use when relevant.\n\n" +
     sessionBlocks.join("\n\n")
   );
 }
+
+// ==============================
+// OPEN EXPERIMENT LOOKUP
+// ==============================
 
 async function getOpenExperimentBlock(userId: string): Promise<string> {
   const unresolved = await db
@@ -392,14 +474,12 @@ The user previously received an adjustment that has not yet been evaluated.
 
 Adjustment:
 ${latest.cue ?? "Previous movement adjustment"}
-
-Before beginning a new investigation, check the result of this experiment naturally.
-
-Preferred phrasing examples:
-"Before we start something new — I'm curious what happened when you tried that adjustment."
-"Last time we talked about trying an adjustment. What did you notice when you tried it?"
 `;
 }
+
+// ==============================
+// OUTCOME RECORDING
+// ==============================
 
 async function recordOutcomeIfDetected(
   userId: string,
@@ -432,15 +512,31 @@ async function recordOutcomeIfDetected(
   });
 }
 
+// ==============================
+// ROUTE REGISTRATION
+// ==============================
+
 export async function registerRoutes(
   _httpServer: HTTPServer,
   app: Express,
 ): Promise<void> {
+  // ==============================
+  // ANALYTICS
+  // ==============================
+
   registerAnalyticsRoutes(app);
+
+  // ==============================
+  // HEALTH CHECK
+  // ==============================
 
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ ok: true });
   });
+
+  // ==============================
+  // SPEECH-TO-TEXT
+  // ==============================
 
   app.post("/api/stt", async (req: Request, res: Response) => {
     try {
@@ -464,12 +560,15 @@ export async function registerRoutes(
     }
   });
 
+  // ==============================
+  // TEXT-TO-SPEECH
+  // ==============================
+
   let ttsQueue: Promise<string> = Promise.resolve("");
 
   app.post("/api/tts", async (req: Request, res: Response) => {
     try {
       const { text, voice } = req.body ?? {};
-
       if (!text || !text.trim()) {
         return res.status(400).json({ error: "No text provided" });
       }
@@ -484,13 +583,9 @@ export async function registerRoutes(
         });
 
         const chunks: Uint8Array[] = [];
+        for await (const chunk of audioStream) chunks.push(chunk);
 
-        for await (const chunk of audioStream) {
-          chunks.push(chunk);
-        }
-
-        const audioBuffer = Buffer.concat(chunks);
-        return audioBuffer.toString("base64");
+        return Buffer.concat(chunks).toString("base64");
       };
 
       ttsQueue = ttsQueue.then(job);
@@ -503,76 +598,13 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/conversations", async (req: Request, res: Response) => {
-    try {
-      const authUser = req.user as any;
-      const userId = authUser?.claims?.sub;
-
-      if (!userId) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-
-      const convs = await db
-        .select()
-        .from(conversations)
-        .where(eq(conversations.userId, userId))
-        .orderBy(desc(conversations.id))
-        .limit(20);
-
-      res.json({ conversations: convs });
-    } catch (err) {
-      console.error("Failed to load conversations:", err);
-      res.status(500).json({ error: "Failed to load conversations" });
-    }
-  });
-
-  app.get(
-    "/api/conversations/:id/messages",
-    async (req: Request, res: Response) => {
-      try {
-        const authUser = req.user as any;
-        const userId = authUser?.claims?.sub;
-
-        if (!userId) {
-          return res.status(401).json({ error: "Unauthorized" });
-        }
-
-        const convoId = Number(req.params.id);
-        if (!Number.isFinite(convoId) || convoId <= 0) {
-          return res.status(400).json({ error: "Invalid conversation ID" });
-        }
-
-        const convo = await db
-          .select()
-          .from(conversations)
-          .where(
-            and(
-              eq(conversations.id, convoId),
-              eq(conversations.userId, userId),
-            ),
-          )
-          .limit(1);
-
-        if (convo.length === 0) {
-          return res.status(404).json({ error: "Conversation not found" });
-        }
-
-        const history = await db
-          .select()
-          .from(messages)
-          .where(eq(messages.conversationId, convoId))
-          .orderBy(asc(messages.createdAt));
-
-        res.json({ messages: history });
-      } catch (err) {
-        console.error("Failed to load conversation history:", err);
-        res.status(500).json({ error: "Failed to load history" });
-      }
-    },
-  );
+  // ==============================
+  // MAIN CHAT PIPELINE
+  // ==============================
 
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {
+      // === AUTH ===
       const authUser = req.user as any;
       const userId = authUser?.claims?.sub;
 
@@ -581,6 +613,7 @@ export async function registerRoutes(
         return;
       }
 
+      // === USER UPSERT ===
       await db
         .insert(users)
         .values({
@@ -589,24 +622,14 @@ export async function registerRoutes(
         })
         .onConflictDoNothing();
 
+      // === INPUT ===
       const { conversationId, messages: incoming } = req.body ?? {};
-
-      if (!Array.isArray(incoming) || incoming.length === 0) {
-        res.status(400).json({ error: "No messages provided" });
-        return;
-      }
 
       const last = incoming[incoming.length - 1];
       const userText = String(last?.content ?? "").trim();
 
-      if (!userText) {
-        res.status(400).json({ error: "Empty message" });
-        return;
-      }
-
+      // === CONVERSATION ===
       let convoId = Number(conversationId);
-      if (!Number.isFinite(convoId) || convoId <= 0) convoId = NaN;
-
       if (!Number.isFinite(convoId)) {
         const [row] = await db
           .insert(conversations)
@@ -615,292 +638,110 @@ export async function registerRoutes(
             title: clampText(userText, 60),
           })
           .returning();
-
         convoId = row.id;
       }
 
-      let memory: InterloopMemory | null = null;
-      try {
-        memory = await getMemory(userId);
-      } catch (err) {
-        console.warn("Memory load failed:", err);
-      }
-
-      const signalPatterns = await getSignalPatterns(userId);
-
-      try {
-        await recordOutcomeIfDetected(userId, userText);
-      } catch (err) {
-        console.warn("Outcome detection failed:", err);
-      }
-
-      let caseId: number | null = null;
-      let hypothesisId: number | null = null;
-      let adjustmentId: number | null = null;
-
-      try {
-        const signals = await extractSessionSignals(userText);
-
-        if (signals.length > 0) {
-          const firstSignal = signals[0];
-
-          const [caseRow] = await db
-            .insert(cases)
-            .values({
-              userId,
-              conversationId: convoId,
-              movementContext: firstSignal?.movementContext ?? "general",
-              activityType: firstSignal?.activityType ?? "unknown",
-            })
-            .returning();
-
-          caseId = caseRow.id;
-
-          for (const s of signals) {
-            await db.insert(caseSignals).values({
-              caseId: caseId!,
-              userId: userId,
-              bodyRegion: null,
-              signalType: s.type,
-              movementContext: s.movementContext ?? "general",
-              activityType: s.activityType ?? "unknown",
-              description: s.signal,
-            });
-          }
-
-          for (const s of signals) {
-            await db.insert(sessionSignals).values({
-              userId,
-              conversationId: convoId,
-              signalType: s.type,
-              signal: s.signal,
-              confidence: Math.round((s.confidence ?? 0.5) * 100),
-            });
-          }
-        }
-      } catch (err) {
-        console.warn("Case dataset pipeline failed:", err);
-      }
-
+      // === STORE USER MESSAGE ===
       await db.insert(messages).values({
         conversationId: convoId,
         role: "user",
         content: userText,
       });
 
+      // === LOAD HISTORY ===
       const previous = await db
         .select()
         .from(messages)
         .where(eq(messages.conversationId, convoId))
         .orderBy(asc(messages.createdAt));
 
-      let storedSessionHistory = "";
-      try {
-        storedSessionHistory = await getStoredSessionHistory(userId, convoId);
-      } catch (err) {
-        console.warn("Recent session context load failed:", err);
-      }
-
-      let openExperimentBlock = "";
-      try {
-        openExperimentBlock = await getOpenExperimentBlock(userId);
-      } catch (err) {
-        console.warn("Open experiment lookup failed:", err);
-      }
-
+      // === CONTEXT ===
+      const memory = await getMemory(userId);
       const memoryBlock =
         memory && Object.keys(memory).length > 0
-          ? `\n\n=== USER MEMORY ===\n${JSON.stringify(memory, null, 2)}`
+          ? `\n\n=== USER MEMORY ===\n${JSON.stringify(memory, null, 0).slice(0, 1200)}`
           : "";
 
+      const storedSessionHistory = await getStoredSessionHistory(
+        userId,
+        convoId,
+      );
+
+      const openExperimentBlock = await getOpenExperimentBlock(userId);
+
+      // === USER IDENTITY ===
+      const [userRow] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+      const identityBlock = userRow?.firstName
+        ? `\n\n=== USER IDENTITY ===\nUser's first name is ${userRow.firstName}. Use it naturally when it adds presence or emphasis. Do not overuse it.`
+        : "";
+
+      // === MODEL INPUT ===
       const chatMessages: ChatCompletionMessageParam[] = [
         {
           role: "system",
           content:
             SYSTEM_PROMPT +
+            identityBlock +
             memoryBlock +
             storedSessionHistory +
             openExperimentBlock,
         },
-        ...previous.slice(-20).map((m) => ({
+        ...previous.slice(-50).map((m) => ({
           role: m.role as "user" | "assistant",
           content: String(m.content ?? ""),
         })),
       ];
 
+      // === STREAM ===
       res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
 
       const stream = await openai.chat.completions.create({
         model: "gpt-4o",
         temperature: 0.15,
-        max_tokens: 900,
         messages: chatMessages,
         stream: true,
       });
 
       let assistantText = "";
-      let sentenceBuffer = "";
-      let lastDelta = "";
-
-      res.write(
-        `data: ${JSON.stringify({
-          meta: {
-            caseId,
-            conversationId: convoId,
-          },
-        })}\n\n`,
-      );
 
       for await (const chunk of stream) {
         const delta = chunk.choices?.[0]?.delta?.content;
-
         if (!delta) continue;
-        if (delta === lastDelta) continue;
 
-        lastDelta = delta;
         assistantText += delta;
-        sentenceBuffer += delta;
-
-        const sentenceMatch = sentenceBuffer.match(/(.+?[.!?])(\s|$)/);
-
-        if (sentenceMatch) {
-          const sentence = sentenceMatch[1];
-
-          res.write(
-            `data: ${JSON.stringify({
-              content: sentence,
-            })}\n\n`,
-          );
-
-          sentenceBuffer = sentenceBuffer.slice(sentence.length);
-        }
+        res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
       }
 
-      if (sentenceBuffer.trim()) {
-        res.write(
-          `data: ${JSON.stringify({
-            content: sentenceBuffer,
-          })}\n\n`,
-        );
-      }
-
+      // === STORE RESPONSE ===
       await db.insert(messages).values({
         conversationId: convoId,
         role: "assistant",
         content: assistantText,
       });
 
-      let updatedSessionSummary: string | null = null;
-
-      try {
-        updatedSessionSummary = await generateSessionSummary(
-          userText + "\n\n" + assistantText,
-          signalPatterns,
-        );
-      } catch (err) {
-        console.warn("Session summary generation failed:", err);
-      }
-
-      if (updatedSessionSummary) {
-        try {
-          await db
-            .update(conversations)
-            .set({ summary: updatedSessionSummary })
-            .where(eq(conversations.id, convoId));
-        } catch (err) {
-          console.warn("Session summary save failed:", err);
-        }
-      }
-
-      let generatedHypothesis: string | null = null;
-
-      try {
-        const hypothesisContext =
-          "User Input:\n" +
-          userText +
-          "\n\nAssistant Response:\n" +
-          assistantText +
-          "\n\nSession Summary:\n" +
-          (updatedSessionSummary ?? "") +
-          "\n\nSignal Patterns:\n" +
-          JSON.stringify(signalPatterns ?? {}, null, 2);
-
-        generatedHypothesis = await generateHypothesis(
-          hypothesisContext,
-          signalPatterns,
-        );
-      } catch (err) {
-        console.warn("Hypothesis generation failed:", err);
-      }
-
-      if (generatedHypothesis && caseId) {
-        const [row] = await db
-          .insert(caseHypotheses)
-          .values({
-            caseId,
-            hypothesis: generatedHypothesis,
-            confidence: "medium",
-          })
-          .returning();
-
-        hypothesisId = row.id;
-      }
-
-      if (caseId && hypothesisId && generatedHypothesis) {
-        const [row] = await db
-          .insert(caseAdjustments)
-          .values({
-            caseId,
-            hypothesisId,
-            adjustmentType: "movement_cue",
-            cue: assistantText.slice(0, 300),
-            mechanicalFocus: "general",
-          })
-          .returning();
-
-        adjustmentId = row.id;
-      }
-
-      try {
-        const extracted = (await extractMemory(
-          userText,
-        )) as Partial<InterloopMemory>;
-
-        if (extracted && Object.keys(extracted).length > 0) {
-          await updateMemory(userId, (currentMemory: InterloopMemory) => {
-            const merged = mergeExtracted(currentMemory, extracted);
-            Object.assign(currentMemory, merged);
-          });
-        }
-      } catch (err) {
-        console.warn("Memory update failed:", err);
-      }
-
       res.write(`data: [DONE]\n\n`);
       res.end();
     } catch (err) {
-      console.error("[/api/chat error]", err);
-
-      if (!res.headersSent) {
-        res.status(500).json({ error: "Server error occurred." });
-      } else {
-        try {
-          res.end();
-        } catch {}
-      }
+      console.error(err);
+      res.status(500).json({ error: "Server error" });
     }
   });
+
+  // ==============================
+  // OUTCOME API
+  // ==============================
 
   app.post("/api/outcome", async (req: Request, res: Response) => {
     try {
       const { caseId, adjustmentId, result, userFeedback } = req.body ?? {};
 
       if (!caseId || !result) {
-        return res.status(400).json({
-          error: "Missing required fields",
-        });
+        return res.status(400).json({ error: "Missing required fields" });
       }
 
       await db.insert(caseOutcomes).values({
