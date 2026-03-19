@@ -2,6 +2,7 @@
 // IMPORTS & SETUP
 // ==============================
 
+import { isAuthenticated } from "./replit_integrations/auth";
 import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
 
@@ -601,6 +602,68 @@ export async function registerRoutes(
   // ==============================
   // MAIN CHAT PIPELINE
   // ==============================
+
+  app.get("/api/conversations", isAuthenticated, async (req: any, res: any) => {
+    try {
+      const authUser = req.user as any;
+      const userId = authUser?.claims?.sub;
+
+      const results = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.userId, userId))
+        .orderBy(desc(conversations.createdAt));
+
+      res.json(results);
+    } catch (err) {
+      console.error("Failed to fetch conversations:", err);
+      res.status(500).json({ error: "Failed to fetch conversations" });
+    }
+  });
+
+  app.get(
+    "/api/messages/:conversationId",
+    isAuthenticated,
+    async (req: any, res: any) => {
+      try {
+        const authUser = req.user as any;
+        const userId = authUser?.claims?.sub;
+
+        const conversationId = Number(req.params.conversationId);
+
+        if (!Number.isFinite(conversationId)) {
+          return res.status(400).json({ error: "Invalid conversationId" });
+        }
+
+        // Ensure conversation belongs to user (security + correctness)
+        const [convo] = await db
+          .select()
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.id, conversationId),
+              eq(conversations.userId, userId),
+            ),
+          )
+          .limit(1);
+
+        if (!convo) {
+          return res.status(404).json({ error: "Conversation not found" });
+        }
+
+        const results = await db
+          .select()
+          .from(messages)
+          .where(eq(messages.conversationId, conversationId))
+          .orderBy(asc(messages.createdAt));
+
+        res.json(results);
+      } catch (err) {
+        console.error("Failed to fetch messages:", err);
+        res.status(500).json({ error: "Failed to fetch messages" });
+      }
+    },
+  );
 
   app.post("/api/chat", async (req: Request, res: Response) => {
     try {

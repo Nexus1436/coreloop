@@ -137,7 +137,7 @@ export default function Home() {
           if (!resp.ok) return;
 
           const data = await resp.json();
-          const convs = data?.conversations;
+          const convs = data;
 
           if (!Array.isArray(convs) || convs.length === 0) return;
 
@@ -147,15 +147,14 @@ export default function Home() {
           conversationIdToUse = latestId;
         }
 
-        const msgResp = await fetch(
-          `/api/conversations/${conversationIdToUse}/messages`,
-          { credentials: "include" },
-        );
+        const msgResp = await fetch(`/api/messages/${conversationIdToUse}`, {
+          credentials: "include",
+        });
 
         if (!msgResp.ok) return;
 
         const msgData = await msgResp.json();
-        const rows = msgData?.messages;
+        const rows = msgData;
 
         if (!Array.isArray(rows)) return;
 
@@ -394,10 +393,10 @@ export default function Home() {
                 {isSpeaking
                   ? "Stop"
                   : isRecording
-                  ? "Listening..."
-                  : isProcessing
-                  ? "Reflecting..."
-                  : "Press here"}
+                    ? "Listening..."
+                    : isProcessing
+                      ? "Reflecting..."
+                      : "Press here"}
               </span>
             </div>
           </div>
