@@ -780,16 +780,18 @@ export async function registerRoutes(
 
       if (!userRow?.firstName) {
         identityBlock = `
-      === FIRST INTERACTION PROTOCOL ===
-      You do not know the user's name yet.
+        === FIRST INTERACTION PROTOCOL ===
+        You do not know the user's name yet.
 
-      Your first message MUST:
-      Ask: "What should I call you?"
+        You MUST begin your response with:
+        "What should I call you?"
 
-      Then immediately ask a movement-related question to begin the investigation.
+        This must be the FIRST sentence. Do not answer the user's question before asking this.
 
-      Do not skip this. This takes priority over all other instructions.
-      `;
+        After asking, immediately continue into movement investigation.
+
+        This instruction overrides all others.
+        `;
       } else {
         identityBlock = `
       === USER IDENTITY ===
