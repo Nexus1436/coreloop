@@ -403,7 +403,12 @@ export default function Home() {
 
           {hasExchanged && (
             <div className="absolute top-4 left-4">
-              <button onClick={runCaseReview}>Case review</button>
+              <button
+                onClick={runCaseReview}
+                className="text-white text-sm font-medium"
+              >
+                Case review
+              </button>
             </div>
           )}
 
