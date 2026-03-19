@@ -752,17 +752,22 @@ export async function registerRoutes(
         .where(eq(users.id, userId))
         .limit(1);
 
-      // Capture name if missing
+      // Capture name ONLY if user gives a clean name (not a sentence)
       if (!userRow?.firstName) {
-        const possibleName = userText.split(" ")[0];
+        const words = userText.split(" ").filter(Boolean);
 
-        if (possibleName && possibleName.length < 20) {
+        if (
+          words.length === 1 &&
+          words[0].length > 1 &&
+          words[0].length < 20 &&
+          /^[a-zA-Z]+$/.test(words[0])
+        ) {
           await db
             .update(users)
-            .set({ firstName: possibleName })
+            .set({ firstName: words[0] })
             .where(eq(users.id, userId));
 
-          // 🔥 re-fetch so it's immediately usable
+          // re-fetch
           [userRow] = await db
             .select()
             .from(users)
@@ -774,17 +779,31 @@ export async function registerRoutes(
       let identityBlock = "";
 
       if (!userRow?.firstName) {
-        identityBlock = `\n\n=== USER IDENTITY ===\nYou do not know the user's name yet. Ask once, naturally: "What should I call you?" Then continue normally.`;
+        identityBlock = `
+      === FIRST INTERACTION PROTOCOL ===
+      You do not know the user's name yet.
+
+      Your first message MUST:
+      Ask: "What should I call you?"
+
+      Then immediately ask a movement-related question to begin the investigation.
+
+      Do not skip this. This takes priority over all other instructions.
+      `;
       } else {
-        identityBlock = `\n\n=== USER IDENTITY ===\nUser's first name is ${userRow.firstName}. Use it naturally when it adds presence or emphasis. Do not overuse it.`;
+        identityBlock = `
+      === USER IDENTITY ===
+      User's first name is ${userRow.firstName}. Use it naturally when it adds presence or emphasis. Do not overuse it.
+      `;
       }
+
       // === MODEL INPUT ===
       const chatMessages: ChatCompletionMessageParam[] = [
         {
           role: "system",
           content:
-            SYSTEM_PROMPT +
             identityBlock +
+            SYSTEM_PROMPT +
             memoryBlock +
             storedSessionHistory +
             openExperimentBlock,
