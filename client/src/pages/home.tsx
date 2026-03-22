@@ -36,6 +36,7 @@ async function sendChat(
   userText: string,
   onConversationId: (id: number) => void,
   onChunk: (chunk: string) => void,
+  isCaseReview: boolean = false,
 ) {
   const resp = await fetch("/api/chat", {
     method: "POST",
@@ -44,6 +45,7 @@ async function sendChat(
     body: JSON.stringify({
       conversationId: conversationId ?? undefined,
       messages: [{ role: "user", content: userText }],
+      isCaseReview,
     }),
   });
 
@@ -282,6 +284,7 @@ export default function Home() {
             ),
           );
         },
+        true, // 🔥 triggers CASE_REVIEW_NARRATIVE
       );
 
       lastSpokenTextRef.current = assistantText; // ✅ FIX #2
