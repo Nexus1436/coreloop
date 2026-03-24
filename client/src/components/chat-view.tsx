@@ -20,6 +20,7 @@ interface ChatViewProps {
   playback: ReturnType<typeof useAudioPlayback>;
   lastAudioChunksRef: MutableRefObject<string[]>;
   voiceGender: "male" | "female";
+  playUITone: (frequency: number, durationMs?: number) => void;
 }
 
 let msgCounter = 1000;
@@ -86,6 +87,7 @@ export function ChatView({
   playback,
   lastAudioChunksRef,
   voiceGender,
+  playUITone,
 }: ChatViewProps) {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -108,7 +110,6 @@ export function ChatView({
     })
       .then((res) => {
         if (!res.ok) {
-          // Conversation no longer exists — clear the stored ID
           localStorage.removeItem(STORAGE_KEY);
           conversationIdRef.current = null;
           return null;
@@ -128,13 +129,11 @@ export function ChatView({
           setMessages(loaded);
         }
       })
-      .catch(() => {
-        // Silently fail — user just starts fresh
-      })
+      .catch(() => {})
       .finally(() => {
         setIsLoadingHistory(false);
       });
-  }, []);
+  }, [setMessages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -167,12 +166,10 @@ export function ChatView({
       await sendMessage(
         conversationIdRef.current,
         trimmed,
-
         (id: number) => {
           conversationIdRef.current = id;
           setStoredConversationId(id);
         },
-
         (chunk: string) => {
           assistantText = mergeStream(assistantText, chunk);
 
@@ -227,7 +224,7 @@ export function ChatView({
 
     playback.signalComplete();
     lastAudioChunksRef.current = cache;
-  }, [messages, voiceGender]);
+  }, [messages, playback, voiceGender, lastAudioChunksRef]);
 
   return (
     <motion.div
@@ -295,7 +292,12 @@ export function ChatView({
             rows={1}
           />
 
-          <button onClick={handleReadAloud}>
+          <button
+            onClick={() => {
+              playUITone(720);
+              handleReadAloud();
+            }}
+          >
             <Volume2 />
           </button>
         </div>
@@ -303,7 +305,10 @@ export function ChatView({
         {onBack && (
           <div className="text-center pt-3">
             <button
-              onClick={onBack}
+              onClick={() => {
+                playUITone(720);
+                onBack();
+              }}
               className="text-sm text-[#666] hover:text-[#888]"
             >
               Prefer speaking?

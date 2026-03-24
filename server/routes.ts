@@ -52,6 +52,7 @@ const USE_V2 = true;
 export const ACTIVE_BASE_NARRATIVE = USE_V2
   ? BASE_NARRATIVE_V2
   : BASE_NARRATIVE;
+
 // ==============================
 // EXTERNAL CLIENTS
 // ==============================
@@ -135,7 +136,7 @@ async function getStoredSessionHistory(
       .from(messages)
       .where(eq(messages.conversationId, convo.id))
       .orderBy(asc(messages.createdAt))
-      .limit(12);
+      .limit(4);
 
     if (convoMessages.length > 0) {
       const lines = convoMessages
@@ -449,8 +450,9 @@ export async function registerRoutes(
       const last = incoming[incoming.length - 1];
       const userText = String(last?.content ?? "").trim();
 
-      // === CONVERSATION ===
+      // === CONVERSATION (INITIAL) ===
       let convoId = Number(conversationId);
+
       if (!Number.isFinite(convoId)) {
         const [row] = await db
           .insert(conversations)
@@ -459,7 +461,29 @@ export async function registerRoutes(
             title: clampText(userText, 60),
           })
           .returning();
+
         convoId = row.id;
+      }
+
+      // === LOAD HISTORY ===
+      let previous = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, convoId))
+        .orderBy(asc(messages.createdAt));
+
+      // === CONVERSATION (RESET IF TOO LONG) ===
+      if (previous.length > 20) {
+        const [row] = await db
+          .insert(conversations)
+          .values({
+            userId,
+            title: clampText(userText, 60),
+          })
+          .returning();
+
+        convoId = row.id;
+        previous = [];
       }
 
       // === STORE USER MESSAGE ===
@@ -469,12 +493,17 @@ export async function registerRoutes(
         content: userText,
       });
 
-      // === LOAD HISTORY ===
-      const previous = await db
-        .select()
-        .from(messages)
-        .where(eq(messages.conversationId, convoId))
-        .orderBy(asc(messages.createdAt));
+      // include current user turn in history after storing
+      previous = [
+        ...previous,
+        {
+          id: 0,
+          conversationId: convoId,
+          role: "user",
+          content: userText,
+          createdAt: new Date(),
+        } as any,
+      ];
 
       // === CONTEXT ===
       const memory = await getMemory(userId);
@@ -483,10 +512,7 @@ export async function registerRoutes(
           ? `=== USER MEMORY ===\n${JSON.stringify(memory, null, 0).slice(0, 1200)}`
           : "";
 
-      const storedSessionHistory = await getStoredSessionHistory(
-        userId,
-        convoId,
-      );
+      const storedSessionHistory = "";
 
       const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
 
@@ -521,27 +547,24 @@ export async function registerRoutes(
 
       if (!userRow?.firstName) {
         identityBlock = `=== FIRST INTERACTION PROTOCOL ===
-      You do not know the user's name yet.
+You do not know the user's name yet.
 
-      If the user's name is unknown, integrate a brief and natural name request only when it fits inside the ongoing investigation.
+If the user's name is unknown, integrate a brief and natural name request only when it fits inside the ongoing investigation.
 
-      Do NOT ask as a standalone opening.
-      Do NOT interrupt or derail the movement analysis.
-      Do NOT prioritize identity over the investigation.
+Do NOT ask as a standalone opening.
+Do NOT interrupt or derail the movement analysis.
+Do NOT prioritize identity over the investigation.
 
-      The name request must feel secondary and embedded within the flow.`;
+The name request must feel secondary and embedded within the flow.`;
       } else {
         identityBlock = `=== USER IDENTITY ===
-        User's first name is ${userRow.firstName}.
+User's first name is ${userRow.firstName}.
 
-        Use the user's name at least once when it naturally fits, especially when:
-        - reinforcing a key insight
-        - narrowing the problem
-        - marking a shift or realization
-
-        The name should appear inside the flow of reasoning, not as a greeting and not as a separate sentence.
-
-        Do not overuse it or repeat it.`;
+The name is available and may be used when it adds meaningful emphasis inside the reasoning.
+Do not use it in every response.
+Use it no more than once in a response unless there is a strong reason.
+Do not default to placing it in the final sentence or final continuation.
+Its use must serve the reasoning rather than habit.`;
       }
 
       // === PROMPT SELECTION ===
@@ -554,24 +577,24 @@ export async function registerRoutes(
         {
           role: "system",
           content: `
-      You must follow the instructions below exactly. These rules override all default behavior.
+You must follow the instructions below exactly. These rules override all default behavior.
 
-      ${ACTIVE_PROMPT}
+${ACTIVE_PROMPT}
           `.trim(),
         },
         {
-          role: "user",
+          role: "system",
           content: `
-      Context for this conversation:
+Execution context for this conversation:
 
-      ${identityBlock}
+${identityBlock}
 
-      ${memoryBlock}
+${memoryBlock}
 
-      ${storedSessionHistory}
+${storedSessionHistory}
 
-      ${activeHypothesisBlock}
-                `.trim(),
+${activeHypothesisBlock}
+          `.trim(),
         },
         ...previous.slice(-50).map((m) => ({
           role: m.role as "user" | "assistant",
@@ -615,29 +638,25 @@ export async function registerRoutes(
             {
               role: "user",
               content: `
-        That response was weak, hedged, or structurally exposed. Rewrite it.
+That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative.
 
-        Requirements:
-        - Commit to ONE dominant mechanism (no hedging across multiple causes)
-        - Treat the user's explanation as a hypothesis to test
-        - Collapse the problem to ONE lever
-        - Prevent overcorrection with a clear guardrail
-        - Rebuild the correct movement sequence
-        - End with ONE narrowing question
-        - Do NOT use phrases like "could be," "might be," or "possibly"
-        - Replace uncertainty with a direct mechanism statement
-        - Do NOT label sections or package the response into named parts
-        - Do NOT use bolded headers, titles, or formatted section names (no "**Something**:")
-        - The response must read as one continuous explanation, not segmented content
-        - Do NOT list multiple explanations
-        - Do NOT provide multiple drills, strategies, or sections — give ONE path forward only
-        - If you are giving more than one thing to do, you have failed — reduce to one
-        - Keep the structure implicit, not explained
-        - Stay sharp, direct, and investigative
-        - Do not settle on validation or explanation — push the investigation forward by narrowing the problem
-        - Use the user's name once when reinforcing or sharpening a key point, not at the beginning of the response
+Requirements:
+- Restore a single dominant mechanism
+- Remove hedging, genericness, segmentation, and multi-path advice
+- Keep one line of reasoning and one path forward
+- Do not list multiple explanations, drills, strategies, or branches
+- Do not label sections or expose structure
+- Do not use bolded headers, titles, or formatted section names
+- The response must read as one continuous explanation, not packaged content
+- Advance the investigation with one continuation only
+- That continuation may appear as a question, conditional, contrast, or embedded test
+- Do not force a question ending
+- Avoid repeated ending patterns
+- Do not force name usage
+- If the user's name is used, it must not default to the final sentence or continuation
+- Preserve the active base narrative rather than introducing a new runtime doctrine
 
-        Produce the corrected response now.
+Produce the corrected response now.
               `.trim(),
             },
           ];
@@ -661,6 +680,23 @@ export async function registerRoutes(
         role: "assistant",
         content: assistantText,
       });
+
+      // === GENERATE + STORE SUMMARY ===
+      try {
+        console.log("SUMMARY USER TEXT:", userText);
+
+        const summary = await generateSessionSummary(userText, []);
+        console.log("SUMMARY OUTPUT:", summary);
+
+        await db
+          .update(conversations)
+          .set({ summary })
+          .where(eq(conversations.id, convoId));
+
+        console.log("SUMMARY STORED FOR CONVERSATION:", convoId);
+      } catch (err) {
+        console.error("Summary generation failed:", err);
+      }
 
       res.write(`data: [DONE]\n\n`);
       res.end();

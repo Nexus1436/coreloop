@@ -121,6 +121,52 @@ export default function Home() {
   const lastSpokenTextRef = useRef<string>("");
   const lastAudioChunksRef = useRef<string[]>([]);
 
+  const playUITone = useCallback((frequency: number, durationMs = 120) => {
+    if (typeof window === "undefined") return;
+
+    const AudioContextCtor =
+      window.AudioContext ||
+      (
+        window as typeof window & {
+          webkitAudioContext?: typeof AudioContext;
+        }
+      ).webkitAudioContext;
+
+    if (!AudioContextCtor) return;
+
+    try {
+      const ctx = new AudioContextCtor();
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      const now = ctx.currentTime;
+      const durationSec = durationMs / 1000;
+      const attack = 0.01;
+      const release = 0.05;
+      const endTime = now + durationSec;
+
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(frequency, now);
+
+      gainNode.gain.setValueAtTime(0.0001, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.08, now + attack);
+      gainNode.gain.exponentialRampToValueAtTime(
+        0.0001,
+        Math.max(now + attack + 0.01, endTime - release),
+      );
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.start(now);
+      oscillator.stop(endTime);
+
+      oscillator.onended = () => {
+        void ctx.close().catch(() => {});
+      };
+    } catch {}
+  }, []);
+
   /* ================= LOAD PREVIOUS CONVERSATION ================= */
   useEffect(() => {
     async function loadConversation() {
@@ -308,12 +354,14 @@ export default function Home() {
     if (isProcessing) return;
 
     if (!isRecording) {
+      playUITone(880);
       await playback.init();
       await recorder.startRecording();
       setIsRecording(true);
       return;
     }
 
+    playUITone(660);
     setIsRecording(false);
     setIsProcessing(true);
 
@@ -373,6 +421,7 @@ export default function Home() {
     speakText,
     stopSpeech,
     playback,
+    playUITone,
   ]);
 
   return (
@@ -407,7 +456,10 @@ export default function Home() {
           {hasExchanged && (
             <div className="absolute top-4 left-4">
               <button
-                onClick={runCaseReview}
+                onClick={() => {
+                  playUITone(720);
+                  runCaseReview();
+                }}
                 className="text-white text-sm font-medium"
               >
                 Case review
@@ -416,18 +468,28 @@ export default function Home() {
           )}
 
           <div className="absolute bottom-6 left-0 right-0 flex justify-between px-8 text-gray-400 text-sm">
-            <button onClick={() => setMode("B")}>Prefer typing?</button>
+            <button
+              onClick={() => {
+                playUITone(720);
+                setMode("B");
+              }}
+            >
+              Prefer typing?
+            </button>
 
             <button
-              onClick={() =>
-                setVoiceGender((v) => (v === "female" ? "male" : "female"))
-              }
+              onClick={() => {
+                playUITone(720);
+                setVoiceGender((v) => (v === "female" ? "male" : "female"));
+              }}
             >
               Prefer {voiceGender === "female" ? "male" : "female"}
             </button>
 
             <button
               onClick={() => {
+                playUITone(720);
+
                 if (isSpeaking) {
                   stopSpeech();
                 } else if (lastSpokenTextRef.current) {
@@ -447,6 +509,7 @@ export default function Home() {
           voiceGender={voiceGender}
           onBack={() => setMode("A")}
           lastAudioChunksRef={lastAudioChunksRef}
+          playUITone={playUITone}
         />
       )}
     </div>
