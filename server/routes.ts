@@ -416,12 +416,19 @@ export async function registerRoutes(
         return;
       }
 
-      // === USER UPSERT ===
       const fullName = authUser?.claims?.name ?? "";
       const firstName =
         fullName && typeof fullName === "string"
           ? fullName.split(" ")[0]
           : null;
+
+      const updateSet: Record<string, string | null> = {
+        email: authUser?.claims?.email ?? null,
+      };
+
+      if (firstName) {
+        updateSet.firstName = firstName;
+      }
 
       await db
         .insert(users)
@@ -432,10 +439,7 @@ export async function registerRoutes(
         })
         .onConflictDoUpdate({
           target: users.id,
-          set: {
-            email: authUser?.claims?.email ?? null,
-            firstName,
-          },
+          set: updateSet,
         });
 
       // === INPUT ===
@@ -515,7 +519,6 @@ export async function registerRoutes(
       const storedSessionHistory = "";
 
       const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
-
       // === USER IDENTITY ===
       let [userRow] = await db
         .select()
@@ -528,8 +531,8 @@ export async function registerRoutes(
         /\b(?:my name is|i'm|i am|this is)\s+([A-Z][a-z]{1,19})\b/i,
       );
 
-      if (!userRow?.firstName && nameMatch) {
-        const possibleName = nameMatch[1];
+      if (!userRow?.firstName && nameMatch?.[1]) {
+        const possibleName = nameMatch[1].trim();
 
         await db
           .update(users)
@@ -547,26 +550,25 @@ export async function registerRoutes(
 
       if (!userRow?.firstName) {
         identityBlock = `=== FIRST INTERACTION PROTOCOL ===
-You do not know the user's name yet.
+      You do not know the user's name yet.
 
-If the user's name is unknown, integrate a brief and natural name request only when it fits inside the ongoing investigation.
+      If the user's name is unknown, integrate a brief and natural name request only when it fits inside the ongoing investigation.
 
-Do NOT ask as a standalone opening.
-Do NOT interrupt or derail the movement analysis.
-Do NOT prioritize identity over the investigation.
+      Do NOT ask as a standalone opening.
+      Do NOT interrupt or derail the movement analysis.
+      Do NOT prioritize identity over the investigation.
 
-The name request must feel secondary and embedded within the flow.`;
+      The name request must feel secondary and embedded within the flow.`;
       } else {
         identityBlock = `=== USER IDENTITY ===
-User's first name is ${userRow.firstName}.
+      User's first name is ${userRow.firstName}.
 
-The name is available and may be used when it adds meaningful emphasis inside the reasoning.
-Do not use it in every response.
-Use it no more than once in a response unless there is a strong reason.
-Do not default to placing it in the final sentence or final continuation.
-Its use must serve the reasoning rather than habit.`;
+      The name is available and may be used when it adds meaningful emphasis inside the reasoning.
+      Do not use it in every response.
+      Use it no more than once in a response unless there is a strong reason.
+      Do not default to placing it in the final sentence or final continuation.
+      Its use must serve the reasoning rather than habit.`;
       }
-
       // === PROMPT SELECTION ===
       const ACTIVE_PROMPT = isCaseReview
         ? CASE_REVIEW_NARRATIVE
