@@ -416,6 +416,7 @@ export async function registerRoutes(
         return;
       }
 
+      // === USER UPSERT ===
       const fullName = authUser?.claims?.name ?? "";
       const firstName =
         fullName && typeof fullName === "string"
@@ -519,6 +520,7 @@ export async function registerRoutes(
       const storedSessionHistory = "";
 
       const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
+
       // === USER IDENTITY ===
       let [userRow] = await db
         .select()
@@ -526,13 +528,15 @@ export async function registerRoutes(
         .where(eq(users.id, userId))
         .limit(1);
 
-      // tighter name detection (only capture if clearly introduced)
+      // tighter name detection (capture and allow correction when clearly introduced)
       const nameMatch = userText.match(
-        /\b(?:my name is|i'm|i am|this is)\s+([A-Z][a-z]{1,19})\b/i,
+        /\b(?:my name is|i'm|i am|this is|it's|it is|name's)\s+([a-zA-Z]{2,20})\b/i,
       );
 
-      if (!userRow?.firstName && nameMatch?.[1]) {
-        const possibleName = nameMatch[1].trim();
+      if (nameMatch?.[1] && nameMatch[1].length > 2) {
+        const possibleName =
+          nameMatch[1].charAt(0).toUpperCase() +
+          nameMatch[1].slice(1).toLowerCase();
 
         await db
           .update(users)
