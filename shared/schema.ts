@@ -52,6 +52,10 @@ export const messages = pgTable(
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
 
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
     role: text("role").notNull(),
 
     content: text("content").notNull(),
@@ -66,6 +70,7 @@ export const messages = pgTable(
     conversationIdx: index("messages_conversation_idx").on(
       table.conversationId,
     ),
+    messageUserIdx: index("messages_user_idx").on(table.userId),
   }),
 );
 

@@ -76,6 +76,109 @@ function clampText(s: string, max = 800): string {
 }
 
 // ==============================
+// FIRST INTERACTION HELPERS
+// ==============================
+
+function isGenericOpener(text: string): boolean {
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s']/g, " ")
+    .replace(/\s+/g, " ");
+
+  const openers = new Set([
+    "hi",
+    "hello",
+    "hey",
+    "hey there",
+    "hi there",
+    "hello there",
+    "good morning",
+    "good evening",
+    "good afternoon",
+    "how are you",
+    "whats up",
+    "what's up",
+    "yo",
+    "sup",
+  ]);
+
+  return openers.has(normalized);
+}
+
+function extractConfidentExplicitName(text: string): string | null {
+  const match = text.match(/\b(?:my name is|call me)\s+([A-Za-z]{2,20})\b/i);
+  if (!match?.[1]) return null;
+
+  const raw = match[1];
+  const normalized = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+
+  const blacklist = new Set([
+    "doing",
+    "going",
+    "trying",
+    "working",
+    "thinking",
+    "me",
+    "that",
+    "this",
+    "it",
+    "here",
+    "there",
+    "something",
+    "nothing",
+    "anything",
+    "everything",
+    "today",
+    "tomorrow",
+    "yesterday",
+  ]);
+
+  if (blacklist.has(normalized.toLowerCase())) return null;
+
+  return normalized;
+}
+
+function extractStandaloneNameReply(text: string): string | null {
+  const trimmed = text.trim();
+
+  if (!/^[A-Za-z]{2,20}$/.test(trimmed)) return null;
+
+  const normalized =
+    trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+
+  const blacklist = new Set([
+    "Hi",
+    "Hey",
+    "Hello",
+    "Yo",
+    "Sup",
+    "Yes",
+    "No",
+    "Okay",
+    "Ok",
+    "Sure",
+    "Thanks",
+    "Thank",
+    "Please",
+    "Maybe",
+    "Doing",
+    "Going",
+    "Trying",
+    "Working",
+    "Thinking",
+  ]);
+
+  if (blacklist.has(normalized)) return null;
+
+  return normalized;
+}
+
+function askedWhatShouldICallYou(text: string): boolean {
+  return /what should i call you\??/i.test(text);
+}
+
+// ==============================
 // OUTCOME DETECTION
 // ==============================
 
@@ -235,7 +338,6 @@ async function recordOutcomeIfDetected(
 function isValidResponse(text: string): boolean {
   if (!text) return false;
 
-  // EDIT 1: Light validation — only reject empty or extremely short
   if (text.trim().length < 40) return false;
 
   return true;
@@ -262,23 +364,11 @@ export async function registerRoutes(
   _httpServer: HTTPServer,
   app: Express,
 ): Promise<void> {
-  // ==============================
-  // ANALYTICS
-  // ==============================
-
   registerAnalyticsRoutes(app);
-
-  // ==============================
-  // HEALTH CHECK
-  // ==============================
 
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ ok: true });
   });
-
-  // ==============================
-  // SPEECH-TO-TEXT
-  // ==============================
 
   app.post("/api/stt", async (req: Request, res: Response) => {
     try {
@@ -301,10 +391,6 @@ export async function registerRoutes(
       res.status(500).json({ error: "STT failed" });
     }
   });
-
-  // ==============================
-  // TEXT-TO-SPEECH
-  // ==============================
 
   let ttsQueue: Promise<string> = Promise.resolve("");
 
@@ -339,10 +425,6 @@ export async function registerRoutes(
       res.status(500).json({ error: "TTS failed" });
     }
   });
-
-  // ==============================
-  // MAIN CHAT PIPELINE
-  // ==============================
 
   app.get("/api/conversations", isAuthenticated, async (req: any, res: any) => {
     try {
@@ -405,192 +487,252 @@ export async function registerRoutes(
     },
   );
 
-  app.post("/api/chat", async (req: Request, res: Response) => {
-    try {
-      // === AUTH ===
-      const authUser = req.user as any;
-      const userId = authUser?.claims?.sub;
+  // ==============================
+  // MAIN CHAT PIPELINE
+  // ==============================
 
-      if (!userId) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-      }
+  app.post(
+    "/api/chat",
+    isAuthenticated,
+    async (req: Request, res: Response) => {
+      try {
+        const authUser = req.user as any;
+        const userId = authUser?.claims?.sub;
 
-      // === USER UPSERT ===
-      const fullName = authUser?.claims?.name ?? "";
-      const firstName =
-        fullName && typeof fullName === "string"
-          ? fullName.split(" ")[0]
-          : null;
+        if (!userId) {
+          res.status(401).json({ error: "Unauthorized" });
+          return;
+        }
 
-      const updateSet: Record<string, string | null> = {
-        email: authUser?.claims?.email ?? null,
-      };
-
-      if (firstName) {
-        updateSet.firstName = firstName;
-      }
-
-      await db
-        .insert(users)
-        .values({
-          id: userId,
-          email: authUser?.claims?.email ?? null,
-          firstName,
-        })
-        .onConflictDoUpdate({
-          target: users.id,
-          set: updateSet,
-        });
-
-      // === INPUT ===
-      const {
-        conversationId,
-        messages: incoming,
-        isCaseReview,
-      } = req.body ?? {};
-
-      console.log("isCaseReview:", isCaseReview);
-
-      const last = incoming[incoming.length - 1];
-      const userText = String(last?.content ?? "").trim();
-
-      // === CONVERSATION (INITIAL) ===
-      let convoId = Number(conversationId);
-
-      if (!Number.isFinite(convoId)) {
-        const [row] = await db
-          .insert(conversations)
-          .values({
-            userId,
-            title: clampText(userText, 60),
-          })
-          .returning();
-
-        convoId = row.id;
-      }
-
-      // === LOAD HISTORY ===
-      let previous = await db
-        .select()
-        .from(messages)
-        .where(eq(messages.conversationId, convoId))
-        .orderBy(asc(messages.createdAt));
-
-      // === CONVERSATION (RESET IF TOO LONG) ===
-      if (previous.length > 20) {
-        const [row] = await db
-          .insert(conversations)
-          .values({
-            userId,
-            title: clampText(userText, 60),
-          })
-          .returning();
-
-        convoId = row.id;
-        previous = [];
-      }
-
-      // === STORE USER MESSAGE ===
-      await db.insert(messages).values({
-        conversationId: convoId,
-        role: "user",
-        content: userText,
-      });
-
-      // include current user turn in history after storing
-      previous = [
-        ...previous,
-        {
-          id: 0,
-          conversationId: convoId,
-          role: "user",
-          content: userText,
-          createdAt: new Date(),
-        } as any,
-      ];
-
-      // === CONTEXT ===
-      const memory = await getMemory(userId);
-      const memoryBlock =
-        memory && Object.keys(memory).length > 0
-          ? `=== USER MEMORY ===\n${JSON.stringify(memory, null, 0).slice(0, 1200)}`
-          : "";
-
-      const storedSessionHistory = "";
-
-      const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
-
-      // === USER IDENTITY ===
-      let [userRow] = await db
-        .select()
-        .from(users)
-        .where(eq(users.id, userId))
-        .limit(1);
-
-      // tighter name detection (capture and allow correction when clearly introduced)
-      const nameMatch = userText.match(
-        /\b(?:my name is|i'm|i am|this is|it's|it is|name's)\s+([a-zA-Z]{2,20})\b/i,
-      );
-
-      if (nameMatch?.[1] && nameMatch[1].length > 2) {
-        const possibleName =
-          nameMatch[1].charAt(0).toUpperCase() +
-          nameMatch[1].slice(1).toLowerCase();
-
-        await db
-          .update(users)
-          .set({ firstName: possibleName })
-          .where(eq(users.id, userId));
-
-        [userRow] = await db
+        let [existingUser] = await db
           .select()
           .from(users)
           .where(eq(users.id, userId))
           .limit(1);
-      }
 
-      let identityBlock = "";
+        const fullName = authUser?.claims?.name ?? "";
+        const derivedFirstName =
+          fullName && typeof fullName === "string"
+            ? fullName.split(" ")[0]
+            : null;
 
-      if (!userRow?.firstName) {
-        identityBlock = `=== FIRST INTERACTION PROTOCOL ===
-      You do not know the user's name yet.
+        const insertValues = {
+          id: userId,
+          email: authUser?.claims?.email ?? null,
+          firstName: existingUser?.firstName ?? derivedFirstName ?? null,
+        };
 
-      If the user's name is unknown, integrate a brief and natural name request only when it fits inside the ongoing investigation.
+        const updateSet: Record<string, string | null> = {
+          email: authUser?.claims?.email ?? null,
+        };
 
-      Do NOT ask as a standalone opening.
-      Do NOT interrupt or derail the movement analysis.
-      Do NOT prioritize identity over the investigation.
+        if (!existingUser?.firstName && derivedFirstName) {
+          updateSet.firstName = derivedFirstName;
+        }
 
-      The name request must feel secondary and embedded within the flow.`;
-      } else {
-        identityBlock = `=== USER IDENTITY ===
-      User's first name is ${userRow.firstName}.
+        await db.insert(users).values(insertValues).onConflictDoUpdate({
+          target: users.id,
+          set: updateSet,
+        });
 
-      The name is available and may be used when it adds meaningful emphasis inside the reasoning.
-      Do not use it in every response.
-      Use it no more than once in a response unless there is a strong reason.
-      Do not default to placing it in the final sentence or final continuation.
-      Its use must serve the reasoning rather than habit.`;
-      }
-      // === PROMPT SELECTION ===
-      const ACTIVE_PROMPT = isCaseReview
-        ? CASE_REVIEW_NARRATIVE
-        : ACTIVE_BASE_NARRATIVE;
+        const {
+          conversationId,
+          messages: incoming,
+          isCaseReview,
+        } = req.body ?? {};
 
-      // === MODEL INPUT ===
-      const chatMessages: ChatCompletionMessageParam[] = [
-        {
-          role: "system",
-          content: `
+        const last = incoming[incoming.length - 1];
+        const userText = String(last?.content ?? "").trim();
+
+        let convoId = Number(conversationId);
+
+        if (Number.isFinite(convoId)) {
+          const [existing] = await db
+            .select()
+            .from(conversations)
+            .where(eq(conversations.id, convoId))
+            .limit(1);
+
+          if (!existing || existing.userId !== userId) {
+            return res
+              .status(403)
+              .json({ error: "Invalid conversation ownership" });
+          }
+        }
+
+        if (!Number.isFinite(convoId)) {
+          const [row] = await db
+            .insert(conversations)
+            .values({
+              userId,
+              title: clampText(userText, 60),
+            })
+            .returning();
+
+          convoId = row.id;
+        }
+
+        let previous = await db
+          .select()
+          .from(messages)
+          .where(eq(messages.conversationId, convoId))
+          .orderBy(asc(messages.createdAt));
+
+        const hadMessagesInConversation = previous.length > 0;
+
+        const [anyPriorUserMessage] = await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(eq(messages.userId, userId))
+          .orderBy(asc(messages.createdAt))
+          .limit(1);
+
+        const isFirstRealInteraction =
+          !anyPriorUserMessage && !hadMessagesInConversation;
+
+        const lastAssistantMessage =
+          [...previous].reverse().find((m) => m.role === "assistant") ?? null;
+
+        const previousAssistantAskedName = Boolean(
+          lastAssistantMessage &&
+            askedWhatShouldICallYou(String(lastAssistantMessage.content ?? "")),
+        );
+
+        const explicitName = extractConfidentExplicitName(userText);
+        const standaloneNameReply =
+          !existingUser?.firstName && previousAssistantAskedName
+            ? extractStandaloneNameReply(userText)
+            : null;
+
+        let capturedName: string | null = null;
+
+        if (!existingUser?.firstName && explicitName) {
+          capturedName = explicitName;
+        } else if (!existingUser?.firstName && standaloneNameReply) {
+          capturedName = standaloneNameReply;
+        }
+
+        if (!existingUser?.firstName && capturedName) {
+          await db
+            .update(users)
+            .set({ firstName: capturedName })
+            .where(eq(users.id, userId));
+
+          [existingUser] = await db
+            .select()
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1);
+        }
+
+        await db.insert(messages).values({
+          conversationId: convoId,
+          userId: userId,
+          role: "user",
+          content: userText,
+        });
+
+        previous = [
+          ...previous,
+          {
+            id: 0,
+            conversationId: convoId,
+            userId,
+            role: "user",
+            content: userText,
+            createdAt: new Date(),
+          } as any,
+        ];
+
+        const memory = await getMemory(userId);
+        const memoryBlock =
+          memory && Object.keys(memory).length > 0
+            ? `=== USER MEMORY ===\n${JSON.stringify(memory, null, 0).slice(0, 1200)}`
+            : "";
+
+        const storedSessionHistory = await getStoredSessionHistory(
+          userId,
+          convoId,
+        );
+
+        const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
+
+        let [userRow] = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+
+        const shouldTriggerOnboarding =
+          !userRow?.firstName &&
+          isFirstRealInteraction &&
+          isGenericOpener(userText);
+
+        const isStandaloneNameFollowup =
+          !userRow?.firstName &&
+          Boolean(standaloneNameReply) &&
+          Boolean(lastAssistantMessage) &&
+          previousAssistantAskedName;
+
+        let identityBlock = "";
+
+        // ==============================
+        // FIRST INTERACTION PROTOCOL
+        // ==============================
+
+        if (shouldTriggerOnboarding) {
+          identityBlock = `=== FIRST INTERACTION PROTOCOL ===
+This is the user's first real interaction.
+The current message is only a generic opener, not a substantive issue.
+Deliver the onboarding message now.
+End that onboarding message with this exact question:
+What should I call you?
+
+Do not start movement analysis yet.
+Do not skip the onboarding message.
+Do not replace the final question with a different wording.`;
+        } else if (!userRow?.firstName && isStandaloneNameFollowup) {
+          identityBlock = `=== FIRST INTERACTION PROTOCOL ===
+The user just replied to your onboarding name question with a standalone name.
+Treat that reply as identity confirmation, not as a movement problem to analyze.
+Acknowledge the name naturally and continue forward without asking for the name again.
+Do not turn this one-word reply into issue analysis.`;
+        } else if (!userRow?.firstName) {
+          identityBlock = `=== FIRST INTERACTION PROTOCOL ===
+You do not know the user's name yet.
+
+If the current message is substantive, engage the issue directly.
+Do NOT force the onboarding speech first.
+Do NOT interrupt or derail the investigation with a standalone name question.
+
+You may ask for the user's name later only when it fits naturally inside the ongoing flow.`;
+        } else {
+          identityBlock = `=== USER IDENTITY ===
+User's first name is ${userRow.firstName}.
+
+The name is available and may be used when it adds meaningful emphasis inside the reasoning.
+Do not use it in every response.
+Use it no more than once in a response unless there is a strong reason.
+Do not default to placing it in the final sentence or final continuation.
+Its use must serve the reasoning rather than habit.`;
+        }
+
+        const ACTIVE_PROMPT = isCaseReview
+          ? CASE_REVIEW_NARRATIVE
+          : ACTIVE_BASE_NARRATIVE;
+
+        const chatMessages: ChatCompletionMessageParam[] = [
+          {
+            role: "system",
+            content: `
 You must follow the instructions below exactly. These rules override all default behavior.
 
 ${ACTIVE_PROMPT}
           `.trim(),
-        },
-        {
-          role: "system",
-          content: `
+          },
+          {
+            role: "system",
+            content: `
 Execution context for this conversation:
 
 ${identityBlock}
@@ -601,49 +743,45 @@ ${storedSessionHistory}
 
 ${activeHypothesisBlock}
           `.trim(),
-        },
-        ...previous.slice(-50).map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: String(m.content ?? ""),
-        })),
-      ];
+          },
+          ...previous.slice(-50).map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: String(m.content ?? ""),
+          })),
+        ];
 
-      // === RESPONSE PIPELINE ===
-      // first pass (NON-STREAM)
-      let assistantText = await runCompletion(openai, chatMessages);
+        let assistantText = await runCompletion(openai, chatMessages);
 
-      // === VALIDATION + RETRY ===
-      if (!isCaseReview) {
-        // detect weak / hedged responses
-        const isWeak = /could be|might be|possibly|several|a few things/i.test(
-          assistantText,
-        );
-        // detect explicit reasoning labels
-        const hasLabels =
-          /hypothesis:|guardrail:|lever:|sequence:|narrowing question:/i.test(
-            assistantText,
-          );
-        // detect formatted section headers like **Something**:
-        const hasFormattedSections = /\*\*.*\*\*:/g.test(assistantText);
-        // detect segmented multi-block output
-        const hasMultipleParagraphs = assistantText.split("\n\n").length > 2;
+        if (!isCaseReview && !shouldTriggerOnboarding) {
+          const isWeak =
+            /could be|might be|possibly|several|a few things/i.test(
+              assistantText,
+            );
 
-        if (
-          !isValidResponse(assistantText) ||
-          isWeak ||
-          hasLabels ||
-          hasFormattedSections ||
-          hasMultipleParagraphs
-        ) {
-          const retryMessages: ChatCompletionMessageParam[] = [
-            ...chatMessages,
-            {
-              role: "assistant",
-              content: assistantText,
-            },
-            {
-              role: "user",
-              content: `
+          const hasLabels =
+            /hypothesis:|guardrail:|lever:|sequence:|narrowing question:/i.test(
+              assistantText,
+            );
+
+          const hasFormattedSections = /\*\*.*\*\*:/g.test(assistantText);
+          const hasMultipleParagraphs = assistantText.split("\n\n").length > 2;
+
+          if (
+            !isValidResponse(assistantText) ||
+            isWeak ||
+            hasLabels ||
+            hasFormattedSections ||
+            hasMultipleParagraphs
+          ) {
+            const retryMessages: ChatCompletionMessageParam[] = [
+              ...chatMessages,
+              {
+                role: "assistant",
+                content: assistantText,
+              },
+              {
+                role: "user",
+                content: `
 That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative.
 
 Requirements:
@@ -663,54 +801,48 @@ Requirements:
 - Preserve the active base narrative rather than introducing a new runtime doctrine
 
 Produce the corrected response now.
-              `.trim(),
-            },
-          ];
+                `.trim(),
+              },
+            ];
 
-          assistantText = await runCompletion(openai, retryMessages);
+            assistantText = await runCompletion(openai, retryMessages);
+          }
         }
-      }
 
-      // === STREAM FINAL ONLY ===
-      res.setHeader("Content-Type", "text/event-stream");
-      // simulate streaming (word by word)
-      const words = assistantText.split(" ");
+        res.setHeader("Content-Type", "text/event-stream");
 
-      for (const word of words) {
-        res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
-      }
+        const words = assistantText.split(" ");
 
-      // === STORE RESPONSE ===
-      await db.insert(messages).values({
-        conversationId: convoId,
-        role: "assistant",
-        content: assistantText,
-      });
+        for (const word of words) {
+          res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
+        }
 
-      // === GENERATE + STORE SUMMARY ===
-      try {
-        console.log("SUMMARY USER TEXT:", userText);
+        await db.insert(messages).values({
+          conversationId: convoId,
+          userId: userId,
+          role: "assistant",
+          content: assistantText,
+        });
 
-        const summary = await generateSessionSummary(userText, []);
-        console.log("SUMMARY OUTPUT:", summary);
+        try {
+          const summary = await generateSessionSummary(userText, []);
 
-        await db
-          .update(conversations)
-          .set({ summary })
-          .where(eq(conversations.id, convoId));
+          await db
+            .update(conversations)
+            .set({ summary })
+            .where(eq(conversations.id, convoId));
+        } catch (err) {
+          console.error("Summary generation failed:", err);
+        }
 
-        console.log("SUMMARY STORED FOR CONVERSATION:", convoId);
+        res.write(`data: [DONE]\n\n`);
+        res.end();
       } catch (err) {
-        console.error("Summary generation failed:", err);
+        console.error(err);
+        res.status(500).json({ error: "Server error" });
       }
-
-      res.write(`data: [DONE]\n\n`);
-      res.end();
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Server error" });
-    }
-  });
+    },
+  );
 
   // ==============================
   // OUTCOME API
