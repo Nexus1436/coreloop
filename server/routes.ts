@@ -75,6 +75,31 @@ function clampText(s: string, max = 800): string {
   return t.length > max ? t.slice(0, max) + "…" : t;
 }
 
+function normalizeStoredFirstName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function formatUnknownError(err: unknown): { error: string; stack?: string } {
+  if (err instanceof Error) {
+    return {
+      error: err.message || "Unknown error",
+      stack: err.stack,
+    };
+  }
+
+  try {
+    return {
+      error: JSON.stringify(err),
+    };
+  } catch {
+    return {
+      error: String(err),
+    };
+  }
+}
+
 // ==============================
 // FIRST INTERACTION HELPERS
 // ==============================
@@ -496,6 +521,8 @@ export async function registerRoutes(
     isAuthenticated,
     async (req: Request, res: Response) => {
       try {
+        console.log("CHAT STAGE: auth");
+
         const authUser = req.user as any;
         const userId = authUser?.claims?.sub;
 
@@ -504,47 +531,83 @@ export async function registerRoutes(
           return;
         }
 
+        console.log("CHAT STAGE: request-parse");
+
+        const body = req.body ?? {};
+        const incomingRaw = body.messages;
+
+        if (!Array.isArray(incomingRaw) || incomingRaw.length === 0) {
+          return res.status(400).json({
+            error: "Invalid request: messages must be a non-empty array",
+          });
+        }
+
+        const incoming = incomingRaw.filter(
+          (m: any) =>
+            m &&
+            (m.role === "user" || m.role === "assistant") &&
+            typeof m.content === "string",
+        );
+
+        if (incoming.length === 0) {
+          return res.status(400).json({
+            error:
+              "Invalid request: messages array does not contain any valid message objects",
+          });
+        }
+
+        const last = incoming[incoming.length - 1];
+        const userText = String(last?.content ?? "").trim();
+
+        if (!userText) {
+          return res.status(400).json({
+            error: "Invalid request: latest message content is empty",
+          });
+        }
+
+        const isCaseReview = Boolean(body.isCaseReview);
+        const conversationId = body.conversationId;
+
         let [existingUser] = await db
           .select()
           .from(users)
           .where(eq(users.id, userId))
           .limit(1);
 
-        const fullName = authUser?.claims?.name ?? "";
-        const derivedFirstName =
-          fullName && typeof fullName === "string"
-            ? fullName.split(" ")[0]
-            : null;
+        const dbFirstName = normalizeStoredFirstName(existingUser?.firstName);
 
-        const insertValues = {
-          id: userId,
-          email: authUser?.claims?.email ?? null,
-          firstName: existingUser?.firstName ?? derivedFirstName ?? null,
-        };
+        if (!existingUser) {
+          await db
+            .insert(users)
+            .values({
+              id: userId,
+              email: authUser?.claims?.email ?? null,
+              firstName: null,
+            })
+            .onConflictDoUpdate({
+              target: users.id,
+              set: {
+                email: authUser?.claims?.email ?? null,
+              },
+            });
 
-        const updateSet: Record<string, string | null> = {
-          email: authUser?.claims?.email ?? null,
-        };
-
-        if (!existingUser?.firstName && derivedFirstName) {
-          updateSet.firstName = derivedFirstName;
+          [existingUser] = await db
+            .select()
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1);
+        } else {
+          await db
+            .update(users)
+            .set({
+              email: authUser?.claims?.email ?? null,
+            })
+            .where(eq(users.id, userId));
         }
 
-        await db.insert(users).values(insertValues).onConflictDoUpdate({
-          target: users.id,
-          set: updateSet,
-        });
-
-        const {
-          conversationId,
-          messages: incoming,
-          isCaseReview,
-        } = req.body ?? {};
-
-        const last = incoming[incoming.length - 1];
-        const userText = String(last?.content ?? "").trim();
-
         let convoId = Number(conversationId);
+
+        console.log("CHAT STAGE: conversation-lookup");
 
         if (Number.isFinite(convoId)) {
           const [existing] = await db
@@ -560,6 +623,8 @@ export async function registerRoutes(
           }
         }
 
+        console.log("CHAT STAGE: conversation-create");
+
         if (!Number.isFinite(convoId)) {
           const [row] = await db
             .insert(conversations)
@@ -571,6 +636,8 @@ export async function registerRoutes(
 
           convoId = row.id;
         }
+
+        console.log("CHAT STAGE: prior-message-fetch");
 
         let previous = await db
           .select()
@@ -598,21 +665,23 @@ export async function registerRoutes(
             askedWhatShouldICallYou(String(lastAssistantMessage.content ?? "")),
         );
 
-        const explicitName = extractConfidentExplicitName(userText);
+        const explicitName = dbFirstName
+          ? null
+          : extractConfidentExplicitName(userText);
         const standaloneNameReply =
-          !existingUser?.firstName && previousAssistantAskedName
+          !dbFirstName && previousAssistantAskedName
             ? extractStandaloneNameReply(userText)
             : null;
 
         let capturedName: string | null = null;
 
-        if (!existingUser?.firstName && explicitName) {
+        if (!dbFirstName && explicitName) {
           capturedName = explicitName;
-        } else if (!existingUser?.firstName && standaloneNameReply) {
+        } else if (!dbFirstName && standaloneNameReply) {
           capturedName = standaloneNameReply;
         }
 
-        if (!existingUser?.firstName && capturedName) {
+        if (!dbFirstName && capturedName) {
           await db
             .update(users)
             .set({ firstName: capturedName })
@@ -663,13 +732,15 @@ export async function registerRoutes(
           .where(eq(users.id, userId))
           .limit(1);
 
+        const storedFirstName = normalizeStoredFirstName(userRow?.firstName);
+
         const shouldTriggerOnboarding =
-          !userRow?.firstName &&
+          !storedFirstName &&
           isFirstRealInteraction &&
           isGenericOpener(userText);
 
         const isStandaloneNameFollowup =
-          !userRow?.firstName &&
+          !storedFirstName &&
           Boolean(standaloneNameReply) &&
           Boolean(lastAssistantMessage) &&
           previousAssistantAskedName;
@@ -691,13 +762,13 @@ What should I call you?
 Do not start movement analysis yet.
 Do not skip the onboarding message.
 Do not replace the final question with a different wording.`;
-        } else if (!userRow?.firstName && isStandaloneNameFollowup) {
+        } else if (!storedFirstName && isStandaloneNameFollowup) {
           identityBlock = `=== FIRST INTERACTION PROTOCOL ===
 The user just replied to your onboarding name question with a standalone name.
 Treat that reply as identity confirmation, not as a movement problem to analyze.
 Acknowledge the name naturally and continue forward without asking for the name again.
 Do not turn this one-word reply into issue analysis.`;
-        } else if (!userRow?.firstName) {
+        } else if (!storedFirstName) {
           identityBlock = `=== FIRST INTERACTION PROTOCOL ===
 You do not know the user's name yet.
 
@@ -708,7 +779,7 @@ Do NOT interrupt or derail the investigation with a standalone name question.
 You may ask for the user's name later only when it fits naturally inside the ongoing flow.`;
         } else {
           identityBlock = `=== USER IDENTITY ===
-User's first name is ${userRow.firstName}.
+User's first name is ${storedFirstName}.
 
 The name is available and may be used when it adds meaningful emphasis inside the reasoning.
 Do not use it in every response.
@@ -720,6 +791,8 @@ Its use must serve the reasoning rather than habit.`;
         const ACTIVE_PROMPT = isCaseReview
           ? CASE_REVIEW_NARRATIVE
           : ACTIVE_BASE_NARRATIVE;
+
+        console.log("CHAT STAGE: prompt-assembly");
 
         const chatMessages: ChatCompletionMessageParam[] = [
           {
@@ -749,6 +822,8 @@ ${activeHypothesisBlock}
             content: String(m.content ?? ""),
           })),
         ];
+
+        console.log("CHAT STAGE: openai-completion");
 
         let assistantText = await runCompletion(openai, chatMessages);
 
@@ -817,6 +892,8 @@ Produce the corrected response now.
           res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
         }
 
+        console.log("CHAT STAGE: assistant-message-insert");
+
         await db.insert(messages).values({
           conversationId: convoId,
           userId: userId,
@@ -838,8 +915,9 @@ Produce the corrected response now.
         res.write(`data: [DONE]\n\n`);
         res.end();
       } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Server error" });
+        console.error("CHAT ERROR:", err);
+        const formatted = formatUnknownError(err);
+        res.status(500).json(formatted);
       }
     },
   );
