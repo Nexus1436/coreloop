@@ -65,6 +65,31 @@ const elevenlabs = new ElevenLabsClient({
   apiKey: process.env.ELEVENLABS_API_KEY!,
 });
 
+const INTERLOOP_TTS_CONFIG = {
+  female: {
+    voiceId: "RjWJXbF7h9KPSuGnLo5x",
+    modelId: "eleven_multilingual_v2",
+    settings: {
+      stability: 0.36,
+      similarity_boost: 0.78,
+      style: 0.18,
+      use_speaker_boost: false,
+      speed: 1.08,
+    },
+  },
+  male: {
+    voiceId: "3WZjQ5NUrKH37Zw6Vgp7",
+    modelId: "eleven_multilingual_v2",
+    settings: {
+      stability: 0.38,
+      similarity_boost: 0.78,
+      style: 0.15,
+      use_speaker_boost: false,
+      speed: 1.06,
+    },
+  },
+} as const;
+
 // ==============================
 // UTILITY: TEXT CLAMP
 // ==============================
@@ -422,18 +447,51 @@ export async function registerRoutes(
   app.post("/api/tts", async (req: Request, res: Response) => {
     try {
       const { text, voice } = req.body ?? {};
+
       if (!text || !text.trim()) {
         return res.status(400).json({ error: "No text provided" });
       }
 
-      const voiceId =
-        voice === "male" ? "3WZjQ5NUrKH37Zw6Vgp7" : "RjWJXbF7h9KPSuGnLo5x";
+      const processedText = text.replace(/—/g, " — ").replace(/…/g, "... ");
+
+      const selectedVoice =
+        voice === "male"
+          ? INTERLOOP_TTS_CONFIG.male
+          : INTERLOOP_TTS_CONFIG.female;
 
       const job = async () => {
-        const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
-          model_id: "eleven_multilingual_v2",
-          text,
-        });
+        let audioStream;
+
+        try {
+          audioStream = await elevenlabs.textToSpeech.convert(
+            selectedVoice.voiceId,
+            {
+              model_id: selectedVoice.modelId,
+              text: processedText.trim(),
+              voice_settings: {
+                stability: selectedVoice.settings.stability,
+                similarity_boost: selectedVoice.settings.similarity_boost,
+                style: selectedVoice.settings.style,
+                use_speaker_boost: selectedVoice.settings.use_speaker_boost,
+                speed: selectedVoice.settings.speed,
+              },
+            },
+          );
+        } catch (err) {
+          audioStream = await elevenlabs.textToSpeech.convert(
+            selectedVoice.voiceId,
+            {
+              model_id: selectedVoice.modelId,
+              text: processedText.trim(),
+              voice_settings: {
+                stability: selectedVoice.settings.stability,
+                similarity_boost: selectedVoice.settings.similarity_boost,
+                style: selectedVoice.settings.style,
+                use_speaker_boost: selectedVoice.settings.use_speaker_boost,
+              },
+            },
+          );
+        }
 
         const chunks: Uint8Array[] = [];
         for await (const chunk of audioStream) chunks.push(chunk);
