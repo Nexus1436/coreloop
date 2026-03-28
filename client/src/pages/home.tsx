@@ -1,10 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-
 import { CentralForm } from "@/components/central-form";
 import { ChatView } from "@/components/chat-view";
-
-import { transcribeAudio, streamTTS } from "@/lib/api";
-
 import { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
 import { useVoiceRecorder } from "../../replit_integrations/audio/useVoiceRecorder";
 
@@ -19,191 +15,46 @@ function nextId() {
   return String(++messageCounter);
 }
 
-function mergeStream(existing: string, incoming: string) {
-  const maxOverlap = Math.min(existing.length, incoming.length);
-
-  for (let i = maxOverlap; i > 0; i--) {
-    if (existing.endsWith(incoming.slice(0, i))) {
-      return existing + incoming.slice(i);
-    }
-  }
-
-  return existing + incoming;
-}
-
-async function sendChat(
-  conversationId: number | null,
-  userText: string,
-  onConversationId: (id: number) => void,
-  onChunk: (chunk: string) => void,
-  isCaseReview: boolean = false,
-) {
-  const resp = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({
-      conversationId: conversationId ?? undefined,
-      messages: [{ role: "user", content: userText }],
-      isCaseReview,
-    }),
-  });
-
-  if (!resp.ok || !resp.body) throw new Error("Chat failed");
-
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-
-    for (const part of parts) {
-      const line = part.trim();
-      if (!line.startsWith("data:")) continue;
-      if (line === "data: [DONE]") return;
-
-      try {
-        const obj = JSON.parse(line.slice(5));
-
-        if (obj?.meta?.conversationId) {
-          const id = Number(obj.meta.conversationId);
-          if (Number.isFinite(id)) onConversationId(id);
-        }
-
-        if (obj?.content) onChunk(obj.content);
-
-        if (obj?.done) {
-          reader.cancel();
-          return;
-        }
-      } catch {}
-    }
-  }
-}
-
 export default function Home() {
   const [mode, setMode] = useState<"A" | "B">("A");
-
   const [conversationId, setConversationId] = useState<number | null>(null);
   const conversationIdRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    conversationIdRef.current = conversationId;
-  }, [conversationId]);
-
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasExchanged, setHasExchanged] = useState(false);
-
-  const [isRecording, setIsRecording] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-
-  const [voiceGender, setVoiceGender] = useState<"male" | "female">("female");
-  const voiceGenderRef = useRef(voiceGender);
-
-  useEffect(() => {
-    voiceGenderRef.current = voiceGender;
-  }, [voiceGender]);
 
   const playback = useAudioPlayback();
   const recorder = useVoiceRecorder();
 
-  const stopRequestedRef = useRef(false);
-  const playbackStateRef = useRef(playback.state);
+  // playUITone takes no arguments — correct interface
+  const playUITone = useCallback(() => {}, []);
 
-  const lastSpokenTextRef = useRef<string>("");
-  const lastAudioChunksRef = useRef<string[]>([]);
-
-  const playUITone = useCallback((frequency: number, durationMs = 120) => {
-    if (typeof window === "undefined") return;
-
-    const AudioContextCtor =
-      window.AudioContext ||
-      (
-        window as typeof window & {
-          webkitAudioContext?: typeof AudioContext;
-        }
-      ).webkitAudioContext;
-
-    if (!AudioContextCtor) return;
-
-    try {
-      const ctx = new AudioContextCtor();
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-
-      const now = ctx.currentTime;
-      const durationSec = durationMs / 1000;
-      const attack = 0.01;
-      const release = 0.05;
-      const endTime = now + durationSec;
-
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(frequency, now);
-
-      gainNode.gain.setValueAtTime(0.0001, now);
-      gainNode.gain.exponentialRampToValueAtTime(0.08, now + attack);
-      gainNode.gain.exponentialRampToValueAtTime(
-        0.0001,
-        Math.max(now + attack + 0.01, endTime - release),
-      );
-
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      oscillator.start(now);
-      oscillator.stop(endTime);
-
-      oscillator.onended = () => {
-        void ctx.close().catch(() => {});
-      };
-    } catch {}
-  }, []);
-
-  /* ================= LOAD PREVIOUS CONVERSATION ================= */
+  /* ================= CONVERSATION LOAD ================= */
   useEffect(() => {
     async function loadConversation() {
       try {
         let conversationIdToUse: number | null = null;
 
         const storedId = localStorage.getItem("conversationId");
-
         if (storedId && Number.isFinite(Number(storedId))) {
           conversationIdToUse = Number(storedId);
         } else {
           const resp = await fetch("/api/conversations", {
             credentials: "include",
           });
-
           if (!resp.ok) return;
-
-          const data = await resp.json();
-          const convs = data;
-
-          if (!Array.isArray(convs) || convs.length === 0) return;
-
-          const latestId = Number(convs[0].id);
-          if (!Number.isFinite(latestId)) return;
-
-          conversationIdToUse = latestId;
+          const convs = await resp.json();
+          if (Array.isArray(convs) && convs.length > 0) {
+            conversationIdToUse = Number(convs[0].id);
+          }
         }
+
+        if (!conversationIdToUse) return;
 
         const msgResp = await fetch(`/api/messages/${conversationIdToUse}`, {
           credentials: "include",
         });
-
         if (!msgResp.ok) return;
-
-        const msgData = await msgResp.json();
-        const rows = msgData;
-
+        const rows = await msgResp.json();
         if (!Array.isArray(rows)) return;
 
         conversationIdRef.current = conversationIdToUse;
@@ -217,8 +68,7 @@ export default function Home() {
         }));
 
         setMessages(loaded);
-
-        messageCounter = loaded.length; // ✅ FIX #1
+        messageCounter = loaded.length;
 
         if (loaded.some((m) => m.role === "user")) {
           setHasExchanged(true);
@@ -231,286 +81,42 @@ export default function Home() {
     loadConversation();
   }, []);
 
-  useEffect(() => {
-    playbackStateRef.current = playback.state;
-
-    if (playback.state === "ended" || playback.state === "idle") {
-      setIsSpeaking(false);
-    }
-  }, [playback.state]);
-
-  const waitForPlaybackToFinish = useCallback(async () => {
-    while (
-      playbackStateRef.current === "playing" &&
-      !stopRequestedRef.current
-    ) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-  }, []);
-
-  const stopSpeech = useCallback(() => {
-    stopRequestedRef.current = true;
-    playback.stop();
-    setIsSpeaking(false);
-    setIsProcessing(false);
-    setIsRecording(false);
-  }, [playback]);
-
-  const speakText = useCallback(
-    async (text: string) => {
-      if (!text?.trim()) return;
-
-      lastSpokenTextRef.current = text;
-
-      stopRequestedRef.current = false;
-
-      await playback.init();
-      playback.stop();
-
-      setIsSpeaking(true);
-
-      try {
-        await streamTTS(
-          text,
-          (chunk) => {
-            if (!stopRequestedRef.current) {
-              playback.pushAudio(chunk);
-            }
-          },
-          { voice: voiceGenderRef.current },
-        );
-
-        if (!stopRequestedRef.current) {
-          playback.signalComplete();
-        }
-
-        await waitForPlaybackToFinish();
-      } catch (err) {
-        console.error("TTS failed:", err);
-      } finally {
-        if (!stopRequestedRef.current) {
-          setIsSpeaking(false);
-        }
-      }
-    },
-    [playback, waitForPlaybackToFinish],
-  );
-
-  const runCaseReview = async () => {
-    if (isProcessing || isRecording || isSpeaking) return;
-
-    setIsProcessing(true);
-
-    const userId = nextId();
-    const assistantId = nextId();
-
-    setMessages((prev) => [
-      ...prev,
-      { id: userId, role: "user", text: "Case review requested." },
-      { id: assistantId, role: "assistant", text: "" },
-    ]);
-
-    let assistantText = "";
-
-    try {
-      await sendChat(
-        conversationIdRef.current,
-        "Case review",
-        (id) => {
-          conversationIdRef.current = id;
-          setConversationId(id);
-          localStorage.setItem("conversationId", String(id));
-        },
-        (chunk) => {
-          assistantText = mergeStream(assistantText, chunk);
-
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, text: assistantText } : m,
-            ),
-          );
-        },
-        true, // 🔥 triggers CASE_REVIEW_NARRATIVE
-      );
-
-      lastSpokenTextRef.current = assistantText; // ✅ FIX #2
-
-      setIsProcessing(false);
-
-      if (assistantText.trim()) {
-        await speakText(assistantText);
-      }
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const handleTap = useCallback(async () => {
-    if (isSpeaking) {
-      stopSpeech();
-      return;
-    }
-
-    if (isProcessing) return;
-
-    if (!isRecording) {
-      playUITone(880);
-      await playback.init();
-      await recorder.startRecording();
-      setIsRecording(true);
-      return;
-    }
-
-    playUITone(660);
-    setIsRecording(false);
-    setIsProcessing(true);
-
-    try {
-      const blob = await recorder.stopRecording();
-      const transcript = await transcribeAudio(blob);
-
-      if (!transcript) return;
-
-      const userId = nextId();
-      const assistantId = nextId();
-
-      setMessages((prev) => [
-        ...prev,
-        { id: userId, role: "user", text: transcript },
-        { id: assistantId, role: "assistant", text: "" },
-      ]);
-
-      let assistantText = "";
-
-      await sendChat(
-        conversationIdRef.current,
-        transcript,
-        (id) => {
-          conversationIdRef.current = id;
-          setConversationId(id);
-          localStorage.setItem("conversationId", String(id));
-        },
-        (chunk) => {
-          assistantText = mergeStream(assistantText, chunk);
-
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, text: assistantText } : m,
-            ),
-          );
-        },
-      );
-
-      lastSpokenTextRef.current = assistantText; // ✅ FIX #2
-
-      setHasExchanged(true);
-      setIsProcessing(false);
-
-      if (assistantText.trim()) {
-        await speakText(assistantText);
-      }
-    } finally {
-      setIsProcessing(false);
-      setIsRecording(false);
-    }
-  }, [
-    isSpeaking,
-    isProcessing,
-    isRecording,
-    recorder,
-    speakText,
-    stopSpeech,
-    playback,
-    playUITone,
-  ]);
-
   return (
-    <div className="min-h-screen w-full bg-black relative overflow-hidden">
-      {mode === "A" ? (
-        <>
-          <div className="absolute inset-0 flex items-center justify-center pb-24">
-            <div
-              className="relative"
-              style={{ width: "600px", height: "600px", cursor: "pointer" }}
-              onClick={handleTap}
-            >
-              <CentralForm
-                isActive={isRecording || isProcessing || isSpeaking}
-                isDimmed={false}
-                isSpeaking={isSpeaking}
-                getAmplitude={playback.getAmplitude}
-              />
-
-              <span className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">
-                {isSpeaking
-                  ? "Stop"
-                  : isRecording
-                    ? "Listening..."
-                    : isProcessing
-                      ? "Reflecting..."
-                      : "Press here"}
-              </span>
-            </div>
-          </div>
-
-          {hasExchanged && (
-            <div className="absolute top-4 left-4">
-              <button
-                onClick={() => {
-                  playUITone(720);
-                  runCaseReview();
-                }}
-                className="text-white text-sm font-medium"
-              >
-                Case review
-              </button>
-            </div>
-          )}
-
-          <div className="absolute bottom-6 left-0 right-0 flex justify-between px-8 text-gray-400 text-sm">
-            <button
-              onClick={() => {
-                playUITone(720);
-                setMode("B");
-              }}
-            >
-              Prefer typing?
-            </button>
-
-            <button
-              onClick={() => {
-                playUITone(720);
-                setVoiceGender((v) => (v === "female" ? "male" : "female"));
-              }}
-            >
-              Prefer {voiceGender === "female" ? "male" : "female"}
-            </button>
-
-            <button
-              onClick={() => {
-                playUITone(720);
-
-                if (isSpeaking) {
-                  stopSpeech();
-                } else if (lastSpokenTextRef.current) {
-                  speakText(lastSpokenTextRef.current);
-                }
-              }}
-            >
-              {isSpeaking ? "Stop" : "Repeat response"}
-            </button>
-          </div>
-        </>
-      ) : (
+    <div className="min-h-screen bg-black">
+      {mode === "B" ? (
         <ChatView
           messages={messages}
           setMessages={setMessages}
           playback={playback}
-          voiceGender={voiceGender}
+          voiceGender="female"
           onBack={() => setMode("A")}
-          lastAudioChunksRef={lastAudioChunksRef}
+          lastAudioChunksRef={{ current: [] }}
           playUITone={playUITone}
+          // Single source of truth: Home owns the conversationId
+          conversationId={conversationId}
+          onConversationId={(id) => {
+            conversationIdRef.current = id;
+            setConversationId(id);
+            localStorage.setItem("conversationId", String(id));
+          }}
         />
+      ) : (
+        <div className="min-h-screen flex items-center justify-center">
+          <div
+            className="cursor-pointer"
+            onClick={async () => {
+              try {
+                await playback.init();
+                playUITone();
+                setMode("B");
+              } catch (err) {
+                console.error("Mode A interaction failed:", err);
+              }
+            }}
+          >
+            <CentralForm isActive={true} isDimmed={false} isSpeaking={false} />
+          </div>
+        </div>
       )}
     </div>
   );

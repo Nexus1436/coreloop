@@ -35,6 +35,8 @@ import {
   updateMemory,
   mergeExtracted,
   type InterloopMemory,
+  writeTimelineEntry,
+  writeCaseReview,
 } from "./memory/memory";
 
 import { extractMemory, extractSessionSignals } from "./memory/extract";
@@ -422,16 +424,32 @@ export async function registerRoutes(
 
   app.post("/api/stt", async (req: Request, res: Response) => {
     try {
-      const { audio } = req.body;
+      const { audio, mimeType } = req.body ?? {};
 
       if (!audio) {
         return res.status(400).json({ error: "No audio provided" });
       }
 
+      const resolvedMimeType =
+        typeof mimeType === "string" && mimeType.trim()
+          ? mimeType.trim()
+          : "audio/webm";
+
+      const extension =
+        resolvedMimeType.includes("mp4") || resolvedMimeType.includes("mpeg")
+          ? "mp4"
+          : resolvedMimeType.includes("wav")
+            ? "wav"
+            : resolvedMimeType.includes("ogg")
+              ? "ogg"
+              : "webm";
+
       const buffer = Buffer.from(audio, "base64");
 
       const transcription = await openai.audio.transcriptions.create({
-        file: await toFile(buffer, "speech.webm"),
+        file: await toFile(buffer, `speech.${extension}`, {
+          type: resolvedMimeType,
+        }),
         model: "whisper-1",
       });
 
@@ -958,6 +976,46 @@ Produce the corrected response now.
           role: "assistant",
           content: assistantText,
         });
+
+        try {
+          if (isCaseReview && assistantText.length > 60) {
+            const [latestCase] = await db
+              .select()
+              .from(cases)
+              .where(eq(cases.userId, userId))
+              .orderBy(desc(cases.id))
+              .limit(1);
+
+            if (latestCase) {
+              await writeCaseReview({
+                userId,
+                caseId: latestCase.id,
+                reviewText: assistantText,
+              });
+            }
+          }
+        } catch (err) {
+          console.error("Case review write failed:", err);
+        }
+
+        try {
+          const shouldWriteTimeline =
+            userText.length > 40 &&
+            /pain|tight|hurt|issue|problem|can't|cannot|struggle|confused|off/i.test(
+              userText,
+            );
+
+          if (shouldWriteTimeline) {
+            await writeTimelineEntry({
+              userId,
+              conversationId: convoId,
+              summary: userText,
+              dominantSignal: userText.slice(0, 120),
+            });
+          }
+        } catch (err) {
+          console.error("Timeline write failed:", err);
+        }
 
         try {
           const summary = await generateSessionSummary(userText, []);

@@ -16,6 +16,7 @@ export async function sendMessage(
   content: string,
   onConversationId: (id: number) => void,
   onChunk: (text: string) => void,
+  options?: { isCaseReview?: boolean },
 ): Promise<void> {
   const res = await fetch("/api/chat", {
     method: "POST",
@@ -24,6 +25,7 @@ export async function sendMessage(
     body: JSON.stringify({
       conversationId: conversationId ?? undefined,
       messages: [{ role: "user", content }],
+      ...(options?.isCaseReview ? { isCaseReview: true } : {}),
     }),
   });
 

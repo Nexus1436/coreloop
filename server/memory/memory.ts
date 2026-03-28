@@ -1,5 +1,5 @@
-import { db } from "../db";
-import { userMemory } from "@shared/schema";
+import { db } from "../db.ts";
+import { userMemory, timelineEntries, caseReviews } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
 /* =====================================================
@@ -196,12 +196,52 @@ export async function updateMemory(
 }
 
 /* =====================================================
+   DURABLE MEMORY FILTER
+===================================================== */
+
+export function filterDurableMemory(
+  extracted: Record<string, any>,
+): Record<string, any> {
+  const allowed: Record<string, any> = {};
+
+  for (const key of Object.keys(extracted)) {
+    const value = extracted[key];
+
+    if (!value) continue;
+
+    if (key.startsWith("identity.")) {
+      allowed[key] = value;
+      continue;
+    }
+
+    if (key.startsWith("sportContext.")) {
+      allowed[key] = value;
+      continue;
+    }
+
+    if (
+      key.startsWith("movementPatterns.") ||
+      key.startsWith("signalHistory.")
+    ) {
+      if (Array.isArray(value) && value.length > 0) {
+        allowed[key] = value;
+      }
+      continue;
+    }
+  }
+
+  return allowed;
+}
+
+/* =====================================================
    MERGE EXTRACTED MEMORY
 ===================================================== */
 
 export function mergeExtracted(memory: any, extracted: Record<string, any>) {
-  for (const key of Object.keys(extracted)) {
-    const value = extracted[key];
+  const filtered = filterDurableMemory(extracted);
+
+  for (const key of Object.keys(filtered)) {
+    const value = filtered[key];
 
     if (value === undefined || value === null) continue;
 
@@ -237,4 +277,45 @@ export function mergeExtracted(memory: any, extracted: Record<string, any>) {
 
     target[finalKey] = value;
   }
+}
+
+/* =====================================================
+   TIMELINE WRITER
+===================================================== */
+
+export async function writeTimelineEntry(params: {
+  userId: string;
+  conversationId: number;
+  summary: string;
+  dominantSignal?: string;
+  dominantMechanism?: string;
+}) {
+  if (!params.summary || params.summary.length < 20) return;
+
+  await db.insert(timelineEntries).values({
+    userId: params.userId,
+    conversationId: params.conversationId,
+    summary: params.summary,
+    dominantSignal: params.dominantSignal ?? null,
+    dominantMechanism: params.dominantMechanism ?? null,
+    status: "active",
+  });
+}
+
+/* =====================================================
+   CASE REVIEW WRITER
+===================================================== */
+
+export async function writeCaseReview(params: {
+  userId: string;
+  caseId: number;
+  reviewText: string;
+}) {
+  if (!params.reviewText || params.reviewText.length < 40) return;
+
+  await db.insert(caseReviews).values({
+    userId: params.userId,
+    caseId: params.caseId,
+    reviewText: params.reviewText,
+  });
 }

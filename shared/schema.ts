@@ -75,7 +75,7 @@ export const messages = pgTable(
 );
 
 /* =====================================================
-   TRANSCRIPTS (STT DEBUG STORAGE)
+   TRANSCRIPTS
 ===================================================== */
 
 export const transcripts = pgTable(
@@ -133,6 +133,43 @@ export const userMemory = pgTable(
 );
 
 /* =====================================================
+   TIMELINE
+===================================================== */
+
+export const timelineEntries = pgTable(
+  "timeline_entries",
+  {
+    id: serial("id").primaryKey(),
+
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
+    conversationId: integer("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+
+    caseId: integer("case_id"),
+
+    summary: text("summary").notNull(),
+
+    dominantSignal: text("dominant_signal"),
+    dominantMechanism: text("dominant_mechanism"),
+
+    status: text("status").$type<
+      "emerging" | "active" | "improved" | "resolved"
+    >(),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    timelineUserIdx: index("timeline_entries_user_idx").on(table.userId),
+  }),
+);
+
+/* =====================================================
    SESSION SIGNALS
 ===================================================== */
 
@@ -166,7 +203,7 @@ export const sessionSignals = pgTable(
 );
 
 /* =====================================================
-   CASE DATASET (INTERLOOP MOVEMENT ENGINE)
+   CASES
 ===================================================== */
 
 export const cases = pgTable(
@@ -184,7 +221,6 @@ export const cases = pgTable(
     ),
 
     movementContext: text("movement_context"),
-
     activityType: text("activity_type"),
 
     status: text("status").default("open").notNull(),
@@ -199,6 +235,35 @@ export const cases = pgTable(
   },
   (table) => ({
     caseUserIdx: index("cases_user_idx").on(table.userId),
+  }),
+);
+
+/* =====================================================
+   CASE REVIEWS (NEW)
+===================================================== */
+
+export const caseReviews = pgTable(
+  "case_reviews",
+  {
+    id: serial("id").primaryKey(),
+
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
+    caseId: integer("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+
+    reviewText: text("review_text").notNull(),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    caseReviewCaseIdx: index("case_reviews_case_idx").on(table.caseId),
+    caseReviewUserIdx: index("case_reviews_user_idx").on(table.userId),
   }),
 );
 
@@ -220,13 +285,9 @@ export const caseSignals = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
 
     bodyRegion: text("body_region"),
-
     signalType: text("signal_type"),
-
     movementContext: text("movement_context"),
-
     activityType: text("activity_type"),
-
     description: text("description"),
 
     createdAt: timestamp("created_at")
@@ -256,7 +317,6 @@ export const caseHypotheses = pgTable(
     }),
 
     hypothesis: text("hypothesis").notNull(),
-
     confidence: text("confidence"),
 
     createdAt: timestamp("created_at")
@@ -286,9 +346,7 @@ export const caseAdjustments = pgTable(
     }),
 
     adjustmentType: text("adjustment_type"),
-
     cue: text("cue"),
-
     mechanicalFocus: text("mechanical_focus"),
 
     createdAt: timestamp("created_at")
@@ -319,7 +377,6 @@ export const caseOutcomes = pgTable(
     ),
 
     result: text("result"),
-
     userFeedback: text("user_feedback"),
 
     createdAt: timestamp("created_at")
