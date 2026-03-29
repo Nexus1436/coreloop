@@ -37,6 +37,8 @@ import {
   type InterloopMemory,
   writeTimelineEntry,
   writeCaseReview,
+  promoteTimelineToUserMemory,
+  buildMemoryPromptBlock,
 } from "./memory/memory";
 
 import { extractMemory, extractSessionSignals } from "./memory/extract";
@@ -253,6 +255,18 @@ function detectOutcomeResult(
   if (same.test(input)) return "Same";
 
   return null;
+}
+
+function looksLikeAdjustment(text: string): boolean {
+  return /\b(i tried|i changed|i started|i switched|i adjusted|i moved to|i began|i stopped|i reduced|i increased|i focused on|i worked on|i let|i allowed)\b/i.test(
+    text.trim(),
+  );
+}
+
+function looksLikeOutcome(text: string): boolean {
+  return /\b(helped|worked|better|improved|worse|hurt more|hurts more|more pain|aggravated|same|no change|didn't help|didnt help|no difference|unchanged)\b/i.test(
+    text.trim(),
+  );
 }
 
 // ==============================
@@ -790,10 +804,7 @@ export async function registerRoutes(
         ];
 
         const memory = await getMemory(userId);
-        const memoryBlock =
-          memory && Object.keys(memory).length > 0
-            ? `=== USER MEMORY ===\n${JSON.stringify(memory, null, 0).slice(0, 1200)}`
-            : "";
+        const memoryBlock = buildMemoryPromptBlock(memory);
 
         const storedSessionHistory = await getStoredSessionHistory(
           userId,
@@ -1009,12 +1020,50 @@ Produce the corrected response now.
             await writeTimelineEntry({
               userId,
               conversationId: convoId,
+              type: "signal",
               summary: userText,
-              dominantSignal: userText.slice(0, 120),
             });
           }
         } catch (err) {
           console.error("Timeline write failed:", err);
+        }
+
+        try {
+          const shouldWriteAdjustment =
+            userText.length > 30 && looksLikeAdjustment(userText);
+
+          if (shouldWriteAdjustment) {
+            await writeTimelineEntry({
+              userId,
+              conversationId: convoId,
+              type: "adjustment",
+              summary: userText,
+            });
+          }
+        } catch (err) {
+          console.error("Adjustment timeline write failed:", err);
+        }
+
+        try {
+          const shouldWriteOutcome =
+            userText.length > 20 && looksLikeOutcome(userText);
+
+          if (shouldWriteOutcome) {
+            await writeTimelineEntry({
+              userId,
+              conversationId: convoId,
+              type: "outcome",
+              summary: userText,
+            });
+          }
+        } catch (err) {
+          console.error("Outcome timeline write failed:", err);
+        }
+
+        try {
+          await promoteTimelineToUserMemory(userId);
+        } catch (err) {
+          console.error("User memory promotion failed:", err);
         }
 
         try {

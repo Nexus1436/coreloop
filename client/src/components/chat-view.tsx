@@ -20,21 +20,14 @@ interface ChatViewProps {
   playback: ReturnType<typeof useAudioPlayback>;
   lastAudioChunksRef: MutableRefObject<string[]>;
   voiceGender: "male" | "female";
-  // Correct interface: no arguments
-  playUITone: () => void;
-  // Home is the single source of truth for conversationId
-  conversationId: number | null;
-  onConversationId: (id: number) => void;
+  playUITone: (frequency?: number, durationMs?: number) => void;
+  onConversationIdChange: (conversationId: number) => void;
 }
 
 let msgCounter = 1000;
 function nextChatId() {
   return String(++msgCounter);
 }
-
-/* =====================================================
-   STREAM MERGE FIX
-===================================================== */
 
 function mergeStream(existing: string, incoming: string) {
   const maxOverlap = Math.min(existing.length, incoming.length);
@@ -47,10 +40,6 @@ function mergeStream(existing: string, incoming: string) {
 
   return existing + incoming;
 }
-
-/* =====================================================
-   FORMAT TEXT
-===================================================== */
 
 function formatAssistantText(text: string) {
   if (!text) return text;
@@ -69,27 +58,27 @@ export function ChatView({
   lastAudioChunksRef,
   voiceGender,
   playUITone,
-  conversationId,
-  onConversationId,
+  onConversationIdChange,
 }: ChatViewProps) {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const conversationIdRef = useRef<number | null>(null);
 
-  // Mirror prop into ref so handleSend closure always sees current value
-  // without re-creating the function on every conversationId change
-  const conversationIdRef = useRef<number | null>(conversationId);
   useEffect(() => {
-    conversationIdRef.current = conversationId;
-  }, [conversationId]);
+    const storedId = localStorage.getItem("conversationId");
+    const parsed = storedId ? Number(storedId) : NaN;
+
+    if (Number.isFinite(parsed)) {
+      conversationIdRef.current = parsed;
+    }
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  /* ================= SEND ================= */
 
   const handleSend = async () => {
     const trimmed = inputValue.trim();
@@ -118,7 +107,7 @@ export function ChatView({
         trimmed,
         (id: number) => {
           conversationIdRef.current = id;
-          onConversationId(id);
+          onConversationIdChange(id);
         },
         (chunk: string) => {
           assistantText = mergeStream(assistantText, chunk);
@@ -148,8 +137,6 @@ export function ChatView({
       setIsStreaming(false);
     }
   };
-
-  /* ================= REPLAY ================= */
 
   const handleReadAloud = useCallback(async () => {
     const lastAssistant = [...messages]
@@ -183,7 +170,7 @@ export function ChatView({
       className="min-h-screen flex flex-col bg-black"
     >
       <div className="flex-1 overflow-y-auto px-6">
-        <div className="max-w-xl mx-auto space-y-5">
+        <div className="max-w-xl mx-auto space-y-5 py-5">
           {messages.map((msg) => (
             <div
               key={msg.id}
@@ -222,7 +209,7 @@ export function ChatView({
 
           <button
             onClick={() => {
-              playUITone();
+              playUITone(720);
               handleReadAloud();
             }}
           >
@@ -234,7 +221,7 @@ export function ChatView({
           <div className="text-center pt-3">
             <button
               onClick={() => {
-                playUITone();
+                playUITone(720);
                 onBack();
               }}
               className="text-sm text-[#666] hover:text-[#888]"

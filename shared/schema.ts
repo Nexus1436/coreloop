@@ -136,39 +136,15 @@ export const userMemory = pgTable(
    TIMELINE
 ===================================================== */
 
-export const timelineEntries = pgTable(
-  "timeline_entries",
-  {
-    id: serial("id").primaryKey(),
-
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-
-    conversationId: integer("conversation_id")
-      .notNull()
-      .references(() => conversations.id, { onDelete: "cascade" }),
-
-    caseId: integer("case_id"),
-
-    summary: text("summary").notNull(),
-
-    dominantSignal: text("dominant_signal"),
-    dominantMechanism: text("dominant_mechanism"),
-
-    status: text("status").$type<
-      "emerging" | "active" | "improved" | "resolved"
-    >(),
-
-    createdAt: timestamp("created_at")
-      .default(sql`CURRENT_TIMESTAMP`)
-      .notNull(),
-  },
-  (table) => ({
-    timelineUserIdx: index("timeline_entries_user_idx").on(table.userId),
-  }),
-);
-
+export const timelineEntries = pgTable("timeline_entries", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  conversationId: integer("conversation_id").notNull(),
+  summary: text("summary").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  type: text("type"),
+  metadata: jsonb("metadata"),
+});
 /* =====================================================
    SESSION SIGNALS
 ===================================================== */

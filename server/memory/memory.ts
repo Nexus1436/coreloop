@@ -1,6 +1,6 @@
 import { db } from "../db.ts";
 import { userMemory, timelineEntries, caseReviews } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 
 /* =====================================================
    MEMORY TYPE
@@ -196,6 +196,54 @@ export async function updateMemory(
 }
 
 /* =====================================================
+   MEMORY PROMPT BLOCK
+===================================================== */
+
+export function buildMemoryPromptBlock(memory: InterloopMemory): string {
+  const lines: string[] = [];
+
+  if (memory.identity.name) {
+    lines.push(`Name: ${memory.identity.name}`);
+  }
+
+  if (memory.sportContext.primarySport) {
+    lines.push(`Primary sport: ${memory.sportContext.primarySport}`);
+  }
+
+  if (
+    Array.isArray(memory.movementPatterns.recurringThemes) &&
+    memory.movementPatterns.recurringThemes.length > 0
+  ) {
+    lines.push("Recurring themes:");
+    for (const theme of memory.movementPatterns.recurringThemes.slice(0, 6)) {
+      lines.push(`- ${theme}`);
+    }
+  }
+
+  if (
+    Array.isArray(memory.body.chronicTensionZones) &&
+    memory.body.chronicTensionZones.length > 0
+  ) {
+    lines.push(
+      `Chronic tension zones: ${memory.body.chronicTensionZones.slice(0, 6).join(", ")}`,
+    );
+  }
+
+  if (
+    Array.isArray(memory.body.instabilityZones) &&
+    memory.body.instabilityZones.length > 0
+  ) {
+    lines.push(
+      `Instability zones: ${memory.body.instabilityZones.slice(0, 6).join(", ")}`,
+    );
+  }
+
+  if (lines.length === 0) return "";
+
+  return `=== USER MEMORY ===\n${lines.join("\n")}`;
+}
+
+/* =====================================================
    DURABLE MEMORY FILTER
 ===================================================== */
 
@@ -286,19 +334,18 @@ export function mergeExtracted(memory: any, extracted: Record<string, any>) {
 export async function writeTimelineEntry(params: {
   userId: string;
   conversationId: number;
+  type?: "signal" | "adjustment" | "outcome" | "pattern" | "event";
   summary: string;
-  dominantSignal?: string;
-  dominantMechanism?: string;
+  metadata?: any;
 }) {
-  if (!params.summary || params.summary.length < 20) return;
+  if (!params.summary || params.summary.trim().length < 20) return;
 
   await db.insert(timelineEntries).values({
     userId: params.userId,
     conversationId: params.conversationId,
-    summary: params.summary,
-    dominantSignal: params.dominantSignal ?? null,
-    dominantMechanism: params.dominantMechanism ?? null,
-    status: "active",
+    summary: params.summary.trim(),
+    type: params.type ?? null,
+    metadata: params.metadata ?? null,
   });
 }
 
@@ -318,4 +365,194 @@ export async function writeCaseReview(params: {
     caseId: params.caseId,
     reviewText: params.reviewText,
   });
+}
+
+function extractFirstMatch(text: string, patterns: string[]): string | null {
+  for (const pattern of patterns) {
+    const re = new RegExp(`\\b${pattern}\\b`, "i");
+    const match = text.match(re);
+    if (match?.[0]) return match[0].toLowerCase();
+  }
+  return null;
+}
+
+function buildRecurringSignalCandidate(summary: string): string | null {
+  const input = summary.trim().toLowerCase();
+  if (!input) return null;
+
+  const bodyPart = extractFirstMatch(input, [
+    "shoulder",
+    "back",
+    "neck",
+    "hip",
+    "knee",
+    "ankle",
+    "elbow",
+    "wrist",
+    "lat",
+    "tricep",
+    "arm",
+    "core",
+    "trunk",
+  ]);
+
+  const issue = extractFirstMatch(input, [
+    "pain",
+    "tight",
+    "tightness",
+    "hurt",
+    "hurts",
+    "off",
+    "instability",
+    "strain",
+    "stiff",
+    "stiffness",
+    "compensation",
+    "uncomfortable",
+  ]);
+
+  const context = extractFirstMatch(input, [
+    "backhand",
+    "forehand",
+    "swing",
+    "serve",
+    "follow through",
+    "follow-through",
+    "setup",
+    "run",
+    "running",
+    "walk",
+    "walking",
+    "squat",
+    "deadlift",
+    "press",
+    "rotation",
+  ]);
+
+  if (!bodyPart || !issue) return null;
+
+  if (context) {
+    return `Recurring ${bodyPart} ${issue} during ${context}.`;
+  }
+
+  return `Recurring ${bodyPart} ${issue}.`;
+}
+
+function buildActivityContextCandidate(summary: string): string | null {
+  const input = summary.trim().toLowerCase();
+  if (!input) return null;
+
+  const activity = extractFirstMatch(input, [
+    "racquetball",
+    "tennis",
+    "golf",
+    "baseball",
+    "lifting",
+    "running",
+    "walking",
+    "pickleball",
+    "swinging",
+  ]);
+
+  if (!activity) return null;
+
+  return `Recurring activity context: ${activity}.`;
+}
+
+export async function promoteTimelineToUserMemory(userId: string) {
+  const recentTimeline = await db
+    .select()
+    .from(timelineEntries)
+    .where(eq(timelineEntries.userId, userId))
+    .orderBy(desc(timelineEntries.id))
+    .limit(50);
+
+  if (recentTimeline.length === 0) return;
+
+  const recurringSignalCounts = new Map<string, number>();
+  const activityContextCounts = new Map<string, number>();
+
+  for (const row of recentTimeline) {
+    if (row.type !== "signal") continue;
+
+    const signalCandidate = buildRecurringSignalCandidate(row.summary);
+    if (signalCandidate) {
+      recurringSignalCounts.set(
+        signalCandidate,
+        (recurringSignalCounts.get(signalCandidate) ?? 0) + 1,
+      );
+    }
+
+    const activityCandidate = buildActivityContextCandidate(row.summary);
+    if (activityCandidate) {
+      activityContextCounts.set(
+        activityCandidate,
+        (activityContextCounts.get(activityCandidate) ?? 0) + 1,
+      );
+    }
+  }
+
+  const recurringSignalPatterns = Array.from(recurringSignalCounts.entries())
+    .filter(([, count]) => count >= 2)
+    .map(([value]) => value);
+
+  const stableActivityContexts = Array.from(activityContextCounts.entries())
+    .filter(([, count]) => count >= 2)
+    .map(([value]) => value);
+
+  if (
+    recurringSignalPatterns.length === 0 &&
+    stableActivityContexts.length === 0
+  ) {
+    return;
+  }
+
+  const existing = await db
+    .select()
+    .from(userMemory)
+    .where(eq(userMemory.userId, userId))
+    .limit(1);
+
+  const currentMemory =
+    existing[0]?.memory && typeof existing[0].memory === "object"
+      ? (existing[0].memory as Record<string, any>)
+      : {};
+
+  const promotedRecurringThemes = Array.from(
+    new Set([...recurringSignalPatterns, ...stableActivityContexts]),
+  );
+
+  const nextMemory = {
+    ...currentMemory,
+    movementPatterns: {
+      ...(currentMemory.movementPatterns ?? {
+        confirmed: [],
+        suspected: [],
+        recurringThemes: [],
+      }),
+      recurringThemes: Array.from(
+        new Set([
+          ...(Array.isArray(currentMemory.movementPatterns?.recurringThemes)
+            ? currentMemory.movementPatterns.recurringThemes
+            : []),
+          ...promotedRecurringThemes,
+        ]),
+      ),
+    },
+  };
+
+  if (existing[0]) {
+    await db
+      .update(userMemory)
+      .set({
+        memory: nextMemory,
+        updatedAt: new Date(),
+      })
+      .where(eq(userMemory.userId, userId));
+  } else {
+    await db.insert(userMemory).values({
+      userId,
+      memory: nextMemory,
+    });
+  }
 }
