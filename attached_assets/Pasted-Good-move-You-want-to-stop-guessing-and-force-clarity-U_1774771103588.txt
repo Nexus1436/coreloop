@@ -1,0 +1,94 @@
+Good move. You want to stop guessing and force clarity.
+
+Use these questions exactly—tight, direct, and in order.
+
+⸻
+
+🎯 Core Question (ask this first)
+
+1. Am I currently live in production or not?
+
+“Is my app currently deployed and serving traffic in production, or is it only running in preview/dev?”
+
+⸻
+
+🧠 Deployment State Clarity
+
+2. What is the current deployment status?
+
+“What is the current deployment state of my app (idle, deploying, failed, live, or pending republish)?”
+
+⸻
+
+3. What does the Republish button represent right now?
+
+“What exactly does the ‘Republish’ button represent in my current state? Is it required, or is the app already live?”
+
+⸻
+
+⚠️ Blockers (critical)
+
+4. Is anything actually blocking publish?
+
+“Is there any real blocking error preventing publish, or am I only seeing warnings/UI messages?”
+
+⸻
+
+5. If something is blocking, show it precisely
+
+“If publish is blocked, what is the exact blocking step (build, deploy, health check, or config)? Show the exact error.”
+
+⸻
+
+🗄️ Database Wiring (very important for your setup)
+
+6. Which database is production using right now?
+
+“At runtime in production, which connection string is actually being used—DATABASE_URL or NEON_DATABASE_URL?”
+
+⸻
+
+7. Is Replit overriding my DATABASE_URL?
+
+“Is Replit overriding DATABASE_URL in production, or is my code deciding which DB to use?”
+
+⸻
+
+⚙️ Deployment Target (you already touched this, confirm it)
+
+8. Confirm deployment target
+
+“What is my current deployment target setting, and is it valid for Replit production (autoscale vs cloudrun)?”
+
+⸻
+
+🧪 Health / Startup
+
+9. Did my server successfully start in production?
+
+“Did my production server fully start and pass health checks? If not, where did it fail?”
+
+⸻
+
+🔍 Final sanity check
+
+10. Give me the live URL and confirm traffic
+
+“What is the live production URL, and is it currently receiving successful requests?”
+
+⸻
+
+🧠 Why these questions work
+
+You’re forcing the agent to answer:
+	•	Are we live?
+	•	If not, where exactly is the failure?
+	•	Is this a UI issue or real deploy issue?
+	•	Which DB is actually being used?
+	•	Is config overriding behavior?
+
+No ambiguity.
+
+⸻
+
+If you want, after you get the answers, paste them here and I’ll interpret them cleanly so you don’t have to decode Replit’s wording.
