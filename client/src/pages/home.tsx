@@ -112,6 +112,7 @@ export default function Home() {
 
   const lastSpokenTextRef = useRef<string>("");
   const lastAudioChunksRef = useRef<string[]>([]);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
@@ -121,39 +122,47 @@ export default function Home() {
     voiceGenderRef.current = voiceGender;
   }, [voiceGender]);
 
-  const playUITone = useCallback((frequency: number, durationMs = 120) => {
+  const playUITone = useCallback((frequency = 720, durationMs = 90) => {
     try {
-      const ctx = new (window.AudioContext ||
-        (window as any).webkitAudioContext)();
+      const AudioCtx =
+        window.AudioContext ||
+        (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+
+      if (!AudioCtx) return;
+
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AudioCtx();
+      }
+
+      const ctx = audioCtxRef.current;
+
+      if (ctx.state === "suspended") {
+        void ctx.resume();
+      }
+
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
 
       const now = ctx.currentTime;
       const durationSec = durationMs / 1000;
-      const attack = 0.01;
-      const release = 0.05;
       const endTime = now + durationSec;
 
       osc.type = "sine";
       osc.frequency.setValueAtTime(frequency, now);
 
       gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.08, now + attack);
-      gain.gain.exponentialRampToValueAtTime(
-        0.0001,
-        Math.max(now + attack + 0.01, endTime - release),
-      );
+      gain.gain.exponentialRampToValueAtTime(0.12, now + 0.005);
+      gain.gain.exponentialRampToValueAtTime(0.0001, endTime);
 
       osc.connect(gain);
       gain.connect(ctx.destination);
 
       osc.start(now);
       osc.stop(endTime);
-
-      osc.onended = () => {
-        void ctx.close?.().catch?.(() => {});
-      };
-    } catch {}
+    } catch (err) {
+      console.warn("UI tone failed:", err);
+    }
   }, []);
 
   /* ================= LOAD LAST 3 CONVERSATIONS MERGED ================= */
@@ -424,7 +433,7 @@ export default function Home() {
           voiceGender={voiceGender}
           onBack={() => setMode("A")}
           lastAudioChunksRef={lastAudioChunksRef}
-          playUITone={(f = 720, d) => playUITone(f, d)}
+          playUITone={(f = 720, d = 90) => playUITone(f, d)}
           onConversationIdChange={(id) => {
             conversationIdRef.current = id;
             setConversationId(id);
