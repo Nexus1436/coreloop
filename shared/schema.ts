@@ -215,7 +215,7 @@ export const cases = pgTable(
 );
 
 /* =====================================================
-   CASE REVIEWS (NEW)
+   CASE REVIEWS
 ===================================================== */
 
 export const caseReviews = pgTable(
@@ -232,6 +232,8 @@ export const caseReviews = pgTable(
       .references(() => cases.id, { onDelete: "cascade" }),
 
     reviewText: text("review_text").notNull(),
+
+    structured: jsonb("structured"),
 
     createdAt: timestamp("created_at")
       .default(sql`CURRENT_TIMESTAMP`)

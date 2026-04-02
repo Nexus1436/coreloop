@@ -32,19 +32,13 @@ import {
 
 import {
   getMemory,
-  updateMemory,
-  mergeExtracted,
-  type InterloopMemory,
   writeTimelineEntry,
   writeCaseReview,
   promoteTimelineToUserMemory,
   buildMemoryPromptBlock,
 } from "./memory/memory";
 
-import { extractMemory, extractSessionSignals } from "./memory/extract";
-import { getSignalPatterns } from "./memory/signals";
 import { generateSessionSummary } from "./memory/sessionSummary";
-import { generateHypothesis } from "./memory/hypotheses";
 import { registerAnalyticsRoutes } from "./analyticsRoutes";
 
 // ==============================
@@ -656,6 +650,8 @@ export async function registerRoutes(
         }
 
         const isCaseReview = Boolean(body.isCaseReview);
+        console.log("CHAT MODE:", isCaseReview ? "CASE_REVIEW" : "STANDARD");
+
         const conversationId = body.conversationId;
 
         let [existingUser] = await db
@@ -989,6 +985,12 @@ Produce the corrected response now.
         });
 
         try {
+          console.log("CASE REVIEW WRITE CHECK:", {
+            isCaseReview,
+            assistantLength: assistantText.length,
+            userId,
+          });
+
           if (isCaseReview && assistantText.length > 60) {
             const [latestCase] = await db
               .select()
@@ -997,12 +999,21 @@ Produce the corrected response now.
               .orderBy(desc(cases.id))
               .limit(1);
 
+            console.log("LATEST CASE FOR REVIEW:", latestCase?.id ?? null);
+
             if (latestCase) {
               await writeCaseReview({
                 userId,
                 caseId: latestCase.id,
                 reviewText: assistantText,
               });
+
+              console.log("CASE REVIEW STORED:", latestCase.id);
+            } else {
+              console.warn(
+                "CASE REVIEW SKIPPED: no existing case found for user",
+                userId,
+              );
             }
           }
         } catch (err) {

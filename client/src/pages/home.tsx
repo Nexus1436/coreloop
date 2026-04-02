@@ -277,6 +277,58 @@ export default function Home() {
     [playback],
   );
 
+  const runCaseReview = useCallback(async () => {
+    playUITone(720);
+
+    if (
+      !conversationIdRef.current ||
+      isProcessing ||
+      isRecording ||
+      isSpeaking
+    ) {
+      return;
+    }
+
+    const assistantId = nextId();
+
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantId, role: "assistant", text: "" },
+    ]);
+
+    setIsProcessing(true);
+
+    let assistantText = "";
+
+    try {
+      await sendChat(
+        conversationIdRef.current,
+        "Run case review",
+        (id) => {
+          conversationIdRef.current = id;
+          setConversationId(id);
+          localStorage.setItem("conversationId", String(id));
+        },
+        (chunk) => {
+          assistantText = mergeStream(assistantText, chunk);
+
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, text: assistantText } : m,
+            ),
+          );
+        },
+        true,
+      );
+
+      if (assistantText.trim()) {
+        await speakText(assistantText);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [isProcessing, isRecording, isSpeaking, playUITone, speakText]);
+
   const handleTap = useCallback(async () => {
     if (isSpeaking) {
       stopSpeech();
@@ -381,9 +433,7 @@ export default function Home() {
           {hasExchanged && (
             <div className="absolute top-4 left-4">
               <button
-                onClick={() => {
-                  playUITone(720);
-                }}
+                onClick={runCaseReview}
                 className="text-white text-sm font-medium"
               >
                 Case review

@@ -43,6 +43,12 @@ export interface InterloopMemory {
     recurringThemes: string[];
   };
 
+  patterns: {
+    emerging: string[];
+    active: string[];
+    resolved: string[];
+  };
+
   signalHistory: {
     recurringPainSignals: string[];
     recurringConfusionSignals: string[];
@@ -96,6 +102,13 @@ function createDefaultMemory(): InterloopMemory {
       competitionLevel: null,
     },
     movementPatterns: { confirmed: [], suspected: [], recurringThemes: [] },
+
+    patterns: {
+      emerging: [],
+      active: [],
+      resolved: [],
+    },
+
     signalHistory: {
       recurringPainSignals: [],
       recurringConfusionSignals: [],
@@ -209,28 +222,41 @@ export async function writeCaseReview(params: {
 }) {
   if (!params.reviewText || params.reviewText.length < 40) return;
 
+  const text = params.reviewText.toLowerCase();
+
+  const mechanismMatch =
+    text.match(/rotation|timing|sequencing|stability|mobility|tension/)?.[0] ??
+    null;
+
+  const constraintMatch =
+    text.match(/tight|restricted|limited|stiff|unstable|collapsing/)?.[0] ??
+    null;
+
+  const leverMatch =
+    text.match(/adjust|shift|focus|slow|relax|drive|load/)?.[0] ?? null;
+
+  let outcomeDirection: "improving" | "stalled" | "regressing" = "stalled";
+
+  if (/better|improved|easier|cleaner|more control/.test(text)) {
+    outcomeDirection = "improving";
+  } else if (/worse|pain|harder|tighter/.test(text)) {
+    outcomeDirection = "regressing";
+  }
+
+  const structured = {
+    mechanism: mechanismMatch,
+    constraint: constraintMatch,
+    lever: leverMatch,
+    outcomeDirection,
+  };
+
   await db.insert(caseReviews).values({
     userId: params.userId,
     caseId: params.caseId,
     reviewText: params.reviewText,
+    structured,
   });
 }
-
-/* =====================================================
-   HELPERS
-===================================================== */
-
-function buildRecurringSignalCandidate(summary: string): string | null {
-  const input = summary.toLowerCase();
-
-  const body = input.match(/shoulder|back|neck|hip|knee|arm|core/)?.[0];
-  const issue = input.match(/pain|tight|tightness|hurt|stiff/)?.[0];
-
-  if (!body || !issue) return null;
-
-  return `Recurring ${body} ${issue}`;
-}
-
 /* =====================================================
    FIXED PROMOTION LOGIC
 ===================================================== */
@@ -245,25 +271,65 @@ export async function promoteTimelineToUserMemory(userId: string) {
 
   if (recentTimeline.length === 0) return;
 
-  const signalCounts = new Map<string, number>();
+  // STEP 1: COLLECT ALL SUMMARIES
+  const summaries: string[] = [];
 
   for (const row of recentTimeline) {
     if (!row.summary) continue;
 
-    const candidate = buildRecurringSignalCandidate(row.summary);
-    if (candidate) {
-      signalCounts.set(candidate, (signalCounts.get(candidate) ?? 0) + 1);
+    const normalized = row.summary
+      .toLowerCase()
+      .replace(/[.,!?]/g, "")
+      .trim();
+
+    summaries.push(normalized);
+  }
+
+  // STEP 2: LIGHT GROUPING
+  const clusters: Record<string, string[]> = {};
+
+  for (const summary of summaries) {
+    let matchedKey: string | null = null;
+
+    for (const key of Object.keys(clusters)) {
+      const overlap = summary.split(" ").filter((w) => key.includes(w)).length;
+
+      if (overlap >= 2) {
+        matchedKey = key;
+        break;
+      }
+    }
+
+    if (matchedKey) {
+      clusters[matchedKey].push(summary);
+    } else {
+      clusters[summary] = [summary];
     }
   }
 
-  const recurring = Array.from(signalCounts.entries())
-    .filter(([, count]) => count >= 1)
-    .map(([value]) => value);
+  // STEP 3: BUILD THEMES FROM CLUSTERS
+  const themes = Object.values(clusters).map((group) => group[0]);
 
-  const fallback = recentTimeline.map((r) => r.summary).slice(0, 5);
+  // STEP 4: BUILD PATTERNS
+  const patternCounts = new Map<string, number>();
 
-  const themes = Array.from(new Set([...recurring, ...fallback]));
+  for (const group of Object.values(clusters)) {
+    const key = group[0];
+    patternCounts.set(key, group.length);
+  }
 
+  const emerging: string[] = [];
+  const active: string[] = [];
+
+  for (const [pattern, count] of Array.from(patternCounts.entries())) {
+    if (count >= 3) {
+      active.push(pattern);
+    } else if (count === 2) {
+      emerging.push(pattern);
+    }
+  }
+
+  // STEP 5: LOAD EXISTING MEMORY
   const existing = await db
     .select()
     .from(userMemory)
@@ -272,6 +338,7 @@ export async function promoteTimelineToUserMemory(userId: string) {
 
   const current = (existing[0]?.memory ?? {}) as any;
 
+  // STEP 6: MERGE INTO MEMORY
   const nextMemory = {
     ...current,
     movementPatterns: {
@@ -283,8 +350,18 @@ export async function promoteTimelineToUserMemory(userId: string) {
         ]),
       ),
     },
+    patterns: {
+      emerging: Array.from(
+        new Set([...(current.patterns?.emerging ?? []), ...emerging]),
+      ),
+      active: Array.from(
+        new Set([...(current.patterns?.active ?? []), ...active]),
+      ),
+      resolved: current.patterns?.resolved ?? [],
+    },
   };
 
+  // STEP 7: SAVE
   if (existing[0]) {
     await db
       .update(userMemory)
