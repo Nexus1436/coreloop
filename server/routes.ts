@@ -155,7 +155,9 @@ function isGenericOpener(text: string): boolean {
 }
 
 function extractConfidentExplicitName(text: string): string | null {
-  const match = text.match(/\b(?:my name is|call me)\s+([A-Za-z]{2,20})\b/i);
+  const match = text.match(
+    /\b(?:my name is|call me|i am|i'm|this is|it'?s)\s+([A-Za-z]{2,20})\b/i,
+  );
   if (!match?.[1]) return null;
 
   const raw = match[1];
@@ -220,6 +222,20 @@ function extractStandaloneNameReply(text: string): string | null {
   if (blacklist.has(normalized)) return null;
 
   return normalized;
+}
+
+function extractHistoricalExplicitName(previousMessages: any[]): string | null {
+  for (const message of [...previousMessages].reverse()) {
+    if (message.role !== "user") continue;
+
+    const content = String(message.content ?? "").trim();
+    if (!content) continue;
+
+    const extracted = extractConfidentExplicitName(content);
+    if (extracted) return extracted;
+  }
+
+  return null;
 }
 
 function askedWhatShouldICallYou(text: string): boolean {
@@ -754,10 +770,15 @@ export async function registerRoutes(
         const explicitName = dbFirstName
           ? null
           : extractConfidentExplicitName(userText);
+
         const standaloneNameReply =
           !dbFirstName && previousAssistantAskedName
             ? extractStandaloneNameReply(userText)
             : null;
+
+        const historicalExplicitName = dbFirstName
+          ? null
+          : extractHistoricalExplicitName(previous);
 
         let capturedName: string | null = null;
 
@@ -765,6 +786,8 @@ export async function registerRoutes(
           capturedName = explicitName;
         } else if (!dbFirstName && standaloneNameReply) {
           capturedName = standaloneNameReply;
+        } else if (!dbFirstName && historicalExplicitName) {
+          capturedName = historicalExplicitName;
         }
 
         if (!dbFirstName && capturedName) {
@@ -829,7 +852,6 @@ export async function registerRoutes(
           previousAssistantAskedName;
 
         let identityBlock = "";
-
         // ==============================
         // FIRST INTERACTION PROTOCOL
         // ==============================
