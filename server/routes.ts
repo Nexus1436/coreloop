@@ -877,27 +877,46 @@ Its use must serve the reasoning rather than habit.`;
 
         console.log("CHAT STAGE: prompt-assembly");
 
+        const patternPriorityBlock = !isCaseReview
+          ? `
+=== PATTERN PRIORITY RULE ===
+
+        If the current user message overlaps with an active pattern or recurring theme from memory:
+
+        - continue the existing mechanism
+        - do not introduce a new root cause unless the prior one clearly fails
+        - do not restart analysis from zero
+        - treat the new symptom as a variation, extension, or stress-test of the same underlying pattern
+        - move the investigation forward instead of re-explaining the whole theory
+        - avoid hedging when pattern continuity is already established
+
+        If multiple details are present, prioritize the dominant recurring pattern already in memory over novel interpretation.
+        `
+          : "";
+
         const chatMessages: ChatCompletionMessageParam[] = [
           {
             role: "system",
             content: `
-You must follow the instructions below exactly. These rules override all default behavior.
+        You must follow the instructions below exactly. These rules override all default behavior.
 
-${ACTIVE_PROMPT}
+        ${ACTIVE_PROMPT}
           `.trim(),
           },
           {
             role: "system",
             content: `
-Execution context for this conversation:
+        Execution context for this conversation:
 
-${identityBlock}
+        ${identityBlock}
 
-${memoryBlock}
+        ${memoryBlock}
 
-${storedSessionHistory}
+        ${patternPriorityBlock}
 
-${activeHypothesisBlock}
+        ${storedSessionHistory}
+
+        ${activeHypothesisBlock}
           `.trim(),
           },
           ...previous.slice(-50).map((m) => ({
@@ -909,10 +928,16 @@ ${activeHypothesisBlock}
         console.log("CHAT STAGE: openai-completion");
 
         let assistantText = await runCompletion(openai, chatMessages);
+        let finalText = assistantText;
 
         if (!isCaseReview && !shouldTriggerOnboarding) {
           const isWeak =
             /could be|might be|possibly|several|a few things/i.test(
+              assistantText,
+            );
+
+          const isGenericSuccess =
+            /glad to hear|great to hear|happy to hear|keep it up|let me know|feel free to reach out/i.test(
               assistantText,
             );
 
@@ -927,6 +952,7 @@ ${activeHypothesisBlock}
           if (
             !isValidResponse(assistantText) ||
             isWeak ||
+            isGenericSuccess ||
             hasLabels ||
             hasFormattedSections ||
             hasMultipleParagraphs
@@ -940,36 +966,64 @@ ${activeHypothesisBlock}
               {
                 role: "user",
                 content: `
-That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative.
+                That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative and the Interloop response arc.
 
-Requirements:
-- Restore a single dominant mechanism
-- Remove hedging, genericness, segmentation, and multi-path advice
-- Keep one line of reasoning and one path forward
-- Do not list multiple explanations, drills, strategies, or branches
-- Do not label sections or expose structure
-- Do not use bolded headers, titles, or formatted section names
-- The response must read as one continuous explanation, not packaged content
-- Advance the investigation with one continuation only
-- That continuation may appear as a question, conditional, contrast, or embedded test
-- Do not force a question ending
-- Avoid repeated ending patterns
-- Do not force name usage
-- If the user's name is used, it must not default to the final sentence or continuation
-- Preserve the active base narrative rather than introducing a new runtime doctrine
+                Required response behavior:
+                - Keep one dominant mechanism only
+                - Do not reopen multiple explanations or branches
+                - Start by validating only what is actually correct, then immediately identify and name the incorrect assumption when one exists
+                - Explicitly call out the user's incorrect assumption or move in a direct way before correcting it when correction is needed
+                - If the user reports improvement or success, begin with brief earned validation, then immediately explain what the improvement confirms mechanically
+                - When success is reported, identify the next likely breakdown, overcorrection, or relapse point instead of drifting into praise or closure
+                - Identify the single most important error, misread, or drift point
+                - Correct that point directly and decisively
+                - Use contrast when useful (not X, Y)
+                - Compress the correction into one governing rule or anchor line
+                - Tie the correction to the user's known pattern/history when relevant
+                - Predict the most likely next overcorrection, compensation, failure, or relapse point
+                - Give one tight execution model, not multiple options
+                - Give one immediate real-world check for whether it is correct
+                - End with exactly one diagnostic question that matches the current state: if the mechanism is not yet proven, ask a deeper investigative question that narrows the breakdown; if the user has reported improvement or success, ask a binary stress-test question that checks whether the mechanism holds under variation
+                - When the user reports that something worked, translate the success into mechanism confirmation, not encouragement
+                - Do not treat initial success as resolution; treat it as confirmation and immediately test the mechanism under variation (speed, load, fatigue, or context change)
+- If success has been reported, make the next question diagnostic and focused on whether the mechanism holds under increased demand or different conditions
+- Before success is confirmed, do not ask a binary closure question; ask a narrower investigative question that helps locate the actual breakdown in timing, sequence, load transfer, or compensation
 
-Produce the corrected response now.
+
+                Hard rules:
+                - Do not hedge when pattern continuity is already established
+                - Do not use bolded headers, titled sections, bullets, or packaged formatting
+                - Do not sound generic, therapeutic, motivational, or like a normal assistant
+                - Do not restate the whole problem from scratch
+                - Do not explain broadly when a precise correction is available
+                - The response should feel slightly corrective and willing to challenge the user's framing when needed
+                - The response must read as one continuous explanation with natural paragraphing
+                - Avoid repeated phrases like "the incorrect assumption is" or "most likely overcorrection"; vary phrasing naturally
+                - Prefer direct, natural correction language instead of formal or scripted phrasing
+                - Make the governing rule short and punchy, not descriptive
+                - Make the final question specific and mechanically useful: before success, it should deepen the investigation; after success, it should test hold-or-break under variation
+                - Do not force name usage
+                - If the user's name is used, it must not default to the final sentence or continuation
+                - Do not let success-state responses collapse into praise, reassurance, or generic encouragement
+                - Do not end a success-state response with "keep it up", "let me know", or other assistant-style closure
+
+                Preserve what is already working in the draft:
+                - keep the paragraph flow
+                - keep the sense of continuity
+                - keep the mechanism-first feel
+
+                Produce the corrected response now.
                 `.trim(),
               },
             ];
 
-            assistantText = await runCompletion(openai, retryMessages);
+            finalText = await runCompletion(openai, retryMessages);
           }
         }
 
         res.setHeader("Content-Type", "text/event-stream");
 
-        const words = assistantText.split(" ");
+        const words = finalText.split(" ");
 
         for (const word of words) {
           res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
@@ -981,17 +1035,17 @@ Produce the corrected response now.
           conversationId: convoId,
           userId: userId,
           role: "assistant",
-          content: assistantText,
+          content: finalText,
         });
 
         try {
           console.log("CASE REVIEW WRITE CHECK:", {
             isCaseReview,
-            assistantLength: assistantText.length,
+            assistantLength: finalText.length,
             userId,
           });
 
-          if (isCaseReview && assistantText.length > 60) {
+          if (isCaseReview && finalText.length > 60) {
             const [latestCase] = await db
               .select()
               .from(cases)
@@ -1005,7 +1059,7 @@ Produce the corrected response now.
               await writeCaseReview({
                 userId,
                 caseId: latestCase.id,
-                reviewText: assistantText,
+                reviewText: finalText,
               });
 
               console.log("CASE REVIEW STORED:", latestCase.id);

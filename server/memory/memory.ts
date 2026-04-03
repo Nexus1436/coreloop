@@ -177,7 +177,9 @@ export async function updateMemory(
 export function buildMemoryPromptBlock(memory: InterloopMemory): string {
   const lines: string[] = [];
 
-  if (memory.identity.name) lines.push(`Name: ${memory.identity.name}`);
+  if (memory.identity.name) {
+    lines.push(`Name: ${memory.identity.name}`);
+  }
 
   if (memory.movementPatterns.recurringThemes.length > 0) {
     lines.push("Recurring themes:");
@@ -186,9 +188,24 @@ export function buildMemoryPromptBlock(memory: InterloopMemory): string {
       .forEach((t) => lines.push(`- ${t}`));
   }
 
+  if (memory.patterns.active.length > 0) {
+    lines.push("Active patterns:");
+    memory.patterns.active.slice(0, 5).forEach((p) => lines.push(`- ${p}`));
+  }
+
+  if (memory.patterns.emerging.length > 0) {
+    lines.push("Emerging patterns:");
+    memory.patterns.emerging.slice(0, 5).forEach((p) => lines.push(`- ${p}`));
+  }
+
   if (lines.length === 0) return "";
 
-  return `=== USER MEMORY ===\n${lines.join("\n")}`;
+  return `=== USER MEMORY ===
+Use this as durable cross-session truth.
+Prefer continuity with active patterns when relevant.
+Do not restart investigation if the current issue matches an active pattern.
+
+${lines.join("\n")}`;
 }
 
 /* =====================================================
@@ -267,69 +284,256 @@ export async function promoteTimelineToUserMemory(userId: string) {
     .from(timelineEntries)
     .where(eq(timelineEntries.userId, userId))
     .orderBy(desc(timelineEntries.id))
-    .limit(50);
+    .limit(80);
 
-  if (recentTimeline.length === 0) return;
+  const recentCaseReviews = await db
+    .select()
+    .from(caseReviews)
+    .where(eq(caseReviews.userId, userId))
+    .orderBy(desc(caseReviews.id))
+    .limit(12);
 
-  // STEP 1: COLLECT ALL SUMMARIES
-  const summaries: string[] = [];
+  if (recentTimeline.length === 0 && recentCaseReviews.length === 0) return;
+
+  const STOPWORDS = new Set([
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "but",
+    "if",
+    "then",
+    "than",
+    "that",
+    "this",
+    "these",
+    "those",
+    "with",
+    "from",
+    "into",
+    "onto",
+    "during",
+    "while",
+    "when",
+    "where",
+    "after",
+    "before",
+    "over",
+    "under",
+    "through",
+    "about",
+    "around",
+    "just",
+    "very",
+    "really",
+    "more",
+    "less",
+    "some",
+    "still",
+    "feel",
+    "feels",
+    "feeling",
+    "have",
+    "has",
+    "had",
+    "been",
+    "being",
+    "was",
+    "were",
+    "are",
+    "is",
+    "am",
+    "to",
+    "of",
+    "in",
+    "on",
+    "for",
+    "at",
+    "by",
+    "my",
+    "your",
+    "our",
+    "their",
+    "it",
+    "its",
+    "im",
+    "i'm",
+    "ive",
+    "i've",
+    "me",
+    "we",
+    "you",
+    "they",
+    "them",
+    "do",
+    "did",
+    "does",
+    "doing",
+    "done",
+    "get",
+    "got",
+    "getting",
+    "make",
+    "made",
+    "making",
+    "problem",
+    "issue",
+  ]);
+
+  function normalizeText(input: string): string {
+    return input
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function tokenize(input: string): string[] {
+    return normalizeText(input)
+      .split(" ")
+      .map((w) => {
+        if (w.endsWith("ing") && w.length > 5) return w.slice(0, -3);
+        if (w.endsWith("ed") && w.length > 4) return w.slice(0, -2);
+        if (w.endsWith("es") && w.length > 4) return w.slice(0, -2);
+        if (w.endsWith("s") && w.length > 3) return w.slice(0, -1);
+        return w;
+      })
+      .filter((w) => w.length > 2 && !STOPWORDS.has(w));
+  }
+
+  function unique<T>(items: T[]): T[] {
+    return Array.from(new Set(items));
+  }
+
+  function overlapScore(a: string[], b: string[]): number {
+    if (a.length === 0 || b.length === 0) return 0;
+    const bSet = new Set(b);
+    return a.filter((t) => bSet.has(t)).length;
+  }
+
+  function buildLabel(tokens: string[], fallback: string): string {
+    if (tokens.length === 0) return fallback;
+    return unique(tokens).slice(0, 6).join(" ");
+  }
+
+  type Evidence = {
+    raw: string;
+    normalized: string;
+    tokens: string[];
+    source: "timeline" | "case_review";
+    weight: number;
+  };
+
+  const evidence: Evidence[] = [];
 
   for (const row of recentTimeline) {
     if (!row.summary) continue;
 
-    const normalized = row.summary
-      .toLowerCase()
-      .replace(/[.,!?]/g, "")
-      .trim();
+    const normalized = normalizeText(row.summary);
+    const tokens = tokenize(row.summary);
 
-    summaries.push(normalized);
+    if (!normalized || tokens.length === 0) continue;
+
+    evidence.push({
+      raw: row.summary.trim(),
+      normalized,
+      tokens,
+      source: "timeline",
+      weight: 1,
+    });
   }
 
-  // STEP 2: LIGHT GROUPING
-  const clusters: Record<string, string[]> = {};
+  for (const review of recentCaseReviews) {
+    const structured = (review.structured ?? {}) as any;
 
-  for (const summary of summaries) {
-    let matchedKey: string | null = null;
+    const mechanism =
+      typeof structured?.mechanism === "string" ? structured.mechanism : null;
+    const constraint =
+      typeof structured?.constraint === "string" ? structured.constraint : null;
+    const lever =
+      typeof structured?.lever === "string" ? structured.lever : null;
+    const outcomeDirection =
+      typeof structured?.outcomeDirection === "string"
+        ? structured.outcomeDirection
+        : null;
 
-    for (const key of Object.keys(clusters)) {
-      const overlap = summary.split(" ").filter((w) => key.includes(w)).length;
+    const parts = [mechanism, constraint, lever].filter(Boolean) as string[];
 
-      if (overlap >= 2) {
-        matchedKey = key;
-        break;
+    if (parts.length === 0) continue;
+
+    const raw = `${parts.join(" ")}${outcomeDirection ? ` ${outcomeDirection}` : ""}`;
+    const normalized = normalizeText(raw);
+    const tokens = tokenize(raw);
+
+    if (!normalized || tokens.length === 0) continue;
+
+    evidence.push({
+      raw,
+      normalized,
+      tokens,
+      source: "case_review",
+      weight: 2,
+    });
+  }
+
+  if (evidence.length === 0) return;
+
+  const clusters: {
+    label: string;
+    tokens: string[];
+    examples: string[];
+    score: number;
+  }[] = [];
+
+  for (const item of evidence) {
+    let bestIndex = -1;
+    let bestScore = 0;
+
+    for (let i = 0; i < clusters.length; i++) {
+      const score = overlapScore(item.tokens, clusters[i].tokens);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = i;
       }
     }
 
-    if (matchedKey) {
-      clusters[matchedKey].push(summary);
+    if (bestIndex >= 0 && bestScore >= 2) {
+      const cluster = clusters[bestIndex];
+      cluster.examples.push(item.raw);
+      cluster.tokens = unique([...cluster.tokens, ...item.tokens]);
+      cluster.score += item.weight;
     } else {
-      clusters[summary] = [summary];
+      clusters.push({
+        label: buildLabel(item.tokens, item.normalized),
+        tokens: [...item.tokens],
+        examples: [item.raw],
+        score: item.weight,
+      });
     }
   }
 
-  // STEP 3: BUILD THEMES FROM CLUSTERS
-  const themes = Object.values(clusters).map((group) => group[0]);
+  const rankedClusters = clusters
+    .map((cluster) => ({
+      label: buildLabel(cluster.tokens, cluster.label),
+      examples: unique(cluster.examples),
+      score: cluster.score,
+    }))
+    .sort((a, b) => b.score - a.score);
 
-  // STEP 4: BUILD PATTERNS
-  const patternCounts = new Map<string, number>();
-
-  for (const group of Object.values(clusters)) {
-    const key = group[0];
-    patternCounts.set(key, group.length);
-  }
+  const themes = rankedClusters.slice(0, 10).map((cluster) => cluster.label);
 
   const emerging: string[] = [];
   const active: string[] = [];
 
-  for (const [pattern, count] of Array.from(patternCounts.entries())) {
-    if (count >= 3) {
-      active.push(pattern);
-    } else if (count === 2) {
-      emerging.push(pattern);
+  for (const cluster of rankedClusters) {
+    if (cluster.score >= 4) {
+      active.push(cluster.label);
+    } else if (cluster.score >= 2) {
+      emerging.push(cluster.label);
     }
   }
 
-  // STEP 5: LOAD EXISTING MEMORY
   const existing = await db
     .select()
     .from(userMemory)
@@ -338,7 +542,6 @@ export async function promoteTimelineToUserMemory(userId: string) {
 
   const current = (existing[0]?.memory ?? {}) as any;
 
-  // STEP 6: MERGE INTO MEMORY
   const nextMemory = {
     ...current,
     movementPatterns: {
@@ -348,20 +551,21 @@ export async function promoteTimelineToUserMemory(userId: string) {
           ...(current.movementPatterns?.recurringThemes ?? []),
           ...themes,
         ]),
-      ),
+      ).slice(0, 20),
     },
     patterns: {
       emerging: Array.from(
         new Set([...(current.patterns?.emerging ?? []), ...emerging]),
-      ),
+      )
+        .filter((p) => !active.includes(p))
+        .slice(0, 12),
       active: Array.from(
         new Set([...(current.patterns?.active ?? []), ...active]),
-      ),
+      ).slice(0, 12),
       resolved: current.patterns?.resolved ?? [],
     },
   };
 
-  // STEP 7: SAVE
   if (existing[0]) {
     await db
       .update(userMemory)
