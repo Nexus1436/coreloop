@@ -430,9 +430,9 @@ export default function Home() {
           <div
             className="absolute inset-0 flex items-center justify-center px-4"
             style={{
-              paddingTop: "max(env(safe-area-inset-top), 1rem)",
+              paddingTop: "max(calc(env(safe-area-inset-top) + 2rem), 3rem)",
               paddingBottom:
-                "max(calc(env(safe-area-inset-bottom) + 6.5rem), 7.5rem)",
+                "max(calc(env(safe-area-inset-bottom) + 5rem), 6rem)",
             }}
           >
             <div
