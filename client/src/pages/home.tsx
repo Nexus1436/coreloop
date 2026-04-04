@@ -89,6 +89,39 @@ async function sendChat(
   }
 }
 
+function normalizeLoadedMessages(payload: unknown): ChatMessage[] {
+  const rawMessages = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { messages?: unknown[] })?.messages)
+      ? ((payload as { messages?: unknown[] }).messages ?? [])
+      : [];
+
+  return rawMessages
+    .map((msg, index) => {
+      const role = (msg as { role?: string })?.role;
+      const text =
+        (msg as { text?: string; content?: string })?.text ??
+        (msg as { text?: string; content?: string })?.content ??
+        "";
+
+      if ((role !== "assistant" && role !== "user") || !String(text).trim()) {
+        return null;
+      }
+
+      const id =
+        (msg as { id?: string | number })?.id != null
+          ? String((msg as { id?: string | number }).id)
+          : `loaded-${index + 1}`;
+
+      return {
+        id,
+        role,
+        text: String(text),
+      } as ChatMessage;
+    })
+    .filter((msg): msg is ChatMessage => Boolean(msg));
+}
+
 export default function Home() {
   const [mode, setMode] = useState<"A" | "B">("A");
 
@@ -120,6 +153,68 @@ export default function Home() {
   useEffect(() => {
     voiceGenderRef.current = voiceGender;
   }, [voiceGender]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadConversations = async () => {
+      try {
+        const resp = await fetch("/api/conversations", {
+          credentials: "include",
+        });
+
+        if (!resp.ok) throw new Error("Failed to load conversations");
+
+        const data = await resp.json();
+        const conversations = Array.isArray(data)
+          ? data
+          : (data.conversations ?? []);
+
+        const recent = conversations.slice(0, 3);
+
+        let allMessages: ChatMessage[] = [];
+
+        for (const convo of recent) {
+          const id = convo?.id;
+          if (!id) continue;
+
+          const msgResp = await fetch(`/api/messages/${id}`, {
+            credentials: "include",
+          });
+
+          if (!msgResp.ok) continue;
+
+          const msgData = await msgResp.json();
+          const normalized = normalizeLoadedMessages(msgData);
+
+          allMessages = [...allMessages, ...normalized];
+        }
+
+        if (cancelled) return;
+
+        setMessages(allMessages);
+
+        const hasUser = allMessages.some((m) => m.role === "user");
+        setHasExchanged(hasUser);
+
+        const latestId = recent[0]?.id ?? null;
+
+        if (latestId) {
+          conversationIdRef.current = latestId;
+          setConversationId(latestId);
+          localStorage.setItem("conversationId", String(latestId));
+        }
+      } catch (err) {
+        console.warn("Failed to load conversations:", err);
+      }
+    };
+
+    void loadConversations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (playback.state === "ended" || playback.state === "idle") {
@@ -172,64 +267,6 @@ export default function Home() {
     } catch (err) {
       console.warn("UI tone failed:", err);
     }
-  }, []);
-
-  useEffect(() => {
-    async function loadMergedHistory() {
-      try {
-        const resp = await fetch("/api/conversations", {
-          credentials: "include",
-        });
-
-        if (!resp.ok) return;
-
-        const convs = await resp.json();
-        if (!Array.isArray(convs) || convs.length === 0) return;
-
-        const recentIds = convs
-          .map((c: any) => Number(c.id))
-          .filter((id: number) => Number.isFinite(id))
-          .slice(0, 3);
-
-        const allMessages: ChatMessage[] = [];
-
-        for (let i = recentIds.length - 1; i >= 0; i--) {
-          const id = recentIds[i];
-
-          const msgResp = await fetch(`/api/messages/${id}`, {
-            credentials: "include",
-          });
-
-          if (!msgResp.ok) continue;
-
-          const rows = await msgResp.json();
-
-          const loaded = rows.map((m: any) => ({
-            id: String(m.id),
-            role: m.role,
-            text: m.content,
-          }));
-
-          allMessages.push(...loaded);
-        }
-
-        setMessages(allMessages);
-        messageCounter = allMessages.length;
-
-        if (allMessages.some((m) => m.role === "user")) {
-          setHasExchanged(true);
-        }
-
-        const latestId = recentIds[0];
-        setConversationId(latestId);
-        conversationIdRef.current = latestId;
-        localStorage.setItem("conversationId", String(latestId));
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    loadMergedHistory();
   }, []);
 
   const stopSpeech = useCallback(() => {
@@ -424,50 +461,61 @@ export default function Home() {
   }, [isPlaybackActive, playUITone, speakText, stopSpeech]);
 
   return (
-    <div className="min-h-[100dvh] w-full bg-black relative overflow-hidden">
+    <div className="h-screen w-full bg-black relative overflow-hidden">
       {mode === "A" ? (
         <>
           <div
-            className="absolute inset-0 flex items-center justify-center px-4"
+            className="absolute inset-0 flex flex-col justify-between px-4"
             style={{
-              paddingTop: "max(calc(env(safe-area-inset-top) + 2rem), 3rem)",
-              paddingBottom:
-                "max(calc(env(safe-area-inset-bottom) + 5rem), 6rem)",
+              paddingTop: "max(env(safe-area-inset-top) + 2.5rem, 3rem)",
+              paddingBottom: "max(env(safe-area-inset-bottom) + 3.5rem, 4rem)",
             }}
           >
-            <div
-              className="relative"
-              style={{
-                width: "min(600px, calc(100vw - 2rem), calc(100dvh - 220px))",
-                height: "min(600px, calc(100vw - 2rem), calc(100dvh - 220px))",
-                maxWidth: "100%",
-                maxHeight: "100%",
-              }}
-              onClick={handleTap}
-            >
-              <CentralForm
-                isActive={isRecording || isProcessing || isSpeaking}
-                isDimmed={false}
-                isSpeaking={isSpeaking}
-                getAmplitude={playback.getAmplitude}
-              />
+            <div />
 
-              <span className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">
-                {isSpeaking
-                  ? "Stop"
-                  : isRecording
-                    ? "Listening..."
-                    : isProcessing
-                      ? "Reflecting..."
-                      : "Press here"}
-              </span>
+            <div className="flex items-center justify-center">
+              <div
+                className="relative mx-auto"
+                style={{
+                  width: "min(560px, 84vw)",
+                  height: "min(560px, 84vw)",
+                  maxWidth: "100%",
+                }}
+                onClick={handleTap}
+              >
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="relative w-full h-full">
+                    <CentralForm
+                      isActive={isRecording || isProcessing || isSpeaking}
+                      isDimmed={false}
+                      isSpeaking={isSpeaking}
+                      getAmplitude={playback.getAmplitude}
+                    />
+                  </div>
+                </div>
+
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <span className="text-sm text-gray-400">
+                    {isSpeaking
+                      ? "Stop"
+                      : isRecording
+                        ? "Listening..."
+                        : isProcessing
+                          ? "Reflecting..."
+                          : "Press here"}
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
 
-          {hasExchanged && (
+            <div />
+          </div>
+          {(hasExchanged || messages.some((m) => m.role === "user")) && (
             <div
               className="absolute left-4 z-10"
-              style={{ top: "max(env(safe-area-inset-top), 1rem)" }}
+              style={{
+                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
+              }}
             >
               <button
                 onClick={runCaseReview}
@@ -481,7 +529,7 @@ export default function Home() {
           <div
             className="absolute left-0 right-0 flex justify-between px-4 sm:px-8 text-gray-400 text-sm"
             style={{
-              bottom: "max(env(safe-area-inset-bottom), 1rem)",
+              bottom: "max(env(safe-area-inset-bottom) + 1rem, 1.75rem)",
               paddingBottom: "0.5rem",
             }}
           >
