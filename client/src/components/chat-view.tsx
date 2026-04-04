@@ -19,6 +19,7 @@ interface ChatViewProps {
   onPlaybackControl: () => void;
   playbackLabel: string;
   onSpeakText: (text: string) => Promise<void>;
+  onCaseReview: () => void;
 }
 
 let msgCounter = 1000;
@@ -56,6 +57,7 @@ export function ChatView({
   onPlaybackControl,
   playbackLabel,
   onSpeakText,
+  onCaseReview,
 }: ChatViewProps) {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -76,6 +78,8 @@ export function ChatView({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const hasUserMessages = messages.some((m) => m.role === "user");
 
   const handleSend = async () => {
     const trimmed = inputValue.trim();
@@ -126,9 +130,26 @@ export function ChatView({
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="min-h-screen flex flex-col bg-black"
+      className="min-h-[100dvh] flex flex-col bg-black relative"
     >
-      <div className="flex-1 overflow-y-auto px-6">
+      {hasUserMessages && (
+        <div
+          className="absolute left-4 z-10"
+          style={{ top: "max(env(safe-area-inset-top), 1rem)" }}
+        >
+          <button
+            onClick={() => {
+              playUITone(720);
+              onCaseReview();
+            }}
+            className="text-white text-sm font-medium"
+          >
+            Case review
+          </button>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto px-6 pt-14">
         <div className="max-w-xl mx-auto space-y-5 py-5">
           {messages.map((msg) => (
             <div
@@ -149,7 +170,12 @@ export function ChatView({
         </div>
       </div>
 
-      <div className="border-t border-[#1a1a1a] p-4">
+      <div
+        className="border-t border-[#1a1a1a] p-4"
+        style={{
+          paddingBottom: "max(env(safe-area-inset-bottom), 1rem)",
+        }}
+      >
         <div className="max-w-xl mx-auto flex items-end gap-3">
           <textarea
             ref={textareaRef}

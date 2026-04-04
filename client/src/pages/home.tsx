@@ -174,7 +174,6 @@ export default function Home() {
     }
   }, []);
 
-  /* ================= LOAD LAST 3 CONVERSATIONS MERGED ================= */
   useEffect(() => {
     async function loadMergedHistory() {
       try {
@@ -425,13 +424,25 @@ export default function Home() {
   }, [isPlaybackActive, playUITone, speakText, stopSpeech]);
 
   return (
-    <div className="min-h-screen w-full bg-black relative overflow-hidden">
+    <div className="min-h-[100dvh] w-full bg-black relative overflow-hidden">
       {mode === "A" ? (
         <>
-          <div className="absolute inset-0 flex items-center justify-center pb-24">
+          <div
+            className="absolute inset-0 flex items-center justify-center px-4"
+            style={{
+              paddingTop: "max(env(safe-area-inset-top), 1rem)",
+              paddingBottom:
+                "max(calc(env(safe-area-inset-bottom) + 6.5rem), 7.5rem)",
+            }}
+          >
             <div
               className="relative"
-              style={{ width: "600px", height: "600px" }}
+              style={{
+                width: "min(600px, calc(100vw - 2rem), calc(100dvh - 220px))",
+                height: "min(600px, calc(100vw - 2rem), calc(100dvh - 220px))",
+                maxWidth: "100%",
+                maxHeight: "100%",
+              }}
               onClick={handleTap}
             >
               <CentralForm
@@ -454,7 +465,10 @@ export default function Home() {
           </div>
 
           {hasExchanged && (
-            <div className="absolute top-4 left-4">
+            <div
+              className="absolute left-4 z-10"
+              style={{ top: "max(env(safe-area-inset-top), 1rem)" }}
+            >
               <button
                 onClick={runCaseReview}
                 className="text-white text-sm font-medium"
@@ -464,7 +478,13 @@ export default function Home() {
             </div>
           )}
 
-          <div className="absolute bottom-6 left-0 right-0 flex justify-between px-8 text-gray-400 text-sm">
+          <div
+            className="absolute left-0 right-0 flex justify-between px-4 sm:px-8 text-gray-400 text-sm"
+            style={{
+              bottom: "max(env(safe-area-inset-bottom), 1rem)",
+              paddingBottom: "0.5rem",
+            }}
+          >
             <button
               onClick={() => {
                 playUITone(720);
@@ -500,6 +520,7 @@ export default function Home() {
           onPlaybackControl={handlePlaybackControl}
           playbackLabel={playbackLabel}
           onSpeakText={speakText}
+          onCaseReview={runCaseReview}
         />
       )}
     </div>
