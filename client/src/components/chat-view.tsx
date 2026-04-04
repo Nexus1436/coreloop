@@ -130,7 +130,7 @@ export function ChatView({
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="min-h-[100dvh] flex flex-col bg-black relative"
+      className="h-screen min-h-0 flex flex-col bg-black relative overflow-hidden"
     >
       {hasUserMessages && (
         <div
@@ -149,7 +149,7 @@ export function ChatView({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-6 pt-14">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-14">
         <div className="max-w-xl mx-auto space-y-5 py-5">
           {messages.map((msg) => (
             <div
@@ -171,7 +171,7 @@ export function ChatView({
       </div>
 
       <div
-        className="border-t border-[#1a1a1a] p-4"
+        className="border-t border-[#1a1a1a] p-4 shrink-0"
         style={{
           paddingBottom: "max(env(safe-area-inset-bottom), 1rem)",
         }}

@@ -8,15 +8,11 @@ function isValidBase64AudioChunk(value: string | null | undefined) {
   const trimmed = value.trim();
   if (!trimmed) return false;
 
-  // reject obvious garbage / URLs
   if (trimmed.startsWith("http")) return false;
   if (trimmed.includes("replit.dev")) return false;
-
-  // must be long enough to be real audio
   if (trimmed.length < 200) return false;
 
   const base64Pattern = /^[A-Za-z0-9+/]+={0,2}$/;
-
   return base64Pattern.test(trimmed);
 }
 
@@ -37,8 +33,13 @@ export function useAudioPlayback() {
   const currentUrlRef = useRef<string | null>(null);
   const queueRef = useRef<string[]>([]);
   const isPlayingRef = useRef(false);
-  const stoppedRef = useRef(false);
+  const isStartingRef = useRef(false);
+  const stoppedRef = useRef(true);
   const completeRef = useRef(false);
+
+  const sessionRef = useRef(0);
+  const activePlaySessionRef = useRef(0);
+  const hasStartedCurrentSessionRef = useRef(false);
 
   const [state, setState] = useState<PlaybackState>("idle");
 
@@ -52,17 +53,22 @@ export function useAudioPlayback() {
   }, []);
 
   const resetElement = useCallback(() => {
-    if (!audioRef.current) return;
-
     const audio = audioRef.current;
-    audio.pause();
-    audio.currentTime = 0;
+    if (!audio) return;
 
-    // DO NOT set empty src
-    audio.removeAttribute("src");
+    try {
+      audio.pause();
+    } catch {}
+
+    try {
+      audio.currentTime = 0;
+    } catch {}
+
+    try {
+      audio.removeAttribute("src");
+      audio.load();
+    } catch {}
   }, []);
-
-  /* ================= INIT ================= */
 
   const init = useCallback(async () => {
     if (audioRef.current) return;
@@ -70,14 +76,47 @@ export function useAudioPlayback() {
     const audio = new Audio();
     audio.preload = "auto";
     audio.volume = 1.0;
+    audio.playsInline = true;
 
     audio.onplay = () => {
+      if (activePlaySessionRef.current !== sessionRef.current) return;
+
       isPlayingRef.current = true;
+      isStartingRef.current = false;
       setState("playing");
     };
 
     audio.onended = () => {
+      if (activePlaySessionRef.current !== sessionRef.current) return;
+
       isPlayingRef.current = false;
+      isStartingRef.current = false;
+
+      resetElement();
+      revokeCurrentUrl();
+
+      if (stoppedRef.current) {
+        setState("idle");
+        return;
+      }
+
+      const playNext = playNextRef.current;
+      if (playNext && queueRef.current.length > 0) {
+        void playNext();
+        return;
+      }
+
+      setState(completeRef.current ? "ended" : "idle");
+    };
+
+    audio.onerror = () => {
+      if (activePlaySessionRef.current !== sessionRef.current) return;
+
+      isPlayingRef.current = false;
+      isStartingRef.current = false;
+
+      resetElement();
+      revokeCurrentUrl();
 
       const playNext = playNextRef.current;
       if (playNext && queueRef.current.length > 0 && !stoppedRef.current) {
@@ -88,33 +127,53 @@ export function useAudioPlayback() {
       setState(completeRef.current ? "ended" : "idle");
     };
 
-    audio.onerror = () => {
-      console.warn("AUDIO ERROR: bad src, skipping");
+    audioRef.current = audio;
+  }, [resetElement, revokeCurrentUrl]);
 
+  const hardResetPlayback = useCallback(
+    (markStopped: boolean) => {
+      sessionRef.current += 1;
+      activePlaySessionRef.current = 0;
+      hasStartedCurrentSessionRef.current = false;
+
+      stoppedRef.current = markStopped;
+      completeRef.current = false;
+      queueRef.current = [];
       isPlayingRef.current = false;
+      isStartingRef.current = false;
+
+      resetElement();
       revokeCurrentUrl();
 
-      // CRITICAL: DO NOT keep broken element alive
-      audioRef.current = null;
+      setState("idle");
+    },
+    [resetElement, revokeCurrentUrl],
+  );
 
-      const playNext = playNextRef.current;
-      if (playNext && queueRef.current.length > 0 && !stoppedRef.current) {
-        void playNext();
+  const beginFreshPlaybackSession = useCallback(async () => {
+    await init();
+    hardResetPlayback(false);
+  }, [hardResetPlayback, init]);
+
+  const playNext = useCallback(async () => {
+    if (stoppedRef.current || isPlayingRef.current || isStartingRef.current) {
+      return;
+    }
+
+    await init();
+
+    const audio = audioRef.current;
+    if (!audio) {
+      setState(completeRef.current ? "ended" : "idle");
+      return;
+    }
+
+    while (queueRef.current.length > 0) {
+      if (stoppedRef.current) {
+        setState("idle");
         return;
       }
 
-      setState("idle");
-    };
-
-    audioRef.current = audio;
-  }, [revokeCurrentUrl]);
-
-  /* ================= PLAY NEXT ================= */
-
-  const playNext = useCallback(async () => {
-    if (isPlayingRef.current || stoppedRef.current) return;
-
-    while (queueRef.current.length > 0) {
       const nextChunk = queueRef.current.shift();
 
       if (!nextChunk || !isValidBase64AudioChunk(nextChunk)) {
@@ -125,28 +184,46 @@ export function useAudioPlayback() {
       try {
         const blob = base64ToBlob(nextChunk);
 
-        if (!blob.size) continue;
-
-        // re-init audio if previous failed
-        if (!audioRef.current) {
-          await init();
+        if (!blob.size) {
+          console.warn("REJECTED AUDIO CHUNK: empty blob");
+          continue;
         }
 
-        const audio = audioRef.current;
-        if (!audio) return;
+        const sessionId = sessionRef.current;
 
         resetElement();
         revokeCurrentUrl();
 
         const url = URL.createObjectURL(blob);
         currentUrlRef.current = url;
+        activePlaySessionRef.current = sessionId;
 
         audio.src = url;
+        audio.load();
 
+        if (stoppedRef.current || sessionId !== sessionRef.current) {
+          resetElement();
+          revokeCurrentUrl();
+          continue;
+        }
+
+        isStartingRef.current = true;
         await audio.play();
+
+        if (stoppedRef.current || sessionId !== sessionRef.current) {
+          isStartingRef.current = false;
+          isPlayingRef.current = false;
+          resetElement();
+          revokeCurrentUrl();
+          continue;
+        }
+
         return;
       } catch (err) {
         console.warn("Audio chunk rejected:", err);
+        isStartingRef.current = false;
+        isPlayingRef.current = false;
+        resetElement();
         revokeCurrentUrl();
       }
     }
@@ -155,8 +232,6 @@ export function useAudioPlayback() {
   }, [init, resetElement, revokeCurrentUrl]);
 
   playNextRef.current = playNext;
-
-  /* ================= PUSH ================= */
 
   const pushAudio = useCallback(
     async (base64Audio: string) => {
@@ -168,57 +243,44 @@ export function useAudioPlayback() {
         return;
       }
 
+      await init();
+
+      if (stoppedRef.current || !hasStartedCurrentSessionRef.current) {
+        await beginFreshPlaybackSession();
+        hasStartedCurrentSessionRef.current = true;
+      }
+
       stoppedRef.current = false;
       completeRef.current = false;
 
       queueRef.current.push(base64Audio);
 
-      if (!isPlayingRef.current) {
+      if (!isPlayingRef.current && !isStartingRef.current) {
         await playNext();
       }
     },
-    [playNext],
+    [beginFreshPlaybackSession, init, playNext],
   );
 
-  /* ================= STOP ================= */
-
   const stop = useCallback(() => {
-    stoppedRef.current = true;
-    completeRef.current = false;
-    queueRef.current = [];
-    isPlayingRef.current = false;
-
-    resetElement();
-    revokeCurrentUrl();
-
-    setState("idle");
-  }, [resetElement, revokeCurrentUrl]);
-
-  /* ================= CLEAR ================= */
+    hardResetPlayback(true);
+  }, [hardResetPlayback]);
 
   const clear = useCallback(() => {
-    stoppedRef.current = true;
-    completeRef.current = false;
-    queueRef.current = [];
-    isPlayingRef.current = false;
-
-    resetElement();
-    revokeCurrentUrl();
-
-    setState("idle");
-  }, [resetElement, revokeCurrentUrl]);
-
-  /* ================= COMPLETE ================= */
+    hardResetPlayback(true);
+  }, [hardResetPlayback]);
 
   const signalComplete = useCallback(() => {
     completeRef.current = true;
 
-    if (!isPlayingRef.current && queueRef.current.length === 0) {
+    if (
+      !isPlayingRef.current &&
+      !isStartingRef.current &&
+      queueRef.current.length === 0
+    ) {
       setState("ended");
     }
   }, []);
-
-  /* ================= HELPER ================= */
 
   const getAmplitude = useCallback(() => 0, []);
 
