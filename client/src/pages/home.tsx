@@ -1,3 +1,4 @@
+// Home.tsx
 import { useState, useRef, useEffect, useCallback } from "react";
 
 import { CentralForm } from "@/components/central-form";
@@ -108,10 +109,8 @@ export default function Home() {
   const recorder = useVoiceRecorder();
 
   const stopRequestedRef = useRef(false);
-  const playbackStateRef = useRef(playback.state);
-
   const lastSpokenTextRef = useRef<string>("");
-  const lastAudioChunksRef = useRef<string[]>([]);
+  const isReplayingRef = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
@@ -122,12 +121,22 @@ export default function Home() {
     voiceGenderRef.current = voiceGender;
   }, [voiceGender]);
 
+  useEffect(() => {
+    if (playback.state === "ended" || playback.state === "idle") {
+      setIsSpeaking(false);
+      isReplayingRef.current = false;
+    }
+  }, [playback.state]);
+
   const playUITone = useCallback((frequency = 720, durationMs = 90) => {
     try {
       const AudioCtx =
         window.AudioContext ||
-        (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-          .webkitAudioContext;
+        (
+          window as typeof window & {
+            webkitAudioContext?: typeof AudioContext;
+          }
+        ).webkitAudioContext;
 
       if (!AudioCtx) return;
 
@@ -224,17 +233,10 @@ export default function Home() {
     loadMergedHistory();
   }, []);
 
-  useEffect(() => {
-    playbackStateRef.current = playback.state;
-
-    if (playback.state === "ended" || playback.state === "idle") {
-      setIsSpeaking(false);
-    }
-  }, [playback.state]);
-
   const stopSpeech = useCallback(() => {
     stopRequestedRef.current = true;
     playback.stop();
+    isReplayingRef.current = false;
     setIsSpeaking(false);
     setIsProcessing(false);
     setIsRecording(false);
@@ -271,6 +273,7 @@ export default function Home() {
       } finally {
         if (!stopRequestedRef.current) {
           setIsSpeaking(false);
+          isReplayingRef.current = false;
         }
       }
     },
@@ -401,6 +404,26 @@ export default function Home() {
     stopSpeech,
   ]);
 
+  const isPlaybackActive =
+    playback.state !== "idle" && playback.state !== "ended";
+
+  const playbackLabel = isPlaybackActive ? "Stop" : "Repeat Response";
+
+  const handlePlaybackControl = useCallback(async () => {
+    playUITone(720);
+
+    if (isPlaybackActive) {
+      stopSpeech();
+      return;
+    }
+
+    if (!lastSpokenTextRef.current) return;
+    if (isReplayingRef.current) return;
+
+    isReplayingRef.current = true;
+    await speakText(lastSpokenTextRef.current);
+  }, [isPlaybackActive, playUITone, speakText, stopSpeech]);
+
   return (
     <div className="min-h-screen w-full bg-black relative overflow-hidden">
       {mode === "A" ? (
@@ -460,35 +483,23 @@ export default function Home() {
               Prefer {voiceGender === "female" ? "male" : "female"}
             </button>
 
-            <button
-              onClick={() => {
-                playUITone(720);
-
-                if (isSpeaking) {
-                  stopSpeech();
-                } else if (lastSpokenTextRef.current) {
-                  speakText(lastSpokenTextRef.current);
-                }
-              }}
-            >
-              {isSpeaking ? "Stop" : "Repeat response"}
-            </button>
+            <button onClick={handlePlaybackControl}>{playbackLabel}</button>
           </div>
         </>
       ) : (
         <ChatView
           messages={messages}
           setMessages={setMessages}
-          playback={playback}
-          voiceGender={voiceGender}
           onBack={() => setMode("A")}
-          lastAudioChunksRef={lastAudioChunksRef}
           playUITone={(f = 720, d = 90) => playUITone(f, d)}
           onConversationIdChange={(id) => {
             conversationIdRef.current = id;
             setConversationId(id);
             localStorage.setItem("conversationId", String(id));
           }}
+          onPlaybackControl={handlePlaybackControl}
+          playbackLabel={playbackLabel}
+          onSpeakText={speakText}
         />
       )}
     </div>

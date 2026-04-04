@@ -1,27 +1,24 @@
+// ChatView.tsx
 import {
   useState,
   useRef,
   useEffect,
-  useCallback,
   type Dispatch,
   type SetStateAction,
-  type MutableRefObject,
 } from "react";
 import { motion } from "framer-motion";
-import { Volume2 } from "lucide-react";
 import { type ChatMessage } from "@/pages/home";
-import { sendMessage, streamTTS } from "@/lib/api";
-import type { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
+import { sendMessage } from "@/lib/api";
 
 interface ChatViewProps {
   messages: ChatMessage[];
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   onBack?: () => void;
-  playback: ReturnType<typeof useAudioPlayback>;
-  lastAudioChunksRef: MutableRefObject<string[]>;
-  voiceGender: "male" | "female";
   playUITone: (frequency?: number, durationMs?: number) => void;
   onConversationIdChange: (conversationId: number) => void;
+  onPlaybackControl: () => void;
+  playbackLabel: string;
+  onSpeakText: (text: string) => Promise<void>;
 }
 
 let msgCounter = 1000;
@@ -54,11 +51,11 @@ export function ChatView({
   messages,
   setMessages,
   onBack,
-  playback,
-  lastAudioChunksRef,
-  voiceGender,
   playUITone,
   onConversationIdChange,
+  onPlaybackControl,
+  playbackLabel,
+  onSpeakText,
 }: ChatViewProps) {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -83,9 +80,6 @@ export function ChatView({
   const handleSend = async () => {
     const trimmed = inputValue.trim();
     if (!trimmed || isStreaming) return;
-
-    await playback.init();
-    playback.stop();
 
     setInputValue("");
 
@@ -120,48 +114,13 @@ export function ChatView({
         },
       );
 
-      const cache: string[] = [];
-
-      await streamTTS(
-        assistantText,
-        (chunk: string) => {
-          cache.push(chunk);
-          playback.pushAudio(chunk);
-        },
-        { voice: voiceGender },
-      );
-
-      playback.signalComplete();
-      lastAudioChunksRef.current = cache;
+      if (assistantText.trim()) {
+        await onSpeakText(assistantText);
+      }
     } finally {
       setIsStreaming(false);
     }
   };
-
-  const handleReadAloud = useCallback(async () => {
-    const lastAssistant = [...messages]
-      .reverse()
-      .find((m) => m.role === "assistant");
-
-    if (!lastAssistant) return;
-
-    await playback.init();
-    playback.stop();
-
-    const cache: string[] = [];
-
-    await streamTTS(
-      lastAssistant.text,
-      (chunk: string) => {
-        cache.push(chunk);
-        playback.pushAudio(chunk);
-      },
-      { voice: voiceGender },
-    );
-
-    playback.signalComplete();
-    lastAudioChunksRef.current = cache;
-  }, [messages, playback, voiceGender, lastAudioChunksRef]);
 
   return (
     <motion.div
@@ -207,14 +166,7 @@ export function ChatView({
             rows={1}
           />
 
-          <button
-            onClick={() => {
-              playUITone(720);
-              handleReadAloud();
-            }}
-          >
-            <Volume2 />
-          </button>
+          <button onClick={onPlaybackControl}>{playbackLabel}</button>
         </div>
 
         {onBack && (
