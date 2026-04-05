@@ -1,0 +1,81 @@
+Use this exactly. Do not modify it.
+
+---
+
+I need urgent help diagnosing a systemic deployment failure in my Replit app.
+
+This is NOT a small bug. The production environment is clearly running outdated backend behavior despite multiple republish attempts.
+
+Here is the situation:
+
+* My development (preview) environment is correct and running the latest backend logic.
+* My production deployment is NOT using that logic.
+* I have already:
+
+  * clicked Republish multiple times
+  * rebuilt using `npm run build`
+  * confirmed `dist/index.cjs` was updated
+  * added visible backend changes
+* Production still shows:
+
+  * no name capture
+  * no onboarding logic
+  * old response behavior
+  * outdated system responses
+* The behavior difference is not subtle — production is clearly running an older version of `routes.ts`
+
+Architecture details:
+
+* Backend: Express
+* Dev runs: `tsx server/index.ts`
+* Production runs: `node dist/index.cjs`
+* Changes are made in `routes.ts`
+* Build process compiles to `dist/index.cjs`
+
+Additional complication:
+
+* I previously had an older deployment URL
+* I now have a new production URL (interloopbysignal.com)
+* It is possible multiple deployments exist or old containers are still active
+
+---
+
+I need a precise, step-by-step diagnosis for Replit specifically.
+
+Do NOT give general advice.
+
+I need you to help me verify and fix:
+
+1. Whether my published URL is actually connected to the same Replit project I am editing
+2. Whether an older deployment or container is still serving traffic
+3. Whether Republish is actually rebuilding and deploying `dist/index.cjs`
+4. Whether production is running a stale build artifact
+5. Whether there are multiple active deployments or URLs and how to identify/remove the wrong one
+6. How to verify the deployment start command and entrypoint
+7. How to view logs for the deployed production instance (not dev logs)
+8. How to confirm which backend code version production is actually running
+9. How to verify which database production is connected to vs dev
+10. How to force a complete clean rebuild and redeploy (no cache, no stale containers)
+
+---
+
+Critical context:
+
+This system is highly stateful and relies on:
+
+* identity capture
+* onboarding flow
+* memory logic
+* prompt assembly
+
+Right now, production is missing ALL of those, which means it is not using the current backend at all.
+
+This is a deployment integrity issue, not a logic issue.
+
+---
+
+Final requirement:
+
+Based on everything above, tell me the top 3 most likely root causes, ranked, and give me exact steps to prove or eliminate each one.
+
+I need the fastest path to identifying why production is not using my current backend code.
