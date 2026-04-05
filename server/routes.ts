@@ -2,7 +2,6 @@
 // IMPORTS & SETUP
 // ==============================
 
-import { BASE_NARRATIVE } from "./prompts/baseNarrative";
 import { BASE_NARRATIVE_V2 } from "./prompts/base_narrative_v2_claude";
 import { CASE_REVIEW_NARRATIVE } from "./prompts/caseReviewNarrative";
 
@@ -45,11 +44,7 @@ import { registerAnalyticsRoutes } from "./analyticsRoutes";
 // PROMPT VERSION CONTROL
 // ==============================
 
-const USE_V2 = true;
-
-export const ACTIVE_BASE_NARRATIVE = USE_V2
-  ? BASE_NARRATIVE_V2
-  : BASE_NARRATIVE;
+export const ACTIVE_BASE_NARRATIVE = BASE_NARRATIVE_V2;
 
 // ==============================
 // EXTERNAL CLIENTS
@@ -69,9 +64,9 @@ const INTERLOOP_TTS_CONFIG = {
     modelId: "eleven_multilingual_v2",
     settings: {
       stability: 0.36,
-      similarity_boost: 0.78,
+      similarity_boost: 0.85,
       style: 0.18,
-      use_speaker_boost: false,
+      use_speaker_boost: true,
       speed: 1.08,
     },
   },
@@ -80,9 +75,9 @@ const INTERLOOP_TTS_CONFIG = {
     modelId: "eleven_multilingual_v2",
     settings: {
       stability: 0.38,
-      similarity_boost: 0.78,
+      similarity_boost: 0.85,
       style: 0.15,
-      use_speaker_boost: false,
+      use_speaker_boost: true,
       speed: 1.06,
     },
   },
@@ -101,7 +96,8 @@ function clampText(s: string, max = 800): string {
 function normalizeStoredFirstName(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  if (!trimmed || /^null$/i.test(trimmed)) return null;
+  return trimmed;
 }
 
 function formatUnknownError(err: unknown): { error: string; stack?: string } {
@@ -124,35 +120,8 @@ function formatUnknownError(err: unknown): { error: string; stack?: string } {
 }
 
 // ==============================
-// FIRST INTERACTION HELPERS
+// NAME EXTRACTION HELPERS
 // ==============================
-
-function isGenericOpener(text: string): boolean {
-  const normalized = text
-    .trim()
-    .toLowerCase()
-    .replace(/[^\w\s']/g, " ")
-    .replace(/\s+/g, " ");
-
-  const openers = new Set([
-    "hi",
-    "hello",
-    "hey",
-    "hey there",
-    "hi there",
-    "hello there",
-    "good morning",
-    "good evening",
-    "good afternoon",
-    "how are you",
-    "whats up",
-    "what's up",
-    "yo",
-    "sup",
-  ]);
-
-  return openers.has(normalized);
-}
 
 function extractConfidentExplicitName(text: string): string | null {
   const match = text.match(
@@ -222,20 +191,6 @@ function extractStandaloneNameReply(text: string): string | null {
   if (blacklist.has(normalized)) return null;
 
   return normalized;
-}
-
-function extractHistoricalExplicitName(previousMessages: any[]): string | null {
-  for (const message of [...previousMessages].reverse()) {
-    if (message.role !== "user") continue;
-
-    const content = String(message.content ?? "").trim();
-    if (!content) continue;
-
-    const extracted = extractConfidentExplicitName(content);
-    if (extracted) return extracted;
-  }
-
-  return null;
 }
 
 function askedWhatShouldICallYou(text: string): boolean {
@@ -370,41 +325,6 @@ Mechanical focus: ${latest.mechanicalFocus ?? "Not specified"}
 
 Your job: Test this hypothesis. Push for outcome clarity.
 `;
-}
-
-// ==============================
-// OUTCOME RECORDING
-// ==============================
-
-async function recordOutcomeIfDetected(
-  userId: string,
-  userText: string,
-): Promise<void> {
-  const result = detectOutcomeResult(userText);
-  if (!result) return;
-
-  const unresolved = await db
-    .select({
-      adjustmentId: caseAdjustments.id,
-      caseId: caseAdjustments.caseId,
-    })
-    .from(caseAdjustments)
-    .innerJoin(cases, eq(caseAdjustments.caseId, cases.id))
-    .leftJoin(caseOutcomes, eq(caseAdjustments.id, caseOutcomes.adjustmentId))
-    .where(and(eq(cases.userId, userId), isNull(caseOutcomes.id)))
-    .orderBy(desc(caseAdjustments.id))
-    .limit(1);
-
-  if (unresolved.length === 0) return;
-
-  const latest = unresolved[0];
-
-  await db.insert(caseOutcomes).values({
-    caseId: latest.caseId,
-    adjustmentId: latest.adjustmentId,
-    result,
-    userFeedback: userText,
-  });
 }
 
 // ==============================
@@ -678,6 +598,12 @@ export async function registerRoutes(
 
         const dbFirstName = normalizeStoredFirstName(existingUser?.firstName);
 
+        console.log("NAME DEBUG:", {
+          userId,
+          rawFirstName: existingUser?.firstName,
+          normalizedFirstName: dbFirstName,
+        });
+
         if (!existingUser) {
           await db
             .insert(users)
@@ -747,18 +673,6 @@ export async function registerRoutes(
           .where(eq(messages.conversationId, convoId))
           .orderBy(asc(messages.createdAt));
 
-        const hadMessagesInConversation = previous.length > 0;
-
-        const [anyPriorUserMessage] = await db
-          .select({ id: messages.id })
-          .from(messages)
-          .where(eq(messages.userId, userId))
-          .orderBy(asc(messages.createdAt))
-          .limit(1);
-
-        const isFirstRealInteraction =
-          !anyPriorUserMessage && !hadMessagesInConversation;
-
         const lastAssistantMessage =
           [...previous].reverse().find((m) => m.role === "assistant") ?? null;
 
@@ -767,40 +681,102 @@ export async function registerRoutes(
             askedWhatShouldICallYou(String(lastAssistantMessage.content ?? "")),
         );
 
-        const explicitName = dbFirstName
+        let storedFirstName = dbFirstName;
+        const explicitName = storedFirstName
           ? null
           : extractConfidentExplicitName(userText);
-
         const standaloneNameReply =
-          !dbFirstName && previousAssistantAskedName
+          !storedFirstName && previousAssistantAskedName
             ? extractStandaloneNameReply(userText)
             : null;
 
-        const historicalExplicitName = dbFirstName
-          ? null
-          : extractHistoricalExplicitName(previous);
-
         let capturedName: string | null = null;
 
-        if (!dbFirstName && explicitName) {
+        if (!storedFirstName && explicitName) {
           capturedName = explicitName;
-        } else if (!dbFirstName && standaloneNameReply) {
+        } else if (!storedFirstName && standaloneNameReply) {
           capturedName = standaloneNameReply;
-        } else if (!dbFirstName && historicalExplicitName) {
-          capturedName = historicalExplicitName;
         }
 
-        if (!dbFirstName && capturedName) {
+        if (!storedFirstName) {
+          await db.insert(messages).values({
+            conversationId: convoId,
+            userId: userId,
+            role: "user",
+            content: userText,
+          });
+
+          previous = [
+            ...previous,
+            {
+              id: 0,
+              conversationId: convoId,
+              userId,
+              role: "user",
+              content: userText,
+              createdAt: new Date(),
+            } as any,
+          ];
+
+          if (!capturedName) {
+            const onboardingPrompt =
+              "Hi, I’m Interloop. Before we begin, what should I call you?";
+
+            res.setHeader("Content-Type", "text/event-stream");
+
+            const words = onboardingPrompt.split(" ");
+
+            for (const word of words) {
+              res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
+            }
+
+            await db.insert(messages).values({
+              conversationId: convoId,
+              userId: userId,
+              role: "assistant",
+              content: onboardingPrompt,
+            });
+
+            res.write(`data: [DONE]\n\n`);
+            res.end();
+            return;
+          }
+
           await db
             .update(users)
             .set({ firstName: capturedName })
             .where(eq(users.id, userId));
 
-          [existingUser] = await db
-            .select()
-            .from(users)
-            .where(eq(users.id, userId))
-            .limit(1);
+          storedFirstName = capturedName;
+          const onboardingMessage = `
+          Hi, I’m Interloop.
+
+          I help figure out what’s actually driving what you’re experiencing in your body by breaking it down to the underlying mechanism, not just the surface symptom.
+
+          Everything you describe is treated as signal — movement, tension, pain, timing, coordination, anything that changes. From there, I narrow it down to one thing that matters and we test it together.
+
+          You don’t need to organize it perfectly. It’s fine if it’s messy or if you ramble. Just describe what’s happening as you experience it, and I’ll sort through it.
+
+          Let’s begin.
+          `;
+          res.setHeader("Content-Type", "text/event-stream");
+
+          const words = onboardingMessage.split(" ");
+
+          for (const word of words) {
+            res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
+          }
+
+          await db.insert(messages).values({
+            conversationId: convoId,
+            userId: userId,
+            role: "assistant",
+            content: onboardingMessage,
+          });
+
+          res.write(`data: [DONE]\n\n`);
+          res.end();
+          return;
         }
 
         await db.insert(messages).values({
@@ -832,57 +808,9 @@ export async function registerRoutes(
 
         const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
 
-        let [userRow] = await db
-          .select()
-          .from(users)
-          .where(eq(users.id, userId))
-          .limit(1);
-
-        const storedFirstName = normalizeStoredFirstName(userRow?.firstName);
-
-        const shouldTriggerOnboarding =
-          !storedFirstName &&
-          isFirstRealInteraction &&
-          isGenericOpener(userText);
-
-        const isStandaloneNameFollowup =
-          !storedFirstName &&
-          Boolean(standaloneNameReply) &&
-          Boolean(lastAssistantMessage) &&
-          previousAssistantAskedName;
-
         let identityBlock = "";
-        // ==============================
-        // FIRST INTERACTION PROTOCOL
-        // ==============================
 
-        if (shouldTriggerOnboarding) {
-          identityBlock = `=== FIRST INTERACTION PROTOCOL ===
-This is the user's first real interaction.
-The current message is only a generic opener, not a substantive issue.
-Deliver the onboarding message now.
-End that onboarding message with this exact question:
-What should I call you?
-
-Do not start movement analysis yet.
-Do not skip the onboarding message.
-Do not replace the final question with a different wording.`;
-        } else if (!storedFirstName && isStandaloneNameFollowup) {
-          identityBlock = `=== FIRST INTERACTION PROTOCOL ===
-The user just replied to your onboarding name question with a standalone name.
-Treat that reply as identity confirmation, not as a movement problem to analyze.
-Acknowledge the name naturally and continue forward without asking for the name again.
-Do not turn this one-word reply into issue analysis.`;
-        } else if (!storedFirstName) {
-          identityBlock = `=== FIRST INTERACTION PROTOCOL ===
-You do not know the user's name yet.
-
-If the current message is substantive, engage the issue directly.
-Do NOT force the onboarding speech first.
-Do NOT interrupt or derail the investigation with a standalone name question.
-
-You may ask for the user's name later only when it fits naturally inside the ongoing flow.`;
-        } else {
+        if (storedFirstName) {
           identityBlock = `=== USER IDENTITY ===
 User's first name is ${storedFirstName}.
 
@@ -891,6 +819,14 @@ Do not use it in every response.
 Use it no more than once in a response unless there is a strong reason.
 Do not default to placing it in the final sentence or final continuation.
 Its use must serve the reasoning rather than habit.`;
+        } else {
+          identityBlock = `=== USER IDENTITY ===
+The user's first name is unknown.
+
+Identity authority rule:
+- Only the users table name field can authorize name usage
+- Do not infer, recover, or use a name from memory, stored session history, prior messages, summaries, or any other injected context
+- If a name appears elsewhere in context, treat it as non-authoritative and ignore it for identity usage`;
         }
 
         const ACTIVE_PROMPT = isCaseReview
@@ -952,7 +888,7 @@ Its use must serve the reasoning rather than habit.`;
         let assistantText = await runCompletion(openai, chatMessages);
         let finalText = assistantText;
 
-        if (!isCaseReview && !shouldTriggerOnboarding) {
+        if (!isCaseReview) {
           const isWeak =
             /could be|might be|possibly|several|a few things/i.test(
               assistantText,

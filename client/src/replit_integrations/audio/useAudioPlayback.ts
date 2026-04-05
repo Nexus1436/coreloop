@@ -38,8 +38,7 @@ export function useAudioPlayback() {
   const completeRef = useRef(false);
 
   const sessionRef = useRef(0);
-  const activePlaySessionRef = useRef(0);
-  const hasStartedCurrentSessionRef = useRef(false);
+  const activeSessionRef = useRef(0);
 
   const [state, setState] = useState<PlaybackState>("idle");
 
@@ -76,10 +75,10 @@ export function useAudioPlayback() {
     const audio = new Audio();
     audio.preload = "auto";
     audio.volume = 1.0;
-    audio.playsInline = true;
+    audio.setAttribute("playsinline", "true");
 
     audio.onplay = () => {
-      if (activePlaySessionRef.current !== sessionRef.current) return;
+      if (activeSessionRef.current !== sessionRef.current) return;
 
       isPlayingRef.current = true;
       isStartingRef.current = false;
@@ -87,7 +86,7 @@ export function useAudioPlayback() {
     };
 
     audio.onended = () => {
-      if (activePlaySessionRef.current !== sessionRef.current) return;
+      if (activeSessionRef.current !== sessionRef.current) return;
 
       isPlayingRef.current = false;
       isStartingRef.current = false;
@@ -110,7 +109,7 @@ export function useAudioPlayback() {
     };
 
     audio.onerror = () => {
-      if (activePlaySessionRef.current !== sessionRef.current) return;
+      if (activeSessionRef.current !== sessionRef.current) return;
 
       isPlayingRef.current = false;
       isStartingRef.current = false;
@@ -118,23 +117,16 @@ export function useAudioPlayback() {
       resetElement();
       revokeCurrentUrl();
 
-      const playNext = playNextRef.current;
-      if (playNext && queueRef.current.length > 0 && !stoppedRef.current) {
-        void playNext();
-        return;
-      }
-
-      setState(completeRef.current ? "ended" : "idle");
+      setState("idle");
     };
 
     audioRef.current = audio;
   }, [resetElement, revokeCurrentUrl]);
 
-  const hardResetPlayback = useCallback(
+  const hardReset = useCallback(
     (markStopped: boolean) => {
       sessionRef.current += 1;
-      activePlaySessionRef.current = 0;
-      hasStartedCurrentSessionRef.current = false;
+      activeSessionRef.current = 0;
 
       stoppedRef.current = markStopped;
       completeRef.current = false;
@@ -150,11 +142,6 @@ export function useAudioPlayback() {
     [resetElement, revokeCurrentUrl],
   );
 
-  const beginFreshPlaybackSession = useCallback(async () => {
-    await init();
-    hardResetPlayback(false);
-  }, [hardResetPlayback, init]);
-
   const playNext = useCallback(async () => {
     if (stoppedRef.current || isPlayingRef.current || isStartingRef.current) {
       return;
@@ -164,7 +151,7 @@ export function useAudioPlayback() {
 
     const audio = audioRef.current;
     if (!audio) {
-      setState(completeRef.current ? "ended" : "idle");
+      setState("idle");
       return;
     }
 
@@ -174,20 +161,13 @@ export function useAudioPlayback() {
         return;
       }
 
-      const nextChunk = queueRef.current.shift();
+      const chunk = queueRef.current.shift();
 
-      if (!nextChunk || !isValidBase64AudioChunk(nextChunk)) {
-        console.warn("REJECTED AUDIO CHUNK:", String(nextChunk).slice(0, 120));
-        continue;
-      }
+      if (!chunk || !isValidBase64AudioChunk(chunk)) continue;
 
       try {
-        const blob = base64ToBlob(nextChunk);
-
-        if (!blob.size) {
-          console.warn("REJECTED AUDIO CHUNK: empty blob");
-          continue;
-        }
+        const blob = base64ToBlob(chunk);
+        if (!blob.size) continue;
 
         const sessionId = sessionRef.current;
 
@@ -196,21 +176,23 @@ export function useAudioPlayback() {
 
         const url = URL.createObjectURL(blob);
         currentUrlRef.current = url;
-        activePlaySessionRef.current = sessionId;
+        activeSessionRef.current = sessionId;
 
         audio.src = url;
         audio.load();
 
-        if (stoppedRef.current || sessionId !== sessionRef.current) {
-          resetElement();
-          revokeCurrentUrl();
-          continue;
+        isStartingRef.current = true;
+
+        try {
+          await audio.play();
+        } catch {
+          if (sessionId === sessionRef.current) {
+            hardReset(true);
+          }
+          return;
         }
 
-        isStartingRef.current = true;
-        await audio.play();
-
-        if (stoppedRef.current || sessionId !== sessionRef.current) {
+        if (sessionId !== sessionRef.current || stoppedRef.current) {
           isStartingRef.current = false;
           isPlayingRef.current = false;
           resetElement();
@@ -219,8 +201,7 @@ export function useAudioPlayback() {
         }
 
         return;
-      } catch (err) {
-        console.warn("Audio chunk rejected:", err);
+      } catch {
         isStartingRef.current = false;
         isPlayingRef.current = false;
         resetElement();
@@ -228,26 +209,19 @@ export function useAudioPlayback() {
       }
     }
 
-    setState(completeRef.current ? "ended" : "idle");
-  }, [init, resetElement, revokeCurrentUrl]);
+    setState("idle");
+  }, [init, resetElement, revokeCurrentUrl, hardReset]);
 
   playNextRef.current = playNext;
 
   const pushAudio = useCallback(
     async (base64Audio: string) => {
-      if (!isValidBase64AudioChunk(base64Audio)) {
-        console.warn(
-          "REJECTED AUDIO CHUNK:",
-          String(base64Audio).slice(0, 120),
-        );
-        return;
-      }
+      if (!isValidBase64AudioChunk(base64Audio)) return;
 
       await init();
 
-      if (stoppedRef.current || !hasStartedCurrentSessionRef.current) {
-        await beginFreshPlaybackSession();
-        hasStartedCurrentSessionRef.current = true;
+      if (stoppedRef.current) {
+        hardReset(false);
       }
 
       stoppedRef.current = false;
@@ -259,16 +233,35 @@ export function useAudioPlayback() {
         await playNext();
       }
     },
-    [beginFreshPlaybackSession, init, playNext],
+    [init, playNext, hardReset],
+  );
+
+  const replaceAndPlay = useCallback(
+    async (base64Audio: string) => {
+      if (!isValidBase64AudioChunk(base64Audio)) return;
+
+      await init();
+
+      // ALWAYS kill everything first
+      hardReset(false);
+
+      stoppedRef.current = false;
+      completeRef.current = false;
+
+      queueRef.current = [base64Audio];
+
+      await playNext();
+    },
+    [init, playNext, hardReset],
   );
 
   const stop = useCallback(() => {
-    hardResetPlayback(true);
-  }, [hardResetPlayback]);
+    hardReset(true);
+  }, [hardReset]);
 
   const clear = useCallback(() => {
-    hardResetPlayback(true);
-  }, [hardResetPlayback]);
+    hardReset(true);
+  }, [hardReset]);
 
   const signalComplete = useCallback(() => {
     completeRef.current = true;
@@ -291,6 +284,7 @@ export function useAudioPlayback() {
     isPlaying,
     init,
     pushAudio,
+    replaceAndPlay,
     stop,
     clear,
     signalComplete,
