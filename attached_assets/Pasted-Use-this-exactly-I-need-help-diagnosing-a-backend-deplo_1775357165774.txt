@@ -1,0 +1,55 @@
+Use this exactly.
+
+---
+
+I need help diagnosing a backend deployment mismatch in Replit.
+
+Here is the situation:
+
+* My dev/preview environment is running the latest backend code correctly.
+* My published production app is NOT reflecting the latest backend behavior.
+* I have already clicked **Republish**.
+* The production app is still behaving like an older version of my backend.
+* This is an Express backend running with: `tsx server/index.ts`
+* I modified backend logic in `routes.ts`, and those changes are visible in dev but NOT in production.
+* I added visible test markers/logs in the backend, and they do NOT appear in production.
+
+Additional context:
+
+* I previously had an older published URL and later created a new one (`interloop-by-signal`).
+* Production may also be using a different database, but that does NOT explain the outdated backend logic.
+* Dev and production clearly do not match in behavior.
+
+---
+
+I need a precise, step-by-step diagnosis specific to Replit.
+
+Do NOT give general advice.
+
+I need you to tell me exactly how to verify and fix the following:
+
+1. Whether the published URL is actually connected to the same repl/workspace I am editing
+2. Whether an older deployment instance or cached container is still serving traffic
+3. Whether Republish actually rebuilt the backend and is using the correct entrypoint (`tsx server/index.ts`)
+4. Whether production is running a stale build artifact instead of current code
+5. Whether there are multiple active deployment URLs and how to identify and disable the wrong one
+6. How to check the deployment’s start/build/run commands
+7. How to view logs for the published deployment (not dev logs) and confirm what code is actually running
+8. How to verify which database the production deployment is connected to (vs dev)
+9. How to force a clean rebuild/redeploy so the latest backend code is guaranteed to be live
+
+---
+
+Finally:
+
+Based on this exact symptom:
+
+* dev is correct
+* production is outdated
+* republish was already clicked
+
+Tell me the **top 3 most likely causes**, ranked, and the **exact steps to prove or eliminate each one**.
+
+---
+
+I want the fastest path to identifying why production is not using my latest backend code.
