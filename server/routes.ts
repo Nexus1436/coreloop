@@ -720,7 +720,7 @@ export async function registerRoutes(
 
           if (!capturedName) {
             const onboardingPrompt =
-              "Hi, I’m Interloop. Before we begin, what should I call you?";
+              "Hi, I’m Interloop [LIVE TEST]. Before we begin, what should I call you?";
 
             res.setHeader("Content-Type", "text/event-stream");
 
@@ -749,7 +749,7 @@ export async function registerRoutes(
 
           storedFirstName = capturedName;
           const onboardingMessage = `
-          Hi, I’m Interloop.
+          Hi, I’m Interloop [LIVE TEST].
 
           I help figure out what’s actually driving what you’re experiencing in your body by breaking it down to the underlying mechanism, not just the surface symptom.
 
