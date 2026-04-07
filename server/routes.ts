@@ -134,26 +134,6 @@ function isFallbackActivityType(value: string | null | undefined): boolean {
   return normalizeCaseKey(value) === "unspecified";
 }
 
-function hasStrongDerivedCaseContext(context: {
-  movementContext: string;
-  activityType: string;
-}): boolean {
-  return (
-    !isFallbackMovementContext(context.movementContext) &&
-    !isFallbackActivityType(context.activityType)
-  );
-}
-
-function qualifiesForTimelineSignal(text: string): boolean {
-  return /\b(?:pain|hurt|hurts|hurting|tight|tightness|issue|problem|bother|bothering|can't|cannot|struggle|confused|off|feels?\s+off|feels?\s+weird|not\s+right|unstable|off\s+today|out\s+of\s+sync|awkward|not\s+moving\s+cleanly|something\s+is\s+off|movement\s+feels\s+wrong|body\s+part\s+not\s+working\s+right|not\s+working|doesn't\s+feel\s+right|doesnt\s+feel\s+right|can't\s+rotate|cant\s+rotate|can't\s+load|cant\s+load|timing\s+is\s+off|timing\s+feels\s+off|mechanics\s+feel\s+wrong|movement\s+is\s+weird|doesn't\s+feel\s+stable|not\s+stable|out\s+of\s+position|can't\s+control|cant\s+control|not\s+coordinated|coordination\s+is\s+off|rotation\s+feels\s+off|trunk\s+rotation\s+feels\s+wrong|(?:shoulder|hip|back|knee|arm|trunk)\s+feels?\s+off|(?:shoulder|hip|back|knee|arm|trunk)\s+feels?\s+weird|(?:shoulder|hip|back|knee|arm|trunk)\s+.*out\s+of\s+sync|(?:shoulder|hip|back|knee|arm|trunk)\s+.*not\s+working\s+right)\b/i.test(
-    text.trim(),
-  );
-}
-
-function isPureOutcomeFollowUp(text: string): boolean {
-  return looksLikeOutcome(text) && !qualifiesForTimelineSignal(text);
-}
-
 function deriveCaseContext(text: string): {
   movementContext: string;
   activityType: string;
@@ -210,6 +190,35 @@ function deriveCaseContext(text: string): {
     movementContext: clampText(movementContext, 80),
     activityType: detectedActivity,
   };
+}
+
+function isOpenCaseStatus(status: string | null | undefined): boolean {
+  if (status == null) return true;
+  return /open|active|current/i.test(String(status));
+}
+
+function extractFirstMatchingSentence(
+  text: string,
+  patterns: RegExp[],
+): string | null {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  for (const sentence of sentences) {
+    if (patterns.some((pattern) => pattern.test(sentence))) {
+      return clampText(sentence, 400);
+    }
+  }
+
+  return null;
+}
+
+function qualifiesForTimelineSignal(text: string): boolean {
+  return /pain|tight|hurt|issue|problem|can't|cannot|struggle|confused|off|feels off|feels weird|not right|not working|doesn't feel right|doesnt feel right|can't rotate|cant rotate|can't load|cant load|timing is off|timing feels off|mechanics feel wrong|movement is weird|doesn't feel stable|not stable|unstable|out of position|can't control|cant control|not coordinated|coordination is off|out of sync|awkward|something is off|rotation feels off|trunk rotation feels wrong/i.test(
+    text.trim(),
+  );
 }
 
 // ==============================
@@ -352,36 +361,18 @@ async function getStoredSessionHistory(
   const sessionBlocks: string[] = [];
 
   for (const convo of recentConvos) {
-    let block = `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\n`;
+    if (!convo.summary?.trim()) continue;
 
-    if (convo.summary) {
-      block += `Summary: ${convo.summary}\n`;
-    }
-
-    const convoMessages = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.conversationId, convo.id))
-      .orderBy(asc(messages.createdAt))
-      .limit(4);
-
-    if (convoMessages.length > 0) {
-      const lines = convoMessages
-        .map(
-          (m) =>
-            `  ${m.role === "user" ? "User" : "Interloop"}: ${String(m.content ?? "")}`,
-        )
-        .join("\n");
-
-      block += `\nKey Excerpts:\n${lines}`;
-    }
-
-    sessionBlocks.push(block);
+    sessionBlocks.push(
+      `--- Session (conversation ${convo.id}, title: "${convo.title}") ---\nSummary: ${convo.summary.trim()}\n`,
+    );
   }
+
+  if (sessionBlocks.length === 0) return "";
 
   return (
     "\n\n=== STORED SESSION HISTORY ===\n" +
-    "Real prior conversations. Use when relevant.\n\n" +
+    "Compressed prior-session summaries. Use only when directly relevant.\n\n" +
     sessionBlocks.join("\n\n")
   );
 }
@@ -418,6 +409,52 @@ Mechanical focus: ${latest.mechanicalFocus ?? "Not specified"}
 
 Your job: Test this hypothesis. Push for outcome clarity.
 `;
+}
+
+async function getCurrentConversationSummaryBlock(
+  conversationId: number,
+): Promise<string> {
+  const [convo] = await db
+    .select({
+      summary: conversations.summary,
+    })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+
+  const summary = String(convo?.summary ?? "").trim();
+  if (!summary) return "";
+
+  return `
+=== CURRENT CONVERSATION SUMMARY ===
+Compressed thread state so far:
+${summary}
+`;
+}
+
+// ==============================
+// RESPONSE VALIDATION HELPERS
+// ==============================
+
+function isValidResponse(text: string): boolean {
+  if (!text) return false;
+
+  if (text.trim().length < 40) return false;
+
+  return true;
+}
+
+async function runCompletion(
+  openaiClient: OpenAI,
+  messages: ChatCompletionMessageParam[],
+): Promise<string> {
+  const resp = await openaiClient.chat.completions.create({
+    model: "gpt-4o",
+    temperature: 0.4,
+    messages,
+  });
+
+  return resp.choices?.[0]?.message?.content ?? "";
 }
 
 async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
@@ -606,31 +643,6 @@ async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
   ]
     .filter(Boolean)
     .join(" ");
-}
-
-// ==============================
-// RESPONSE VALIDATION HELPERS
-// ==============================
-
-function isValidResponse(text: string): boolean {
-  if (!text) return false;
-
-  if (text.trim().length < 40) return false;
-
-  return true;
-}
-
-async function runCompletion(
-  openaiClient: OpenAI,
-  messages: ChatCompletionMessageParam[],
-): Promise<string> {
-  const resp = await openaiClient.chat.completions.create({
-    model: "gpt-4o",
-    temperature: 0.4,
-    messages,
-  });
-
-  return resp.choices?.[0]?.message?.content ?? "";
 }
 
 // ==============================
@@ -1080,10 +1092,64 @@ export async function registerRoutes(
         ];
 
         try {
+          const outcomeResult = detectOutcomeResult(userText);
+
+          if (outcomeResult) {
+            const [activeCase] = await db
+              .select({
+                id: cases.id,
+                status: cases.status,
+              })
+              .from(cases)
+              .where(eq(cases.userId, userId))
+              .orderBy(desc(cases.updatedAt), desc(cases.id))
+              .limit(1);
+
+            if (activeCase && isOpenCaseStatus(activeCase.status)) {
+              const [latestOutcome] = await db
+                .select({
+                  id: caseOutcomes.id,
+                  result: caseOutcomes.result,
+                  createdAt: caseOutcomes.createdAt,
+                })
+                .from(caseOutcomes)
+                .where(eq(caseOutcomes.caseId, activeCase.id))
+                .orderBy(desc(caseOutcomes.id))
+                .limit(1);
+
+              const latestCreatedAtMs = latestOutcome?.createdAt
+                ? new Date(latestOutcome.createdAt).getTime()
+                : 0;
+
+              const isDuplicateRecentOutcome =
+                Boolean(latestOutcome) &&
+                String(latestOutcome.result ?? "") === outcomeResult &&
+                latestCreatedAtMs > 0 &&
+                Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
+
+              if (!isDuplicateRecentOutcome) {
+                await db.insert(caseOutcomes).values({
+                  caseId: activeCase.id,
+                  result: outcomeResult,
+                  userFeedback: userText,
+                });
+
+                if (outcomeResult === "Improved") {
+                  await db
+                    .update(cases)
+                    .set({ status: "resolved" })
+                    .where(eq(cases.id, activeCase.id));
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Auto outcome capture failed:", err);
+        }
+
+        try {
           const shouldCreateCase =
-            !isCaseReview &&
-            qualifiesForTimelineSignal(userText) &&
-            !isPureOutcomeFollowUp(userText);
+            !isCaseReview && qualifiesForTimelineSignal(userText);
 
           if (shouldCreateCase) {
             const derivedCaseContext = deriveCaseContext(userText);
@@ -1094,18 +1160,15 @@ export async function registerRoutes(
                 movementContext: cases.movementContext,
                 activityType: cases.activityType,
                 status: cases.status,
-                createdAt: cases.createdAt,
-                updatedAt: cases.updatedAt,
               })
               .from(cases)
               .where(eq(cases.userId, userId))
               .orderBy(desc(cases.updatedAt), desc(cases.id))
               .limit(12);
 
-            const openCases = recentUserCases.filter((row) => {
-              if (row.status == null) return true;
-              return /open|active|current/i.test(String(row.status));
-            });
+            const openCases = recentUserCases.filter((row) =>
+              isOpenCaseStatus(row.status),
+            );
 
             const derivedMovementKey = normalizeCaseKey(
               derivedCaseContext.movementContext,
@@ -1160,15 +1223,13 @@ export async function registerRoutes(
 
         const memory = await getMemory(userId);
         const memoryBlock = buildMemoryPromptBlock(memory);
-
-        const storedSessionHistory = await getStoredSessionHistory(
-          userId,
-          convoId,
-        );
+        const currentConversationSummaryBlock =
+          await getCurrentConversationSummaryBlock(convoId);
 
         const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
         const runtimePatternBlock =
           await getDominantRuntimePatternBlock(userId);
+        const continuityBlock = activeHypothesisBlock || runtimePatternBlock;
 
         let identityBlock = "";
 
@@ -1206,16 +1267,14 @@ Identity authority rule:
           ? `
 === PATTERN PRIORITY RULE ===
 
-If the current user message overlaps with an active pattern or recurring theme from memory:
+If the current user message clearly fits an already established line:
 
-- continue the existing mechanism
-- do not introduce a new root cause unless the prior one clearly fails
-- do not restart analysis from zero
-- treat the new symptom as a variation, extension, or stress-test of the same underlying pattern
-- move the investigation forward instead of re-explaining the whole theory
-- avoid hedging when pattern continuity is already established
+- prefer continuity over restarting from scratch
+- advance the existing line instead of restating it
+- shift only when new evidence materially breaks the current explanation
+- do not re-explain the same mechanism if it has already been established
 
-If multiple details are present, prioritize the dominant recurring pattern already in memory over novel interpretation.
+If multiple details are present, use the strongest established line that still fits the evidence, but stay willing to update it when the new signal clearly demands it.
 `
           : "";
 
@@ -1235,18 +1294,16 @@ Execution context for this conversation:
 
 ${identityBlock}
 
+${currentConversationSummaryBlock}
+
 ${memoryBlock}
 
-${runtimePatternBlock}
+${continuityBlock}
 
 ${patternPriorityBlock}
-
-${storedSessionHistory}
-
-${activeHypothesisBlock}
           `.trim(),
           },
-          ...previous.slice(-50).map((m) => ({
+          ...previous.slice(-16).map((m) => ({
             role: m.role as "user" | "assistant",
             content: String(m.content ?? ""),
           })),
@@ -1302,6 +1359,9 @@ Required response behavior:
 - Correct the user's misunderstanding directly, without labeling it or naming it
 - If the user reports improvement or success, begin with brief earned validation, then immediately explain what the improvement confirms mechanically
 - When success is reported, identify the next likely breakdown, overcorrection, or relapse point instead of drifting into praise or closure
+- If the mechanism is already established, advance it instead of restating it
+- Do not repeat the same explanation in slightly different wording
+- Each follow-up must move the investigation forward
 - Identify the single most important error, misread, or drift point
 - Correct that point directly and decisively
 - Use contrast when useful (not X, Y)
@@ -1376,6 +1436,68 @@ Produce the corrected response now.
           role: "assistant",
           content: finalText,
         });
+
+        try {
+          const [currentOpenCase] = await db
+            .select({
+              id: cases.id,
+              status: cases.status,
+            })
+            .from(cases)
+            .where(
+              and(eq(cases.userId, userId), eq(cases.conversationId, convoId)),
+            )
+            .orderBy(desc(cases.updatedAt), desc(cases.id))
+            .limit(1);
+
+          if (currentOpenCase && isOpenCaseStatus(currentOpenCase.status)) {
+            const hypothesisSentence = extractFirstMatchingSentence(finalText, [
+              /\bsuggests\b/i,
+              /\bindicates\b/i,
+              /\bmeans\b/i,
+              /\bpoints to\b/i,
+              /\bwhat'?s happening is\b/i,
+            ]);
+
+            if (hypothesisSentence && hypothesisSentence.trim().length > 40) {
+              await db.insert(caseHypotheses).values({
+                caseId: currentOpenCase.id,
+                hypothesis: hypothesisSentence,
+              });
+            }
+
+            const adjustmentSentence = extractFirstMatchingSentence(finalText, [
+              /\bfocus on\b/i,
+              /\btry\b/i,
+              /\bmake sure\b/i,
+              /\blet\b/i,
+              /\ballow\b/i,
+              /\bshift\b/i,
+              /\bkeep\b/i,
+              /\bthink about\b/i,
+            ]);
+
+            const hasExecutionVerb =
+              adjustmentSentence != null &&
+              /\b(focus|shift|load|relax|drive|keep|allow|control|rotate|stack|move|press|pull|push|hinge|brace|stabilize|stabilise)\b/i.test(
+                adjustmentSentence,
+              );
+
+            if (
+              adjustmentSentence &&
+              adjustmentSentence.trim().length > 30 &&
+              hasExecutionVerb
+            ) {
+              await db.insert(caseAdjustments).values({
+                caseId: currentOpenCase.id,
+                cue: adjustmentSentence,
+                mechanicalFocus: adjustmentSentence,
+              });
+            }
+          }
+        } catch (err) {
+          console.error("Case extraction write failed:", err);
+        }
 
         try {
           console.log("CASE REVIEW WRITE CHECK:", {
@@ -1505,6 +1627,17 @@ Produce the corrected response now.
         result,
         userFeedback: userFeedback ?? null,
       });
+
+      const outcomeClassification = detectOutcomeResult(
+        `${String(result ?? "")} ${String(userFeedback ?? "")}`.trim(),
+      );
+
+      if (outcomeClassification === "Improved") {
+        await db
+          .update(cases)
+          .set({ status: "resolved" })
+          .where(eq(cases.id, caseId));
+      }
 
       res.json({ ok: true });
     } catch (err) {

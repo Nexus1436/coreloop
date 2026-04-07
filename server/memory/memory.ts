@@ -498,7 +498,7 @@ export async function promoteTimelineToUserMemory(userId: string) {
       }
     }
 
-    if (bestIndex >= 0 && bestScore >= 2) {
+    if (bestIndex >= 0 && bestScore >= 1) {
       const cluster = clusters[bestIndex];
       cluster.examples.push(item.raw);
       cluster.tokens = unique([...cluster.tokens, ...item.tokens]);
@@ -527,9 +527,9 @@ export async function promoteTimelineToUserMemory(userId: string) {
   const active: string[] = [];
 
   for (const cluster of rankedClusters) {
-    if (cluster.score >= 4) {
+    if (cluster.score >= 3) {
       active.push(cluster.label);
-    } else if (cluster.score >= 2) {
+    } else if (cluster.score >= 1) {
       emerging.push(cluster.label);
     }
   }

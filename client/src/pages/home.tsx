@@ -170,42 +170,58 @@ export default function Home() {
           ? data
           : (data.conversations ?? []);
 
-        const recent = conversations.slice(0, 3);
+        const latest = conversations[0] ?? null;
 
-        let allMessages: ChatMessage[] = [];
+        if (!latest?.id) {
+          if (cancelled) return;
 
-        for (const convo of recent) {
-          const id = convo?.id;
-          if (!id) continue;
-
-          const msgResp = await fetch(`/api/messages/${id}`, {
-            credentials: "include",
-          });
-
-          if (!msgResp.ok) continue;
-
-          const msgData = await msgResp.json();
-          const normalized = normalizeLoadedMessages(msgData);
-
-          allMessages = [...allMessages, ...normalized];
+          conversationIdRef.current = null;
+          setConversationId(null);
+          setMessages([]);
+          setHasExchanged(false);
+          localStorage.removeItem("conversationId");
+          return;
         }
+
+        const latestId = Number(latest.id);
+
+        if (!Number.isFinite(latestId)) {
+          if (cancelled) return;
+
+          conversationIdRef.current = null;
+          setConversationId(null);
+          setMessages([]);
+          setHasExchanged(false);
+          localStorage.removeItem("conversationId");
+          return;
+        }
+
+        const msgResp = await fetch(`/api/messages/${latestId}`, {
+          credentials: "include",
+        });
+
+        if (!msgResp.ok) throw new Error("Failed to load messages");
+
+        const msgData = await msgResp.json();
+        const normalizedMessages = normalizeLoadedMessages(msgData);
 
         if (cancelled) return;
 
-        setMessages(allMessages);
-
-        const hasUser = allMessages.some((m) => m.role === "user");
-        setHasExchanged(hasUser);
-
-        const latestId = recent[0]?.id ?? null;
-
-        if (latestId) {
-          conversationIdRef.current = latestId;
-          setConversationId(latestId);
-          localStorage.setItem("conversationId", String(latestId));
-        }
+        conversationIdRef.current = latestId;
+        setConversationId(latestId);
+        setMessages(normalizedMessages);
+        setHasExchanged(normalizedMessages.some((m) => m.role === "user"));
+        localStorage.setItem("conversationId", String(latestId));
       } catch (err) {
         console.warn("Failed to load conversations:", err);
+
+        if (cancelled) return;
+
+        conversationIdRef.current = null;
+        setConversationId(null);
+        setMessages([]);
+        setHasExchanged(false);
+        localStorage.removeItem("conversationId");
       }
     };
 
