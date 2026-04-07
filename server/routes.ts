@@ -139,16 +139,27 @@ function deriveCaseContext(text: string): {
   activityType: string;
 } {
   const input = text.trim();
+  const normalizedInput = normalizeCaseKey(input);
+  const isRacquetballContext =
+    /\bracquetball\b|\bdrive[-\s]?serve\b|\bserve swing\b|\bbackswing\b|\bforehand\b|\bbackhand\b|\bcontact point\b/i.test(
+      input,
+    ) ||
+    (/\btoss\b/i.test(input) &&
+      /\bout in front\b|\bthrow(?:ing)? the ball out in front\b/i.test(input));
 
   const activityPatterns: Array<{ label: string; regex: RegExp }> = [
-    { label: "racquetball", regex: /\bracquetball\b/i },
+    {
+      label: "racquetball",
+      regex:
+        /\bracquetball\b|\bdrive[-\s]?serve\b|\bserve swing\b|\bbackswing\b|\bforehand\b|\bbackhand\b|\bcontact point\b/i,
+    },
     { label: "running", regex: /\brun(?:ning)?\b/i },
     { label: "walking", regex: /\bwalk(?:ing)?\b/i },
     { label: "squat", regex: /\bsquat(?:ting)?\b/i },
     { label: "deadlift", regex: /\bdeadlift(?:ing)?\b/i },
     { label: "lunge", regex: /\blunge(?:s|ing)?\b/i },
-    { label: "serve", regex: /\bserve|serving\b/i },
-    { label: "swing", regex: /\bswing|swinging\b/i },
+    { label: "serve", regex: /\bserve\b|\bserving\b/i },
+    { label: "swing", regex: /\bswing\b|\bswinging\b/i },
     { label: "rotation", regex: /\brotate|rotation|turning\b/i },
     { label: "hinge", regex: /\bhinge|hinging\b/i },
     { label: "reach", regex: /\breach|reaching\b/i },
@@ -168,7 +179,36 @@ function deriveCaseContext(text: string): {
 
   let movementContext = "";
 
+  const directContextPatterns: Array<{ label: string; regex: RegExp }> = [
+    { label: "drive serve", regex: /\bdrive[-\s]?serve\b/i },
+    { label: "serve swing", regex: /\bserve swing\b/i },
+    { label: "backswing", regex: /\bbackswing\b/i },
+    { label: "forehand swing", regex: /\bforehand\b/i },
+    { label: "backhand swing", regex: /\bbackhand\b/i },
+    { label: "contact point", regex: /\bcontact point\b/i },
+    {
+      label: "toss out in front",
+      regex:
+        /\btoss\b.*\bout in front\b|\bthrow(?:ing)? the ball out in front\b/i,
+    },
+    {
+      label: "serve lean forward",
+      regex: /\bleaning forward\b.*\bserve\b|\bserve\b.*\bleaning forward\b/i,
+    },
+    { label: "serve", regex: /\bserve\b|\bserving\b/i },
+    { label: "swing", regex: /\bswing\b|\bswinging\b/i },
+  ];
+
+  for (const pattern of directContextPatterns) {
+    if (pattern.regex.test(input)) {
+      movementContext = pattern.label;
+      break;
+    }
+  }
+
   for (const pattern of contextPatterns) {
+    if (movementContext) break;
+
     const match = input.match(pattern);
     const candidate = match?.[1]?.trim();
 
@@ -178,8 +218,40 @@ function deriveCaseContext(text: string): {
     }
   }
 
+  if (!movementContext) {
+    const serveMatch = input.match(
+      /\b(?:my|the)?\s*(drive[-\s]?serve|serve swing|serve|backswing|forehand|backhand|contact point)\b/i,
+    );
+    if (serveMatch?.[1]) {
+      movementContext = serveMatch[1].replace(/-/g, " ");
+    }
+  }
+
+  if (
+    !movementContext &&
+    /\btoss\b/i.test(input) &&
+    /\bout in front\b|\bthrow(?:ing)? the ball out in front\b/i.test(input)
+  ) {
+    movementContext = "toss out in front";
+  }
+
+  if (isRacquetballContext) {
+    return {
+      movementContext: clampText(movementContext || "serve mechanics", 80),
+      activityType: "racquetball",
+    };
+  }
+
   if (!movementContext && detectedActivity !== "unspecified") {
     movementContext = detectedActivity;
+  }
+
+  if (
+    !movementContext &&
+    normalizedInput.includes("leaning forward") &&
+    (normalizedInput.includes("serve") || detectedActivity === "racquetball")
+  ) {
+    movementContext = "serve lean forward";
   }
 
   if (!movementContext) {
@@ -1197,28 +1269,71 @@ export async function registerRoutes(
             });
 
             if (!hasMaterialOpenCaseMatch) {
-              const [newCase] = await db
-                .insert(cases)
-                .values({
-                  userId,
-                  conversationId: convoId,
-                  movementContext: derivedCaseContext.movementContext,
-                  activityType: derivedCaseContext.activityType,
-                  status: "open",
-                })
-                .returning();
+              let newCase:
+                | {
+                    id: number;
+                    userId: string;
+                    conversationId: number | null;
+                    movementContext: string | null;
+                    activityType: string | null;
+                    status: string | null;
+                  }
+                | undefined;
+
+              try {
+                [newCase] = await db
+                  .insert(cases)
+                  .values({
+                    userId,
+                    conversationId: convoId,
+                    movementContext: derivedCaseContext.movementContext,
+                    activityType: derivedCaseContext.activityType,
+                    status: "open",
+                  })
+                  .returning();
+              } catch (err) {
+                console.error("Case creation failed:", err);
+                throw err;
+              }
 
               if (newCase) {
-                await db.insert(caseSignals).values({
-                  userId,
-                  caseId: newCase.id,
-                  description: clampText(userText, 800),
-                });
+                try {
+                  await db.insert(caseSignals).values({
+                    userId,
+                    caseId: newCase.id,
+                    description: clampText(userText, 800),
+                  });
+                } catch (err) {
+                  console.error("Case signal write failed:", {
+                    userId,
+                    conversationId: convoId,
+                    caseId: newCase.id,
+                    derivedCaseContext,
+                    userText,
+                    ...formatUnknownError(err),
+                  });
+
+                  try {
+                    await db.delete(cases).where(eq(cases.id, newCase.id));
+                  } catch (deleteErr) {
+                    console.error(
+                      "Case rollback failed after signal write failure:",
+                      {
+                        userId,
+                        conversationId: convoId,
+                        caseId: newCase.id,
+                        derivedCaseContext,
+                        userText,
+                        ...formatUnknownError(deleteErr),
+                      },
+                    );
+                  }
+                }
               }
             }
           }
         } catch (err) {
-          console.error("Case creation failed:", err);
+          console.error("Case creation flow failed:", err);
         }
 
         const memory = await getMemory(userId);
