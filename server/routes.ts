@@ -345,6 +345,321 @@ function deriveSignalType(text: string): string | null {
   return signalPatterns.find((entry) => entry.regex.test(input))?.label ?? null;
 }
 
+type ProfileFieldKey =
+  | "primary_sport"
+  | "dominant_hand"
+  | "competition_level"
+  | "activity_level"
+  | "age"
+  | "height"
+  | "weight"
+  | "gender";
+
+function hasAgeProfileContext(text: string): boolean {
+  return /\b(?:i am|i'm)\s+\d{1,2}\b|\b\d{1,2}\s*(?:years?\s*old|yo)\b/i.test(
+    text.trim(),
+  );
+}
+
+function hasGenderProfileContext(text: string): boolean {
+  return /\b(?:i am|i'm)\s+(?:male|female|a man|a woman|nonbinary|non-binary)\b|\bmy sex is\s+(?:male|female)\b|\bi identify as\s+(?:male|female|a man|a woman|nonbinary|non-binary)\b/i.test(
+    text.trim(),
+  );
+}
+
+function hasHeightProfileContext(text: string): boolean {
+  return /\b\d\s*'\s*\d{1,2}(?:\"|”)?\b|\b\d\s*(?:ft|feet)\s*\d{1,2}\b|\b\d{2,3}\s*cm\b|\b1\.\d{1,2}\s*m\b/i.test(
+    text.trim(),
+  );
+}
+
+function hasWeightProfileContext(text: string): boolean {
+  return /\b\d{2,3}\s*(?:lb|lbs|pounds|kg|kgs)\b/i.test(text.trim());
+}
+
+function hasPrimarySportProfileContext(text: string): boolean {
+  return /\b(?:my|the)\s+(?:main|primary)\s+(?:sport|activity)\s+is\s+[a-z][a-z\s-]{2,30}\b|\bi\s+(?:mainly|mostly|primarily)\s+(?:play|do|train|compete in)\s+[a-z][a-z\s-]{2,30}\b|\bi'm\s+(?:a|an)\s+[a-z][a-z\s-]{2,30}\s+(?:player|athlete)\b/i.test(
+    text.trim(),
+  );
+}
+
+function hasActivityLevelProfileContext(text: string): boolean {
+  return /\b(?:sedentary|lightly active|active|very active|train(?:ing)?\s+\d+\s*(?:x|times?)\s+(?:a\s+)?week|work out|workout|lift\s+\d+\s*(?:x|times?)|practice\s+\d+\s*(?:x|times?)|play\s+\d+\s*(?:x|times?))\b/i.test(
+    text.trim(),
+  );
+}
+
+function hasCompetitionLevelProfileContext(text: string): boolean {
+  return /\b(?:recreational|rec league|club|intramural|varsity|high school|college|collegiate|semi[-\s]?pro|professional|compete|competition|tournament)\b/i.test(
+    text.trim(),
+  );
+}
+
+function hasDominantHandProfileContext(text: string): boolean {
+  return /\b(?:right[-\s]?handed|left[-\s]?handed|dominant hand|throw right|throw left|bat right|bat left)\b/i.test(
+    text.trim(),
+  );
+}
+
+function isStrongLiveInvestigationTurn(
+  currentUserText: string,
+  recentMessages: Array<{ role: string; content: string }>,
+): boolean {
+  const input = currentUserText.trim();
+  if (!input) return false;
+
+  const previousAssistantText =
+    [...recentMessages]
+      .reverse()
+      .find((m) => m.role === "assistant" && String(m.content ?? "").trim())
+      ?.content ?? "";
+
+  const strongCurrentTurnSignal =
+    qualifiesForTimelineSignal(input) ||
+    looksLikeAdjustment(input) ||
+    looksLikeOutcome(input) ||
+    detectOutcomeResult(input) != null ||
+    deriveBodyRegion(input) != null ||
+    !isFallbackMovementContext(deriveCaseContext(input).movementContext) ||
+    /\b(?:timing|rotation|rotate|load|pressure|mechanic|mechanics|sequence|shift|brace|hinge|backswing|forehand|backhand|contact point|stability|stable|unstable|compensation|compensating|breakdown|fatigue|under load|at speed)\b/i.test(
+      input,
+    );
+
+  if (strongCurrentTurnSignal) {
+    return true;
+  }
+
+  const borderlineCurrentTurnSignal =
+    /\b(?:when|while|during|every time|serve|swing|movement|feels off|awkward|not right|doesn't feel right|doesnt feel right|something is off)\b/i.test(
+      input,
+    );
+
+  const assistantWasInvestigating =
+    /\?\s*$/.test(String(previousAssistantText).trim()) ||
+    /\b(?:what happens|where exactly|does it show up|when does it happen|under load|at speed|under fatigue|on the backswing|on the serve|at contact|what changes when|does it hold if)\b/i.test(
+      String(previousAssistantText),
+    );
+
+  return borderlineCurrentTurnSignal && assistantWasInvestigating;
+}
+
+function detectRecentUnansweredProfileAsk(
+  recentMessages: Array<{ role: string; content: string }>,
+): ProfileFieldKey | null {
+  const recentAssistantMessages = recentMessages
+    .filter((m) => m.role === "assistant")
+    .slice(-4)
+    .map((m) => String(m.content ?? ""));
+
+  const recentUserMessages = recentMessages
+    .filter((m) => m.role === "user")
+    .slice(-3)
+    .map((m) => String(m.content ?? ""));
+
+  const checks: Array<{
+    key: ProfileFieldKey;
+    patterns: RegExp[];
+    answered: (text: string) => boolean;
+  }> = [
+    {
+      key: "primary_sport",
+      patterns: [
+        /\bwhat activity is this showing up in most\b/i,
+        /\bwhat sport are you mainly playing(?: right now)?\b/i,
+        /\bwhat do you spend most of your time doing physically\b/i,
+        /\bwhat are you mainly (?:playing|training|doing)\b/i,
+        /\bwhat'?s your main (?:sport|activity)\b/i,
+      ],
+      answered: hasPrimarySportProfileContext,
+    },
+    {
+      key: "dominant_hand",
+      patterns: [
+        /\bwhich side do you naturally lead with\b/i,
+        /\bare you right[-\s]?handed or left[-\s]?handed\b/i,
+        /\bwhat'?s your dominant (?:side|hand)\b/i,
+        /\bwhich hand is dominant for you\b/i,
+      ],
+      answered: hasDominantHandProfileContext,
+    },
+    {
+      key: "competition_level",
+      patterns: [
+        /\bis that more recreational or are you competing seriously\b/i,
+        /\bhow competitive is that for you\b/i,
+        /\bwhat level are you playing at\b/i,
+        /\bare you competing or mostly recreational\b/i,
+        /\bis this more rec or more competitive for you\b/i,
+      ],
+      answered: hasCompetitionLevelProfileContext,
+    },
+    {
+      key: "activity_level",
+      patterns: [
+        /\bhow often are you doing it right now\b/i,
+        /\bhow many days a week are you training\b/i,
+        /\bwhat does your week look like physically\b/i,
+        /\bhow active are you right now\b/i,
+        /\bhow much are you training these days\b/i,
+      ],
+      answered: hasActivityLevelProfileContext,
+    },
+    {
+      key: "age",
+      patterns: [/\bhow old are you\b/i, /\bwhat'?s your age\b/i],
+      answered: hasAgeProfileContext,
+    },
+    {
+      key: "height",
+      patterns: [/\bhow tall are you\b/i, /\bwhat'?s your height\b/i],
+      answered: hasHeightProfileContext,
+    },
+    {
+      key: "weight",
+      patterns: [
+        /\bwhat do you weigh right now\b/i,
+        /\broughly what do you weigh\b/i,
+        /\bwhat'?s your current weight\b/i,
+      ],
+      answered: hasWeightProfileContext,
+    },
+    {
+      key: "gender",
+      patterns: [
+        /\bare you male or female\b/i,
+        /\bhow do you want me to think about sex differences here\b/i,
+        /\bshould i think about this through a male or female lens\b/i,
+        /\bhow do you identify\b/i,
+      ],
+      answered: hasGenderProfileContext,
+    },
+  ];
+
+  for (const check of checks) {
+    const askedRecently = recentAssistantMessages.some((text) =>
+      check.patterns.some((pattern) => pattern.test(text)),
+    );
+    const answeredRecently = recentUserMessages.some((text) =>
+      check.answered(text),
+    );
+
+    if (askedRecently && !answeredRecently) {
+      return check.key;
+    }
+  }
+
+  return null;
+}
+
+function getOrganicProfileOnboardingGuidanceBlock(
+  currentUserText: string,
+  recentMessages: Array<{ role: string; content: string }>,
+  memoryBlock: string,
+): string {
+  const recentConversationText = recentMessages
+    .slice(-12)
+    .map((m) => String(m.content ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+
+  const contextText =
+    `${memoryBlock}\n${recentConversationText}\n${currentUserText}`.trim();
+
+  const unresolvedRecentAsk = detectRecentUnansweredProfileAsk(recentMessages);
+  const shouldDefer = isStrongLiveInvestigationTurn(
+    currentUserText,
+    recentMessages,
+  );
+
+  const profileChecks: Array<{
+    key: ProfileFieldKey;
+    known: boolean;
+    label: string;
+    naturalQuestion: string;
+  }> = [
+    {
+      key: "primary_sport",
+      known: hasPrimarySportProfileContext(contextText),
+      label: "primary sport",
+      naturalQuestion: "What activity is this showing up in most?",
+    },
+    {
+      key: "dominant_hand",
+      known: hasDominantHandProfileContext(contextText),
+      label: "dominant hand",
+      naturalQuestion: "Which side do you naturally lead with?",
+    },
+    {
+      key: "competition_level",
+      known: hasCompetitionLevelProfileContext(contextText),
+      label: "competition level",
+      naturalQuestion:
+        "Is that more recreational or are you competing seriously?",
+    },
+    {
+      key: "activity_level",
+      known: hasActivityLevelProfileContext(contextText),
+      label: "activity level",
+      naturalQuestion: "How often are you doing it right now?",
+    },
+    {
+      key: "age",
+      known: hasAgeProfileContext(contextText),
+      label: "age",
+      naturalQuestion: "How old are you?",
+    },
+    {
+      key: "height",
+      known: hasHeightProfileContext(contextText),
+      label: "height",
+      naturalQuestion: "How tall are you?",
+    },
+    {
+      key: "weight",
+      known: hasWeightProfileContext(contextText),
+      label: "weight",
+      naturalQuestion: "Roughly what do you weigh right now?",
+    },
+    {
+      key: "gender",
+      known: hasGenderProfileContext(contextText),
+      label: "gender",
+      naturalQuestion:
+        "How do you want me to think about sex differences here?",
+    },
+  ];
+
+  const missingFields = profileChecks.filter((entry) => !entry.known);
+  if (missingFields.length === 0) return "";
+
+  const nextMissing = missingFields[0];
+
+  return `
+=== ORGANIC PROFILE ONBOARDING ===
+This is a low-visibility profile layer, not a setup flow.
+Only these profile fields are in scope: primary sport, dominant hand, competition level, activity level, age, height, weight, gender.
+A field counts as known only when there is clear value-level evidence in durable memory, recent conversation, or the current user message.
+If the evidence is vague, topical, or indirect, treat the field as still missing.
+Missing profile fields in priority order: ${missingFields.map((field) => field.label).join(", ")}.
+Highest-priority missing field right now: ${nextMissing.label}.
+Strong live investigation this turn: ${shouldDefer ? "yes" : "no"}.
+Recent unanswered profile ask still open: ${unresolvedRecentAsk ?? "none"}.
+
+Rules:
+- Mechanism-first reasoning stays primary.
+- Do not ask any profile question if the current turn is a strong live investigation turn.
+- Do not ask any profile question if a recent profile ask is still unanswered.
+- At most one profile onboarding question may appear in a response.
+- Never ask multiple profile fields in one turn.
+- Never sound like intake, admin, a form, or a checklist.
+- Only ask if it naturally fits and helps ground future reasoning.
+- If a stronger mechanism question exists, use that instead and defer profile onboarding.
+
+If and only if a natural profile question truly fits this turn, prefer this style for the current highest-priority missing field:
+"${nextMissing.naturalQuestion}"
+`;
+}
+
 function isOpenCaseStatus(status: string | null | undefined): boolean {
   if (status == null) return true;
   return /open|active|current/i.test(String(status));
@@ -1466,6 +1781,17 @@ Identity authority rule:
 
         console.log("CHAT STAGE: prompt-assembly");
 
+        const organicProfileOnboardingBlock = !isCaseReview
+          ? getOrganicProfileOnboardingGuidanceBlock(
+              userText,
+              previous.map((m) => ({
+                role: String(m.role ?? ""),
+                content: String(m.content ?? ""),
+              })),
+              memoryBlock,
+            )
+          : "";
+
         const patternPriorityBlock = !isCaseReview
           ? `
 === PATTERN PRIORITY RULE ===
@@ -1502,6 +1828,8 @@ ${currentConversationSummaryBlock}
 ${memoryBlock}
 
 ${continuityBlock}
+
+${organicProfileOnboardingBlock}
 
 ${patternPriorityBlock}
           `.trim(),
