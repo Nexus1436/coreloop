@@ -134,6 +134,39 @@ function isFallbackActivityType(value: string | null | undefined): boolean {
   return normalizeCaseKey(value) === "unspecified";
 }
 
+function buildCompactMovementContext(text: string): string | null {
+  const input = text.trim();
+
+  const directContextPatterns: Array<{ label: string; regex: RegExp }> = [
+    {
+      label: "drive serve",
+      regex: /\bdrive[-\s]?(?:serve|serf|surf)\b/i,
+    },
+    { label: "serve swing", regex: /\bserve[-\s]?swing\b/i },
+    { label: "backswing", regex: /\bback[-\s]?swing\b/i },
+    { label: "forehand swing", regex: /\b(?:forehand|forhand)\b/i },
+    { label: "backhand swing", regex: /\bback[-\s]?hand\b/i },
+    { label: "contact point", regex: /\bcontact point\b/i },
+    {
+      label: "toss out in front",
+      regex:
+        /\btoss\b.*\bout in front\b|\bthrow(?:ing)? the ball out in front\b/i,
+    },
+    {
+      label: "serve lean forward",
+      regex:
+        /\bleaning forward\b.*\b(?:serve|serf|surf)\b|\b(?:serve|serf|surf)\b.*\bleaning forward\b/i,
+    },
+    { label: "serve", regex: /\b(?:serve|serving)\b/i },
+    { label: "swing", regex: /\bswing(?:ing)?\b/i },
+  ];
+
+  return (
+    directContextPatterns.find((pattern) => pattern.regex.test(input))?.label ??
+    null
+  );
+}
+
 function deriveCaseContext(text: string): {
   movementContext: string;
   activityType: string;
@@ -141,7 +174,7 @@ function deriveCaseContext(text: string): {
   const input = text.trim();
   const normalizedInput = normalizeCaseKey(input);
   const isRacquetballContext =
-    /\bracquetball\b|\bdrive[-\s]?serve\b|\bserve swing\b|\bbackswing\b|\bforehand\b|\bbackhand\b|\bcontact point\b/i.test(
+    /\bracquetball\b|\bdrive[-\s]?(?:serve|serf|surf)\b|\bserve[-\s]?swing\b|\bback[-\s]?swing\b|\b(?:forehand|forhand)\b|\bback[-\s]?hand\b|\bcontact point\b/i.test(
       input,
     ) ||
     (/\btoss\b/i.test(input) &&
@@ -151,7 +184,7 @@ function deriveCaseContext(text: string): {
     {
       label: "racquetball",
       regex:
-        /\bracquetball\b|\bdrive[-\s]?serve\b|\bserve swing\b|\bbackswing\b|\bforehand\b|\bbackhand\b|\bcontact point\b/i,
+        /\bracquetball\b|\bdrive[-\s]?(?:serve|serf|surf)\b|\bserve[-\s]?swing\b|\bback[-\s]?swing\b|\b(?:forehand|forhand)\b|\bback[-\s]?hand\b|\bcontact point\b/i,
     },
     { label: "running", regex: /\brun(?:ning)?\b/i },
     { label: "walking", regex: /\bwalk(?:ing)?\b/i },
@@ -178,31 +211,14 @@ function deriveCaseContext(text: string): {
   ];
 
   let movementContext = "";
+  movementContext = buildCompactMovementContext(input) ?? "";
 
-  const directContextPatterns: Array<{ label: string; regex: RegExp }> = [
-    { label: "drive serve", regex: /\bdrive[-\s]?serve\b/i },
-    { label: "serve swing", regex: /\bserve swing\b/i },
-    { label: "backswing", regex: /\bbackswing\b/i },
-    { label: "forehand swing", regex: /\bforehand\b/i },
-    { label: "backhand swing", regex: /\bbackhand\b/i },
-    { label: "contact point", regex: /\bcontact point\b/i },
-    {
-      label: "toss out in front",
-      regex:
-        /\btoss\b.*\bout in front\b|\bthrow(?:ing)? the ball out in front\b/i,
-    },
-    {
-      label: "serve lean forward",
-      regex: /\bleaning forward\b.*\bserve\b|\bserve\b.*\bleaning forward\b/i,
-    },
-    { label: "serve", regex: /\bserve\b|\bserving\b/i },
-    { label: "swing", regex: /\bswing\b|\bswinging\b/i },
-  ];
-
-  for (const pattern of directContextPatterns) {
-    if (pattern.regex.test(input)) {
-      movementContext = pattern.label;
-      break;
+  if (!movementContext) {
+    const serveMatch = input.match(
+      /\b(?:my|the)?\s*(drive[-\s]?(?:serve|serf|surf)|serve[-\s]?swing|serve|back[-\s]?swing|(?:forehand|forhand)|back[-\s]?hand|contact point)\b/i,
+    );
+    if (serveMatch?.[1]) {
+      movementContext = buildCompactMovementContext(serveMatch[1]) ?? "";
     }
   }
 
@@ -215,15 +231,6 @@ function deriveCaseContext(text: string): {
     if (candidate) {
       movementContext = candidate.replace(/\s+/g, " ");
       break;
-    }
-  }
-
-  if (!movementContext) {
-    const serveMatch = input.match(
-      /\b(?:my|the)?\s*(drive[-\s]?serve|serve swing|serve|backswing|forehand|backhand|contact point)\b/i,
-    );
-    if (serveMatch?.[1]) {
-      movementContext = serveMatch[1].replace(/-/g, " ");
     }
   }
 
@@ -262,6 +269,80 @@ function deriveCaseContext(text: string): {
     movementContext: clampText(movementContext, 80),
     activityType: detectedActivity,
   };
+}
+
+function deriveBodyRegion(text: string): string | null {
+  const input = text.trim();
+
+  const regionPatterns: Array<{ label: string; regex: RegExp }> = [
+    { label: "low back", regex: /\blow back\b|\blower back\b|\blumbar\b/i },
+    {
+      label: "mid back",
+      regex: /\bmid back\b|\bmiddle back\b|\bthoracic\b/i,
+    },
+    { label: "back", regex: /\bback\b/i },
+    { label: "shoulder", regex: /\bshoulder\b|\bdeltoid\b/i },
+    { label: "knee", regex: /\bknee\b/i },
+    { label: "ankle", regex: /\bankle\b/i },
+    { label: "hip", regex: /\bhip\b|\bglute\b|\bgluteal\b/i },
+    { label: "elbow", regex: /\belbow\b/i },
+    { label: "wrist", regex: /\bwrist\b/i },
+    { label: "neck", regex: /\bneck\b|\bcervical\b/i },
+    { label: "foot", regex: /\bfoot\b|\bfeet\b/i },
+    {
+      label: "leg",
+      regex: /\bleg\b|\bquad\b|\bhamstring\b|\bcalf\b|\bshin\b/i,
+    },
+    { label: "arm", regex: /\barm\b|\bbiceps?\b|\btriceps?\b|\bforearm\b/i },
+  ];
+
+  return regionPatterns.find((entry) => entry.regex.test(input))?.label ?? null;
+}
+
+function deriveSignalType(text: string): string | null {
+  const input = text.trim();
+
+  const signalPatterns: Array<{ label: string; regex: RegExp }> = [
+    {
+      label: "instability",
+      regex:
+        /\bunstable\b|\binstability\b|\bnot stable\b|\bgiving out\b|\bwobbly\b/i,
+    },
+    {
+      label: "timing",
+      regex:
+        /\btiming\b|\boff timing\b|\bout of sync\b|\btoo early\b|\btoo late\b/i,
+    },
+    {
+      label: "coordination",
+      regex:
+        /\bcoordination\b|\bcoordinated\b|\bawkward\b|\bmechanics feel wrong\b|\bmovement is weird\b/i,
+    },
+    {
+      label: "weakness",
+      regex: /\bweak\b|\bweakness\b|\bcan'?t generate force\b|\bno power\b/i,
+    },
+    {
+      label: "limitation",
+      regex:
+        /\bcan'?t\b|\bcannot\b|\blimited\b|\blimitation\b|\brestricted\b|\bdoesn'?t let me\b/i,
+    },
+    {
+      label: "tightness",
+      regex: /\btight\b|\btightness\b|\bstiff\b|\bstiffness\b|\btension\b/i,
+    },
+    {
+      label: "pain",
+      regex:
+        /\bpain\b|\bpainful\b|\bhurt\b|\bhurts\b|\bhurting\b|\bsore\b|\bsoreness\b|\bache\b|\baching\b/i,
+    },
+    {
+      label: "discomfort",
+      regex: /\bdiscomfort\b|\buncomfortable\b|\birritated\b|\bannoying\b/i,
+    },
+  ];
+
+  return signalPatterns.find((entry) => entry.regex.test(input))?.label ?? null;
 }
 
 function isOpenCaseStatus(status: string | null | undefined): boolean {
@@ -1298,10 +1379,17 @@ export async function registerRoutes(
 
               if (newCase) {
                 try {
+                  const derivedBodyRegion = deriveBodyRegion(userText);
+                  const derivedSignalType = deriveSignalType(userText);
+
                   await db.insert(caseSignals).values({
                     userId,
                     caseId: newCase.id,
                     description: clampText(userText, 800),
+                    activityType: derivedCaseContext.activityType,
+                    movementContext: derivedCaseContext.movementContext,
+                    bodyRegion: derivedBodyRegion,
+                    signalType: derivedSignalType,
                   });
                 } catch (err) {
                   console.error("Case signal write failed:", {
