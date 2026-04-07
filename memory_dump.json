@@ -1,0 +1,131 @@
+                                                        jsonb_pretty                                                         
+-----------------------------------------------------------------------------------------------------------------------------
+ [                                                                                                                          +
+     {                                                                                                                      +
+         "id": 2,                                                                                                           +
+         "memory": {                                                                                                        +
+             "body": {                                                                                                      +
+                 "injuries": [                                                                                              +
+                     "pain in right side",                                                                                  +
+                     "lower back strain",                                                                                   +
+                     "knee pressure",                                                                                       +
+                     "strained mid-back"                                                                                    +
+                 ],                                                                                                         +
+                 "instabilityZones": [                                                                                      +
+                 ],                                                                                                         +
+                 "chronicTensionZones": [                                                                                   +
+                     "left side"                                                                                            +
+                 ]                                                                                                          +
+             },                                                                                                             +
+             "identity": {                                                                                                  +
+                 "age": null,                                                                                               +
+                 "name": null,                                                                                              +
+                 "height": null,                                                                                            +
+                 "weight": null,                                                                                            +
+                 "dominantHand": "right"                                                                                    +
+             },                                                                                                             +
+             "patterns": {                                                                                                  +
+                 "active": [                                                                                                +
+                     "that helped it feels noticeably better now",                                                          +
+                     "great i'll let you know when my shoulder acts up again and when i'm pulling off i'll talk about that",+
+                     "the front part of my should is giving me a problem now",                                              +
+                     "great let know shoulder act again",                                                                   +
+                     "all right talk shoulder back end",                                                                    +
+                     "know don thi relat not trap",                                                                         +
+                     "yeah didn know should brought long",                                                                  +
+                     "know think serv try relax shoulder",                                                                  +
+                     "know start all thi because lower",                                                                    +
+                     "know what told earlier work thank",                                                                   +
+                     "okay listen help what thank know",                                                                    +
+                     "help lot thank okay listen what"                                                                      +
+                 ],                                                                                                         +
+                 "emerging": [                                                                                              +
+                     "help noticeably better now lot thi",                                                                  +
+                     "help swing felt smoother les tightnes",                                                               +
+                     "tim tight focu regress"                                                                               +
+                 ],                                                                                                         +
+                 "resolved": [                                                                                              +
+                 ]                                                                                                          +
+             },                                                                                                             +
+             "experiments": {                                                                                               +
+                 "failed": [                                                                                                +
+                 ],                                                                                                         +
+                 "neutral": [                                                                                               +
+                 ],                                                                                                         +
+                 "successful": [                                                                                            +
+                 ]                                                                                                          +
+             },                                                                                                             +
+             "sessionMeta": {                                                                                               +
+                 "lastSession": null,                                                                                       +
+                 "totalSessions": 0                                                                                         +
+             },                                                                                                             +
+             "sportContext": {                                                                                              +
+                 "primarySport": "racquetball",                                                                             +
+                 "secondarySports": [                                                                                       +
+                     "volleyball"                                                                                           +
+                 ],                                                                                                         +
+                 "yearsExperience": null,                                                                                   +
+                 "competitionLevel": null                                                                                   +
+             },                                                                                                             +
+             "anthropometry": {                                                                                             +
+                 "notes": [                                                                                                 +
+                 ],                                                                                                         +
+                 "limbLengthBias": null                                                                                     +
+             },                                                                                                             +
+             "signalHistory": {                                                                                             +
+                 "fearTriggers": "hesitant to do a drive serve left",                                                       +
+                 "recurringPainSignals": [                                                                                  +
+                 ],                                                                                                         +
+                 "recurringConfusionSignals": [                                                                             +
+                 ]                                                                                                          +
+             },                                                                                                             +
+             "movementPatterns": {                                                                                          +
+                 "confirmed": [                                                                                             +
+                 ],                                                                                                         +
+                 "suspected": [                                                                                             +
+                 ],                                                                                                         +
+                 "recurringThemes": [                                                                                       +
+                     "Recurring shoulder tight during backhand.",                                                           +
+                     "that helped it feels noticeably better now",                                                          +
+                     "great i'll let you know when my shoulder acts up again and when i'm pulling off i'll talk about that",+
+                     "the front part of my should is giving me a problem now",                                              +
+                     "great let know shoulder act again",                                                                   +
+                     "help noticeably better now lot thi",                                                                  +
+                     "help swing felt smoother les tightnes",                                                               +
+                     "tim tight focu regress",                                                                              +
+                     "front part should giv now",                                                                           +
+                     "chang way rotate start keep ribcage",                                                                 +
+                     "persistent tightnes pain lower back rotate",                                                          +
+                     "shoulder much better",                                                                                +
+                     "all right talk shoulder back end",                                                                    +
+                     "help noticeably better now",                                                                          +
+                     "know don thi relat not trap",                                                                         +
+                     "yeah didn know should brought long",                                                                  +
+                     "think want control able manage mitigate",                                                             +
+                     "know think serv try relax shoulder",                                                                  +
+                     "know start all thi because lower",                                                                    +
+                     "know what told earlier work thank"                                                                    +
+                 ]                                                                                                          +
+             },                                                                                                             +
+             "cognitivePatterns": {                                                                                         +
+                 "notes": [                                                                                                 +
+                 ],                                                                                                         +
+                 "overanalysis": false,                                                                                     +
+                 "rushTendency": false,                                                                                     +
+                 "hesitationPattern": false                                                                                 +
+             },                                                                                                             +
+             "performanceTrends": {                                                                                         +
+                 "regressions": [                                                                                           +
+                 ],                                                                                                         +
+                 "improvements": [                                                                                          +
+                 ],                                                                                                         +
+                 "consistencyNotes": [                                                                                      +
+                 ]                                                                                                          +
+             }                                                                                                              +
+         },                                                                                                                 +
+         "user_id": "54195052",                                                                                             +
+         "updated_at": "2026-04-05T06:52:58.858"                                                                            +
+     }                                                                                                                      +
+ ]
+(1 row)
+

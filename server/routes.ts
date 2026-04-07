@@ -119,6 +119,99 @@ function formatUnknownError(err: unknown): { error: string; stack?: string } {
   }
 }
 
+function normalizeCaseKey(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function isFallbackMovementContext(value: string | null | undefined): boolean {
+  return normalizeCaseKey(value) === "general movement";
+}
+
+function isFallbackActivityType(value: string | null | undefined): boolean {
+  return normalizeCaseKey(value) === "unspecified";
+}
+
+function hasStrongDerivedCaseContext(context: {
+  movementContext: string;
+  activityType: string;
+}): boolean {
+  return (
+    !isFallbackMovementContext(context.movementContext) &&
+    !isFallbackActivityType(context.activityType)
+  );
+}
+
+function qualifiesForTimelineSignal(text: string): boolean {
+  return /\b(?:pain|hurt|hurts|hurting|tight|tightness|issue|problem|bother|bothering|can't|cannot|struggle|confused|off|feels?\s+off|feels?\s+weird|not\s+right|unstable|off\s+today|out\s+of\s+sync|awkward|not\s+moving\s+cleanly|something\s+is\s+off|movement\s+feels\s+wrong|body\s+part\s+not\s+working\s+right|not\s+working|doesn't\s+feel\s+right|doesnt\s+feel\s+right|can't\s+rotate|cant\s+rotate|can't\s+load|cant\s+load|timing\s+is\s+off|timing\s+feels\s+off|mechanics\s+feel\s+wrong|movement\s+is\s+weird|doesn't\s+feel\s+stable|not\s+stable|out\s+of\s+position|can't\s+control|cant\s+control|not\s+coordinated|coordination\s+is\s+off|rotation\s+feels\s+off|trunk\s+rotation\s+feels\s+wrong|(?:shoulder|hip|back|knee|arm|trunk)\s+feels?\s+off|(?:shoulder|hip|back|knee|arm|trunk)\s+feels?\s+weird|(?:shoulder|hip|back|knee|arm|trunk)\s+.*out\s+of\s+sync|(?:shoulder|hip|back|knee|arm|trunk)\s+.*not\s+working\s+right)\b/i.test(
+    text.trim(),
+  );
+}
+
+function isPureOutcomeFollowUp(text: string): boolean {
+  return looksLikeOutcome(text) && !qualifiesForTimelineSignal(text);
+}
+
+function deriveCaseContext(text: string): {
+  movementContext: string;
+  activityType: string;
+} {
+  const input = text.trim();
+
+  const activityPatterns: Array<{ label: string; regex: RegExp }> = [
+    { label: "racquetball", regex: /\bracquetball\b/i },
+    { label: "running", regex: /\brun(?:ning)?\b/i },
+    { label: "walking", regex: /\bwalk(?:ing)?\b/i },
+    { label: "squat", regex: /\bsquat(?:ting)?\b/i },
+    { label: "deadlift", regex: /\bdeadlift(?:ing)?\b/i },
+    { label: "lunge", regex: /\blunge(?:s|ing)?\b/i },
+    { label: "serve", regex: /\bserve|serving\b/i },
+    { label: "swing", regex: /\bswing|swinging\b/i },
+    { label: "rotation", regex: /\brotate|rotation|turning\b/i },
+    { label: "hinge", regex: /\bhinge|hinging\b/i },
+    { label: "reach", regex: /\breach|reaching\b/i },
+    { label: "lifting", regex: /\blift|lifting\b/i },
+  ];
+
+  const detectedActivity =
+    activityPatterns.find((entry) => entry.regex.test(input))?.label ??
+    "unspecified";
+
+  const contextPatterns = [
+    /\b(?:when|while)\s+I\s+([^.!?,;\n]{6,80})/i,
+    /\bduring\s+([^.!?,;\n]{6,80})/i,
+    /\bon\s+the\s+([^.!?,;\n]{6,60})/i,
+    /\bin\s+my\s+([^.!?,;\n]{6,60})/i,
+  ];
+
+  let movementContext = "";
+
+  for (const pattern of contextPatterns) {
+    const match = input.match(pattern);
+    const candidate = match?.[1]?.trim();
+
+    if (candidate) {
+      movementContext = candidate.replace(/\s+/g, " ");
+      break;
+    }
+  }
+
+  if (!movementContext && detectedActivity !== "unspecified") {
+    movementContext = detectedActivity;
+  }
+
+  if (!movementContext) {
+    movementContext = "general movement";
+  }
+
+  return {
+    movementContext: clampText(movementContext, 80),
+    activityType: detectedActivity,
+  };
+}
+
 // ==============================
 // NAME EXTRACTION HELPERS
 // ==============================
@@ -325,6 +418,194 @@ Mechanical focus: ${latest.mechanicalFocus ?? "Not specified"}
 
 Your job: Test this hypothesis. Push for outcome clarity.
 `;
+}
+
+async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
+  const recentCases = await db
+    .select({
+      id: cases.id,
+      movementContext: cases.movementContext,
+      activityType: cases.activityType,
+      createdAt: cases.createdAt,
+      updatedAt: cases.updatedAt,
+      status: cases.status,
+    })
+    .from(cases)
+    .where(eq(cases.userId, userId))
+    .orderBy(desc(cases.updatedAt), desc(cases.id))
+    .limit(6);
+
+  if (recentCases.length === 0) return "";
+
+  const candidates = await Promise.all(
+    recentCases.map(async (caseRow) => {
+      const signals = await db
+        .select({
+          id: caseSignals.id,
+          description: caseSignals.description,
+        })
+        .from(caseSignals)
+        .where(eq(caseSignals.caseId, caseRow.id))
+        .orderBy(desc(caseSignals.id))
+        .limit(3);
+
+      const hypotheses = await db
+        .select({
+          id: caseHypotheses.id,
+          hypothesis: caseHypotheses.hypothesis,
+        })
+        .from(caseHypotheses)
+        .where(eq(caseHypotheses.caseId, caseRow.id))
+        .orderBy(desc(caseHypotheses.id))
+        .limit(2);
+
+      const adjustments = await db
+        .select({
+          id: caseAdjustments.id,
+          cue: caseAdjustments.cue,
+          mechanicalFocus: caseAdjustments.mechanicalFocus,
+        })
+        .from(caseAdjustments)
+        .where(eq(caseAdjustments.caseId, caseRow.id))
+        .orderBy(desc(caseAdjustments.id))
+        .limit(2);
+
+      const outcomes = await db
+        .select({
+          id: caseOutcomes.id,
+          result: caseOutcomes.result,
+          userFeedback: caseOutcomes.userFeedback,
+        })
+        .from(caseOutcomes)
+        .where(eq(caseOutcomes.caseId, caseRow.id))
+        .orderBy(desc(caseOutcomes.id))
+        .limit(3);
+
+      const signalCount = signals.length;
+      const hypothesisCount = hypotheses.length;
+      const adjustmentCount = adjustments.length;
+      const outcomeCount = outcomes.length;
+
+      const improvedOutcomes = outcomes.filter((o) => {
+        const resultText = String(o.result ?? "").trim();
+        const feedbackText = String(o.userFeedback ?? "").trim();
+        return /improved|better|resolved|clearer|easier|smoother|less/i.test(
+          `${resultText} ${feedbackText}`,
+        );
+      }).length;
+
+      const openCaseBoost =
+        caseRow.status == null ||
+        /open|active|current/i.test(String(caseRow.status))
+          ? 4
+          : 0;
+
+      const score =
+        signalCount * 1 +
+        hypothesisCount * 3 +
+        adjustmentCount * 3 +
+        outcomeCount * 6 +
+        improvedOutcomes * 4 +
+        openCaseBoost;
+
+      return {
+        caseId: caseRow.id,
+        movementContext: (caseRow.movementContext ?? "").trim(),
+        activityType: (caseRow.activityType ?? "").trim(),
+        score,
+        signals,
+        hypotheses,
+        adjustments,
+        outcomes,
+      };
+    }),
+  );
+
+  const ranked = candidates
+    .filter(
+      (c) =>
+        c.movementContext ||
+        c.activityType ||
+        c.signals.length > 0 ||
+        c.hypotheses.length > 0 ||
+        c.adjustments.length > 0 ||
+        c.outcomes.length > 0,
+    )
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.caseId - a.caseId;
+    });
+
+  if (ranked.length === 0) return "";
+
+  const dominant = ranked[0];
+  const runnerUp = ranked[1];
+
+  const dominantHypothesis = dominant.hypotheses[0]?.hypothesis?.trim() ?? "";
+  const runnerUpHypothesis = runnerUp?.hypotheses[0]?.hypothesis?.trim() ?? "";
+
+  const strongConflict =
+    Boolean(runnerUp) &&
+    runnerUp.score >= Math.max(8, Math.floor(dominant.score * 0.9)) &&
+    dominantHypothesis &&
+    runnerUpHypothesis &&
+    dominantHypothesis.toLowerCase() !== runnerUpHypothesis.toLowerCase();
+
+  const contextParts = [dominant.activityType, dominant.movementContext].filter(
+    Boolean,
+  );
+
+  const recurringIssue = dominant.signals[0]?.description?.trim() ?? "";
+
+  const helpfulAdjustment =
+    dominant.adjustments
+      .map((a) =>
+        [a.cue?.trim(), a.mechanicalFocus?.trim()].filter(Boolean).join(" — "),
+      )
+      .filter(Boolean)[0] ?? "";
+
+  const improvementEvidence =
+    dominant.outcomes
+      .map((o) =>
+        [String(o.result ?? "").trim(), String(o.userFeedback ?? "").trim()]
+          .filter(Boolean)
+          .join(": "),
+      )
+      .filter(Boolean)[0] ?? "";
+
+  const mechanismLine = dominantHypothesis ? `${dominantHypothesis}.` : "";
+
+  const contextLine =
+    contextParts.length > 0
+      ? `This has been showing up around ${contextParts.join(" / ")}.`
+      : "";
+
+  const issueLine = recurringIssue
+    ? `The recurring issue has been ${recurringIssue}.`
+    : "";
+
+  const adjustmentLine = helpfulAdjustment
+    ? `What has helped most so far is ${helpfulAdjustment}.`
+    : "";
+
+  const outcomeLine = improvementEvidence
+    ? `That produced ${improvementEvidence}.`
+    : "";
+
+  const continuationLine = strongConflict
+    ? `Stay with this line if the current message fits it, but shift only if the new evidence clearly points elsewhere.`
+    : `If the current message fits this same line, continue it instead of restarting. Only move away if it clearly no longer holds.`;
+
+  return [
+    contextLine,
+    issueLine,
+    mechanismLine,
+    adjustmentLine,
+    outcomeLine,
+    continuationLine,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 // ==============================
@@ -720,7 +1001,7 @@ export async function registerRoutes(
 
           if (!capturedName) {
             const onboardingPrompt =
-              "Hi, I’m Interloop [LIVE TEST]. Before we begin, what should I call you?";
+              "Hi, I’m Interloop. Before we begin, what should I call you?";
 
             res.setHeader("Content-Type", "text/event-stream");
 
@@ -749,7 +1030,7 @@ export async function registerRoutes(
 
           storedFirstName = capturedName;
           const onboardingMessage = `
-          Hi, I’m Interloop [LIVE TEST].
+          Hi, I’m Interloop.
 
           I help figure out what’s actually driving what you’re experiencing in your body by breaking it down to the underlying mechanism, not just the surface symptom.
 
@@ -798,6 +1079,85 @@ export async function registerRoutes(
           } as any,
         ];
 
+        try {
+          const shouldCreateCase =
+            !isCaseReview &&
+            qualifiesForTimelineSignal(userText) &&
+            !isPureOutcomeFollowUp(userText);
+
+          if (shouldCreateCase) {
+            const derivedCaseContext = deriveCaseContext(userText);
+            const recentUserCases = await db
+              .select({
+                id: cases.id,
+                conversationId: cases.conversationId,
+                movementContext: cases.movementContext,
+                activityType: cases.activityType,
+                status: cases.status,
+                createdAt: cases.createdAt,
+                updatedAt: cases.updatedAt,
+              })
+              .from(cases)
+              .where(eq(cases.userId, userId))
+              .orderBy(desc(cases.updatedAt), desc(cases.id))
+              .limit(12);
+
+            const openCases = recentUserCases.filter((row) => {
+              if (row.status == null) return true;
+              return /open|active|current/i.test(String(row.status));
+            });
+
+            const derivedMovementKey = normalizeCaseKey(
+              derivedCaseContext.movementContext,
+            );
+            const derivedActivityKey = normalizeCaseKey(
+              derivedCaseContext.activityType,
+            );
+
+            const hasMaterialOpenCaseMatch = openCases.some((row) => {
+              const rowMovementKey = normalizeCaseKey(row.movementContext);
+              const rowActivityKey = normalizeCaseKey(row.activityType);
+
+              const movementMatches =
+                !isFallbackMovementContext(
+                  derivedCaseContext.movementContext,
+                ) &&
+                !isFallbackMovementContext(row.movementContext) &&
+                derivedMovementKey === rowMovementKey;
+
+              const activityMatches =
+                !isFallbackActivityType(derivedCaseContext.activityType) &&
+                !isFallbackActivityType(row.activityType) &&
+                derivedActivityKey === rowActivityKey;
+
+              return movementMatches && activityMatches;
+            });
+
+            if (!hasMaterialOpenCaseMatch) {
+              const [newCase] = await db
+                .insert(cases)
+                .values({
+                  userId,
+                  conversationId: convoId,
+                  movementContext: derivedCaseContext.movementContext,
+                  activityType: derivedCaseContext.activityType,
+                  status: "open",
+                })
+                .returning();
+
+              if (newCase) {
+                await db.insert(caseSignals).values({
+                  userId,
+                  caseId: newCase.id,
+                  description: clampText(userText, 800),
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Case creation failed:", err);
+        }
+
         const memory = await getMemory(userId);
         const memoryBlock = buildMemoryPromptBlock(memory);
 
@@ -807,6 +1167,8 @@ export async function registerRoutes(
         );
 
         const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
+        const runtimePatternBlock =
+          await getDominantRuntimePatternBlock(userId);
 
         let identityBlock = "";
 
@@ -844,42 +1206,44 @@ Identity authority rule:
           ? `
 === PATTERN PRIORITY RULE ===
 
-        If the current user message overlaps with an active pattern or recurring theme from memory:
+If the current user message overlaps with an active pattern or recurring theme from memory:
 
-        - continue the existing mechanism
-        - do not introduce a new root cause unless the prior one clearly fails
-        - do not restart analysis from zero
-        - treat the new symptom as a variation, extension, or stress-test of the same underlying pattern
-        - move the investigation forward instead of re-explaining the whole theory
-        - avoid hedging when pattern continuity is already established
+- continue the existing mechanism
+- do not introduce a new root cause unless the prior one clearly fails
+- do not restart analysis from zero
+- treat the new symptom as a variation, extension, or stress-test of the same underlying pattern
+- move the investigation forward instead of re-explaining the whole theory
+- avoid hedging when pattern continuity is already established
 
-        If multiple details are present, prioritize the dominant recurring pattern already in memory over novel interpretation.
-        `
+If multiple details are present, prioritize the dominant recurring pattern already in memory over novel interpretation.
+`
           : "";
 
         const chatMessages: ChatCompletionMessageParam[] = [
           {
             role: "system",
             content: `
-        You must follow the instructions below exactly. These rules override all default behavior.
+You must follow the instructions below exactly. These rules override all default behavior.
 
-        ${ACTIVE_PROMPT}
+${ACTIVE_PROMPT}
           `.trim(),
           },
           {
             role: "system",
             content: `
-        Execution context for this conversation:
+Execution context for this conversation:
 
-        ${identityBlock}
+${identityBlock}
 
-        ${memoryBlock}
+${memoryBlock}
 
-        ${patternPriorityBlock}
+${runtimePatternBlock}
 
-        ${storedSessionHistory}
+${patternPriorityBlock}
 
-        ${activeHypothesisBlock}
+${storedSessionHistory}
+
+${activeHypothesisBlock}
           `.trim(),
           },
           ...previous.slice(-50).map((m) => ({
@@ -929,65 +1293,65 @@ Identity authority rule:
               {
                 role: "user",
                 content: `
-                That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative and the Interloop response arc.
+That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative and the Interloop response arc.
 
-                Required response behavior:
-                - Keep one dominant mechanism only
-                - Do not reopen multiple explanations or branches
-                - Start by validating only what is actually correct, then immediately correct the user's misunderstanding in natural language
-                - Correct the user's misunderstanding directly, without labeling it or naming it
-                - If the user reports improvement or success, begin with brief earned validation, then immediately explain what the improvement confirms mechanically
-                - When success is reported, identify the next likely breakdown, overcorrection, or relapse point instead of drifting into praise or closure
-                - Identify the single most important error, misread, or drift point
-                - Correct that point directly and decisively
-                - Use contrast when useful (not X, Y)
-                - Compress the correction into one clear idea, expressed naturally inside the explanation
-                - Tie the correction to the user's known pattern/history when relevant
-                - Predict the most likely next overcorrection, compensation, failure, or relapse point
-                - Give one tight execution model, not multiple options
-                - Give one immediate real-world check for whether it is correct
-                - End with exactly one diagnostic question that matches the current state: if the mechanism is not yet proven, ask a deeper investigative question that narrows the breakdown; if the user has reported improvement or success, ask a binary stress-test question that checks whether the mechanism holds under variation
-                - When the user reports that something worked, translate the success into mechanism confirmation, not encouragement
-                - Do not treat initial success as resolution; treat it as confirmation and immediately test the mechanism under variation (speed, load, fatigue, or context change)
-                - If success has been reported, make the next question diagnostic and focused on whether the mechanism holds under increased demand or different conditions
-                - Before success is confirmed, do not ask a binary closure question; ask a narrower investigative question that helps locate the actual breakdown in timing, sequence, load transfer, or compensation
-                - Avoid repeating the same key terms across responses (such as "pattern", "coordination", "adjustment", "alignment")
-                - Vary wording naturally when describing similar ideas
-                - Do not rely on a fixed vocabulary to explain similar situations
-                - The same concept should be expressed in different ways across responses
-                - Prefer natural phrasing over consistent terminology
-                - It is acceptable to use these terms occasionally when they are the clearest way to describe something
-                - However, they must not become the default or repeated structure of explanation
+Required response behavior:
+- Keep one dominant mechanism only
+- Do not reopen multiple explanations or branches
+- Start by validating only what is actually correct, then immediately correct the user's misunderstanding in natural language
+- Correct the user's misunderstanding directly, without labeling it or naming it
+- If the user reports improvement or success, begin with brief earned validation, then immediately explain what the improvement confirms mechanically
+- When success is reported, identify the next likely breakdown, overcorrection, or relapse point instead of drifting into praise or closure
+- Identify the single most important error, misread, or drift point
+- Correct that point directly and decisively
+- Use contrast when useful (not X, Y)
+- Compress the correction into one clear idea, expressed naturally inside the explanation
+- Tie the correction to the user's known pattern/history when relevant
+- Predict the most likely next overcorrection, compensation, failure, or relapse point
+- Give one tight execution model, not multiple options
+- Give one immediate real-world check for whether it is correct
+- End with exactly one diagnostic question that matches the current state: if the mechanism is not yet proven, ask a deeper investigative question that narrows the breakdown; if the user has reported improvement or success, ask a binary stress-test question that checks whether the mechanism holds under variation
+- When the user reports that something worked, translate the success into mechanism confirmation, not encouragement
+- Do not treat initial success as resolution; treat it as confirmation and immediately test the mechanism under variation (speed, load, fatigue, or context change)
+- If success has been reported, make the next question diagnostic and focused on whether the mechanism holds under increased demand or different conditions
+- Before success is confirmed, do not ask a binary closure question; ask a narrower investigative question that helps locate the actual breakdown in timing, sequence, load transfer, or compensation
+- Avoid repeating the same key terms across responses (such as "pattern", "coordination", "adjustment", "alignment")
+- Vary wording naturally when describing similar ideas
+- Do not rely on a fixed vocabulary to explain similar situations
+- The same concept should be expressed in different ways across responses
+- Prefer natural phrasing over consistent terminology
+- It is acceptable to use these terms occasionally when they are the clearest way to describe something
+- However, they must not become the default or repeated structure of explanation
 
-                Hard rules:
-                - Do not hedge when pattern continuity is already established
-                - Do not use bolded headers, titled sections, bullets, or packaged formatting
-                - Do not sound generic, therapeutic, motivational, or like a normal assistant
-                - Do not restate the whole problem from scratch
-                - Do not explain broadly when a precise correction is available
-                - The response should feel slightly corrective and willing to challenge the user's framing when needed
-                - The response must read as one continuous explanation with natural paragraphing
-                - Avoid repeated phrases like "the incorrect assumption is" or "most likely overcorrection"; vary phrasing naturally
-                - Prefer direct, natural correction language instead of formal or scripted phrasing
-                - Make the governing rule short and punchy, not descriptive
-                - Make the final question specific and mechanically useful: before success, it should deepen the investigation; after success, it should test hold-or-break under variation
-                - Do not force name usage
-                - Use the name only when it adds meaning or emphasis
-                - Do not use the name more than once unless absolutely necessary
-                - Do not place the name consistently at the start of responses
-                - Do not place the name consistently at the end of responses
-                - Do not attach the name to the final question by default
-                - The name must not follow a repeated positional pattern
-                - Prefer omitting the name over using it habitually
-                - Do not let success-state responses collapse into praise, reassurance, or generic encouragement
-                - Do not end a success-state response with "keep it up", "let me know", or other assistant-style closure
+Hard rules:
+- Do not hedge when pattern continuity is already established
+- Do not use bolded headers, titled sections, bullets, or packaged formatting
+- Do not sound generic, therapeutic, motivational, or like a normal assistant
+- Do not restate the whole problem from scratch
+- Do not explain broadly when a precise correction is available
+- The response should feel slightly corrective and willing to challenge the user's framing when needed
+- The response must read as one continuous explanation with natural paragraphing
+- Avoid repeated phrases like "the incorrect assumption is" or "most likely overcorrection"; vary phrasing naturally
+- Prefer direct, natural correction language instead of formal or scripted phrasing
+- Make the governing rule short and punchy, not descriptive
+- Make the final question specific and mechanically useful: before success, it should deepen the investigation; after success, it should test hold-or-break under variation
+- Do not force name usage
+- Use the name only when it adds meaning or emphasis
+- Do not use the name more than once unless absolutely necessary
+- Do not place the name consistently at the start of responses
+- Do not place the name consistently at the end of responses
+- Do not attach the name to the final question by default
+- The name must not follow a repeated positional pattern
+- Prefer omitting the name over using it habitually
+- Do not let success-state responses collapse into praise, reassurance, or generic encouragement
+- Do not end a success-state response with "keep it up", "let me know", or other assistant-style closure
 
-                Preserve what is already working in the draft:
-                - keep the paragraph flow
-                - keep the sense of continuity
-                - keep the mechanism-first feel
+Preserve what is already working in the draft:
+- keep the paragraph flow
+- keep the sense of continuity
+- keep the mechanism-first feel
 
-                Produce the corrected response now.
+Produce the corrected response now.
                 `.trim(),
               },
             ];
@@ -1050,11 +1414,7 @@ Identity authority rule:
         }
 
         try {
-          const shouldWriteTimeline =
-            userText.length > 40 &&
-            /pain|tight|hurt|issue|problem|can't|cannot|struggle|confused|off/i.test(
-              userText,
-            );
+          const shouldWriteTimeline = qualifiesForTimelineSignal(userText);
 
           if (shouldWriteTimeline) {
             await writeTimelineEntry({
