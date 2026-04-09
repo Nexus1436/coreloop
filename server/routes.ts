@@ -345,6 +345,20 @@ function deriveSignalType(text: string): string | null {
   return signalPatterns.find((entry) => entry.regex.test(input))?.label ?? null;
 }
 
+function normalizeOptionalLabel(value: string | null | undefined): string {
+  return normalizeCaseKey(value);
+}
+
+function hasStrongCaseContext(value: string | null | undefined): boolean {
+  return (
+    !isFallbackMovementContext(value) && normalizeOptionalLabel(value) !== ""
+  );
+}
+
+function hasStrongCaseActivity(value: string | null | undefined): boolean {
+  return !isFallbackActivityType(value) && normalizeOptionalLabel(value) !== "";
+}
+
 type ProfileFieldKey =
   | "primary_sport"
   | "dominant_hand"
@@ -684,7 +698,7 @@ function extractFirstMatchingSentence(
 }
 
 function qualifiesForTimelineSignal(text: string): boolean {
-  return /pain|tight|hurt|issue|problem|can't|cannot|struggle|confused|off|feels off|feels weird|not right|not working|doesn't feel right|doesnt feel right|can't rotate|cant rotate|can't load|cant load|timing is off|timing feels off|mechanics feel wrong|movement is weird|doesn't feel stable|not stable|unstable|out of position|can't control|cant control|not coordinated|coordination is off|out of sync|awkward|something is off|rotation feels off|trunk rotation feels wrong/i.test(
+  return /pain|painful|tight|tightness|hurt|hurts|hurting|issue|problem|tweak|tweaked|strain|strained|straining|tension|discomfort|catching|catch|pinch|pinching|pinched|irritated|irritation|sore|soreness|stiff|stiffness|aggravated|aggravating|flare|flaring up|acting up|feels weird|feels wrong|not comfortable|uncomfortable|not sitting right|pulling|tugging|ache|aching|doesn't feel right|doesnt feel right|can't|cannot|struggle|confused|off|feels off|not right|not working|can't rotate|cant rotate|can't load|cant load|timing is off|timing feels off|mechanics feel wrong|movement is weird|doesn't feel stable|not stable|unstable|out of position|can't control|cant control|not coordinated|coordination is off|out of sync|awkward|something is off|rotation feels off|trunk rotation feels wrong/i.test(
     text.trim(),
   );
 }
@@ -804,6 +818,15 @@ function looksLikeOutcome(text: string): boolean {
   );
 }
 
+function detectUserClosureSignal(text: string): boolean {
+  const input = text.trim();
+  if (!input) return false;
+
+  return /\b(thank you|thanks|that helped|this helped|that makes sense|perfect|got it|exactly|that was what i needed|that's what i needed|that is what i needed|that’s what i needed|that’s a great plan|that is a great plan|great plan|understood|makes sense now|all good|we're good|we are good|i'm good|im good|all set|that answers it|that answered it)\b/i.test(
+    input,
+  );
+}
+
 // ==============================
 // STORED SESSION HISTORY BUILDER
 // ==============================
@@ -907,7 +930,7 @@ ${summary}
 function isValidResponse(text: string): boolean {
   if (!text) return false;
 
-  if (text.trim().length < 40) return false;
+  if (!text.trim()) return false;
 
   return true;
 }
@@ -1621,6 +1644,8 @@ export async function registerRoutes(
 
           if (shouldCreateCase) {
             const derivedCaseContext = deriveCaseContext(userText);
+            const derivedBodyRegion = deriveBodyRegion(userText);
+            const derivedSignalType = deriveSignalType(userText);
             const recentUserCases = await db
               .select({
                 id: cases.id,
@@ -1638,33 +1663,93 @@ export async function registerRoutes(
               isOpenCaseStatus(row.status),
             );
 
-            const derivedMovementKey = normalizeCaseKey(
+            // Resolved cases are history, not blockers. Only unresolved open cases
+            // are considered here, and even then only when the current problem
+            // strongly looks like the same fixable issue.
+            const openCasesWithLatestSignal = await Promise.all(
+              openCases.map(async (row) => {
+                const [latestSignal] = await db
+                  .select({
+                    bodyRegion: caseSignals.bodyRegion,
+                    signalType: caseSignals.signalType,
+                    description: caseSignals.description,
+                  })
+                  .from(caseSignals)
+                  .where(eq(caseSignals.caseId, row.id))
+                  .orderBy(desc(caseSignals.id))
+                  .limit(1);
+
+                return {
+                  ...row,
+                  latestSignal,
+                };
+              }),
+            );
+
+            const derivedMovementKey = normalizeOptionalLabel(
               derivedCaseContext.movementContext,
             );
-            const derivedActivityKey = normalizeCaseKey(
+            const derivedActivityKey = normalizeOptionalLabel(
               derivedCaseContext.activityType,
             );
+            const derivedBodyRegionKey =
+              normalizeOptionalLabel(derivedBodyRegion);
+            const derivedSignalTypeKey =
+              normalizeOptionalLabel(derivedSignalType);
 
-            const hasMaterialOpenCaseMatch = openCases.some((row) => {
-              const rowMovementKey = normalizeCaseKey(row.movementContext);
-              const rowActivityKey = normalizeCaseKey(row.activityType);
+            const matchedOpenCase = openCasesWithLatestSignal.find((row) => {
+              const rowMovementKey = normalizeOptionalLabel(
+                row.movementContext,
+              );
+              const rowActivityKey = normalizeOptionalLabel(row.activityType);
+              const rowBodyRegionKey = normalizeOptionalLabel(
+                row.latestSignal?.bodyRegion,
+              );
+              const rowSignalTypeKey = normalizeOptionalLabel(
+                row.latestSignal?.signalType,
+              );
 
-              const movementMatches =
-                !isFallbackMovementContext(
-                  derivedCaseContext.movementContext,
-                ) &&
-                !isFallbackMovementContext(row.movementContext) &&
+              const sameBodyRegion =
+                derivedBodyRegionKey !== "" &&
+                rowBodyRegionKey !== "" &&
+                derivedBodyRegionKey === rowBodyRegionKey;
+
+              const sameSignalType =
+                derivedSignalTypeKey !== "" &&
+                rowSignalTypeKey !== "" &&
+                derivedSignalTypeKey === rowSignalTypeKey;
+
+              const sameStrongMovementContext =
+                hasStrongCaseContext(derivedCaseContext.movementContext) &&
+                hasStrongCaseContext(row.movementContext) &&
                 derivedMovementKey === rowMovementKey;
 
-              const activityMatches =
-                !isFallbackActivityType(derivedCaseContext.activityType) &&
-                !isFallbackActivityType(row.activityType) &&
+              const sameStrongActivity =
+                hasStrongCaseActivity(derivedCaseContext.activityType) &&
+                hasStrongCaseActivity(row.activityType) &&
                 derivedActivityKey === rowActivityKey;
 
-              return movementMatches && activityMatches;
+              // Bias toward opening a new case. Only append to an existing open
+              // case when it matches the same unresolved problem strongly enough
+              // that the intervention path is likely the same.
+              return (
+                sameBodyRegion &&
+                (sameStrongMovementContext ||
+                  (sameStrongActivity && sameSignalType))
+              );
             });
 
-            if (!hasMaterialOpenCaseMatch) {
+            if (matchedOpenCase) {
+              await db.insert(caseSignals).values({
+                userId,
+                caseId: matchedOpenCase.id,
+                description: clampText(userText, 800),
+                activityType: derivedCaseContext.activityType,
+                movementContext: derivedCaseContext.movementContext,
+                bodyRegion: derivedBodyRegion,
+                signalType: derivedSignalType,
+              });
+            } else {
               let newCase:
                 | {
                     id: number;
@@ -1694,9 +1779,6 @@ export async function registerRoutes(
 
               if (newCase) {
                 try {
-                  const derivedBodyRegion = deriveBodyRegion(userText);
-                  const derivedSignalType = deriveSignalType(userText);
-
                   await db.insert(caseSignals).values({
                     userId,
                     caseId: newCase.id,
@@ -1807,6 +1889,109 @@ If multiple details are present, use the strongest established line that still f
 `
           : "";
 
+        const endingStateBlock = !isCaseReview
+          ? `
+=== ENDING STATE RULE ===
+The ending question is determined by state, not by template.
+Use exactly one final question, and only if a real question is still needed.
+
+State 0 — Light re-entry / check-in:
+- If the user is lightly reopening the conversation without advancing the investigation yet, do not force narrowing, confirmation, or adjustment testing
+- If there is a strong active thread, unresolved mechanism, or continuity line, reopen from that softly and ask what has changed, what has shown up, or what they are noticing now
+- If there is no strong continuity thread, ask a light directional opening about what is going on today, what has been showing up, or what they want to look at
+- This should feel like continuation, not intake and not small talk
+
+State 1 — Mechanism unclear:
+- End with a narrowing question that locates where, when, or under what condition the breakdown appears
+- Focus on sequence, timing, load, or the point where the movement changes or collapses
+- Do not end with an adjustment-testing question here
+
+State 2 — Mechanism forming but not proven:
+- End with a confirmation or falsification question that checks whether the likely explanation actually matches the breakdown
+- Use a specific contrast or condition that can expose whether the read is right
+- This is still not automatically an adjustment test
+
+State 3 — Adjustment actually in play:
+- Only if an actual adjustment has already been introduced in the current line may the ending question test whether it holds
+- Then it can ask what changed after applying it, or whether it holds under speed, load, fatigue, or the full motion
+
+State 4 — User-side closure:
+- If the user clearly signals that the point landed, helped, or is complete, do not continue probing
+- Briefly acknowledge it
+- Stabilize the point
+- Restate the lever cleanly only if useful
+- Then either stop naturally without forcing another question, or use one light release line that does not reopen investigation
+
+Hard constraint:
+- If no adjustment has actually been introduced, do not end with an adjustment-testing question
+- Do not default to "how did that feel", "what happened when you tried that", or any equivalent outcome loop unless an actual adjustment is already active
+`
+          : "";
+
+        const userSideClosureBlock = !isCaseReview
+          ? `
+=== USER-SIDE CLOSURE RULE ===
+If the user clearly signals that the point landed, helped, or is complete:
+- do not keep explaining
+- do not force a continuation question
+- do not reopen the same reasoning
+- briefly acknowledge it
+- stabilize the point
+- restate the lever cleanly only if useful
+- then either stop naturally, or use one light release line that does not reopen investigation
+
+Do not:
+- ask a narrowing question
+- ask a confirmation question
+- ask a testing question
+- continue reasoning
+- reopen the same mechanism
+
+A light release line:
+- is optional
+- is not a question
+- does not probe
+- does not test
+- does not clarify
+- does not continue the investigation
+- simply lets the conversation land naturally
+`
+          : "";
+
+        const internalReasoningBlock = !isCaseReview
+          ? `
+=== INTERNAL MECHANICS DOCTRINE ===
+This layer is for hidden reasoning only. Do not expose it as labels or sections in the visible reply.
+
+Before generating the response:
+- extract the real physical signal
+- consider multiple interpretations
+- select the strongest mechanism
+- correct the user's interpretation
+- predict the most likely failure mode or overcorrection
+- reduce the intervention to one lever
+- optionally link the read to known patterns when it sharpens the explanation
+
+Critical rule:
+- think fully first, then speak naturally
+- do not compress before reasoning
+- do not expose this reasoning scaffold in the visible response
+- do not use visible labels like "Mechanism", "Correction", "Risk", or "Lever"
+`
+          : "";
+
+        const toneGuidanceBlock = !isCaseReview
+          ? `
+=== TONE GUIDANCE ===
+- direct
+- precise
+- mechanism-first
+- non-performative
+- allow natural explanation and variable length when the reasoning needs it
+- let the Base Narrative arc lead
+`
+          : "";
+
         const chatMessages: ChatCompletionMessageParam[] = [
           {
             role: "system",
@@ -1815,6 +2000,10 @@ You must follow the instructions below exactly. These rules override all default
 
 ${ACTIVE_PROMPT}
           `.trim(),
+          },
+          {
+            role: "system",
+            content: internalReasoningBlock.trim(),
           },
           {
             role: "system",
@@ -1832,6 +2021,12 @@ ${continuityBlock}
 ${organicProfileOnboardingBlock}
 
 ${patternPriorityBlock}
+
+${endingStateBlock}
+
+${userSideClosureBlock}
+
+${toneGuidanceBlock}
           `.trim(),
           },
           ...previous.slice(-16).map((m) => ({
@@ -1846,13 +2041,14 @@ ${patternPriorityBlock}
         let finalText = assistantText;
 
         if (!isCaseReview) {
+          const userSignaledClosure = detectUserClosureSignal(userText);
           const isWeak =
             /could be|might be|possibly|several|a few things/i.test(
               assistantText,
             );
 
           const isGenericSuccess =
-            /glad to hear|great to hear|happy to hear|keep it up|let me know|feel free to reach out/i.test(
+            /glad to hear|great to hear|happy to hear|fantastic|great to see|keep it up|let me know|feel free to reach out/i.test(
               assistantText,
             );
 
@@ -1862,15 +2058,15 @@ ${patternPriorityBlock}
             );
 
           const hasFormattedSections = /\*\*.*\*\*:/g.test(assistantText);
-          const hasMultipleParagraphs = assistantText.split("\n\n").length > 2;
+          const closureDrift = userSignaledClosure && /\?/.test(assistantText);
 
           if (
             !isValidResponse(assistantText) ||
             isWeak ||
             isGenericSuccess ||
+            closureDrift ||
             hasLabels ||
-            hasFormattedSections ||
-            hasMultipleParagraphs
+            hasFormattedSections
           ) {
             const retryMessages: ChatCompletionMessageParam[] = [
               ...chatMessages,
@@ -1886,9 +2082,13 @@ That response drifted from the active narrative. Rewrite it so the execution sta
 Required response behavior:
 - Keep one dominant mechanism only
 - Do not reopen multiple explanations or branches
+- Preserve the natural Interloop arc: controlled validation, mechanism identification, interpretation correction, failure mode prediction, one lever, optional sequence or contextual tie, then one final question chosen from state
+- Think fully before writing
+- Use hidden reasoning to extract the real signal, consider multiple interpretations, choose the strongest mechanism, correct the user's interpretation, predict the likely failure mode, and reduce it to one lever
+- Do not expose the reasoning scaffold as labels or sections
 - Start by validating only what is actually correct, then immediately correct the user's misunderstanding in natural language
 - Correct the user's misunderstanding directly, without labeling it or naming it
-- If the user reports improvement or success, begin with brief earned validation, then immediately explain what the improvement confirms mechanically
+- If the user reports improvement or success, begin with brief earned validation, then explain what the improvement means mechanically
 - When success is reported, identify the next likely breakdown, overcorrection, or relapse point instead of drifting into praise or closure
 - If the mechanism is already established, advance it instead of restating it
 - Do not repeat the same explanation in slightly different wording
@@ -1901,11 +2101,27 @@ Required response behavior:
 - Predict the most likely next overcorrection, compensation, failure, or relapse point
 - Give one tight execution model, not multiple options
 - Give one immediate real-world check for whether it is correct
-- End with exactly one diagnostic question that matches the current state: if the mechanism is not yet proven, ask a deeper investigative question that narrows the breakdown; if the user has reported improvement or success, ask a binary stress-test question that checks whether the mechanism holds under variation
+- The ending question is determined by state, not by template
+- End with at most one final question, and only if a real question is needed
+- If the user is lightly reopening the conversation without materially advancing the investigation, use soft re-entry: reopen from continuity when it exists and ask what has changed, what has shown up, or what they are noticing now
+- If the mechanism is still unclear, end with a narrowing question that locates where, when, or under what condition the breakdown appears
+- If the mechanism is forming but not yet proven, end with a confirmation or falsification question that checks whether the read actually matches the breakdown
+- Only if an actual adjustment has already been introduced in the current line may the ending question test whether it holds or what changed after applying it
+- If no adjustment exists, do not ask an adjustment-testing question
+- If the user clearly closes the point, do not ask any follow-up question
+- In a closure response, brief acknowledgment is enough
+- A closure response can be very short if it lands cleanly
+- Do not expand a correct closure into a longer answer
+- If the user says thank you, that helped, that makes sense, perfect, got it, exactly, or otherwise signals completion, let it land and stop naturally
+- After closure, you may optionally use one light release line, but it must not reopen investigation
+- A light release line is not a question and does not probe, test, clarify, or restart reasoning
 - When the user reports that something worked, translate the success into mechanism confirmation, not encouragement
-- Do not treat initial success as resolution; treat it as confirmation and immediately test the mechanism under variation (speed, load, fatigue, or context change)
-- If success has been reported, make the next question diagnostic and focused on whether the mechanism holds under increased demand or different conditions
-- Before success is confirmed, do not ask a binary closure question; ask a narrower investigative question that helps locate the actual breakdown in timing, sequence, load transfer, or compensation
+- Do not treat initial success as resolution; treat it as confirmation and only test it under variation if an actual adjustment is already active
+- If success has been reported without a real adjustment in play, do not collapse into an adjustment/outcome loop; keep the final question aligned to the actual state of the investigation
+- Before success is confirmed, do not ask a binary closure question; ask the question that best fits the current state: soft re-entry, narrowing, confirmation, or adjustment stress-test
+- Make the final question specific and mechanically useful
+- Prefer a specific condition check, contrast check, or binary probe when it sharpens the state-based question
+- Allow natural phrasing, variable length, and variable structure when the reasoning needs it
 - Avoid repeating the same key terms across responses (such as "pattern", "coordination", "adjustment", "alignment")
 - Vary wording naturally when describing similar ideas
 - Do not rely on a fixed vocabulary to explain similar situations
@@ -1925,7 +2141,7 @@ Hard rules:
 - Avoid repeated phrases like "the incorrect assumption is" or "most likely overcorrection"; vary phrasing naturally
 - Prefer direct, natural correction language instead of formal or scripted phrasing
 - Make the governing rule short and punchy, not descriptive
-- Make the final question specific and mechanically useful: before success, it should deepen the investigation; after success, it should test hold-or-break under variation
+- Make the final question specific and mechanically useful
 - Do not force name usage
 - Use the name only when it adds meaning or emphasis
 - Do not use the name more than once unless absolutely necessary
@@ -1987,6 +2203,22 @@ Produce the corrected response now.
               /\bindicates\b/i,
               /\bmeans\b/i,
               /\bpoints to\b/i,
+              /\bpoints back to\b/i,
+              /\blikely due to\b/i,
+              /\bdue to\b/i,
+              /\bcomes from\b/i,
+              /\bis coming from\b/i,
+              /\bcaused by\b/i,
+              /\bis caused by\b/i,
+              /\bhappening because\b/i,
+              /\bthis is happening because\b/i,
+              /\bthe issue is\b/i,
+              /\bthe problem is\b/i,
+              /\bwhat'?s going on is\b/i,
+              /\bthis comes from\b/i,
+              /\bthis usually comes from\b/i,
+              /\bthis is driven by\b/i,
+              /\bdriven by\b/i,
               /\bwhat'?s happening is\b/i,
             ]);
 

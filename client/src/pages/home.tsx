@@ -1,4 +1,3 @@
-// Home.tsx
 import { useState, useRef, useEffect, useCallback } from "react";
 
 import { CentralForm } from "@/components/central-form";
@@ -30,6 +29,10 @@ function mergeStream(existing: string, incoming: string) {
   }
 
   return existing + incoming;
+}
+
+function pickAcknowledgmentClipNumber() {
+  return Math.floor(Math.random() * 6) + 1;
 }
 
 async function sendChat(
@@ -145,6 +148,7 @@ export default function Home() {
   const lastSpokenTextRef = useRef<string>("");
   const isReplayingRef = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const acknowledgmentTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
@@ -239,6 +243,14 @@ export default function Home() {
     }
   }, [playback.state]);
 
+  useEffect(() => {
+    return () => {
+      if (acknowledgmentTimeoutRef.current != null) {
+        window.clearTimeout(acknowledgmentTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const playUITone = useCallback((frequency = 720, durationMs = 90) => {
     try {
       const AudioCtx =
@@ -283,6 +295,17 @@ export default function Home() {
     } catch (err) {
       console.warn("UI tone failed:", err);
     }
+  }, []);
+
+  const playAcknowledgmentAudio = useCallback(() => {
+    const clipNumber = pickAcknowledgmentClipNumber();
+    const gender = voiceGenderRef.current;
+    const path = `/ack/${gender}/ack_${clipNumber}.mp3`;
+    const audio = new Audio(path);
+
+    void audio.play().catch((err) => {
+      console.warn("Acknowledgment audio failed:", err);
+    });
   }, []);
 
   const stopSpeech = useCallback(() => {
@@ -401,6 +424,16 @@ export default function Home() {
 
     playUITone(660);
     setIsRecording(false);
+
+    if (acknowledgmentTimeoutRef.current != null) {
+      window.clearTimeout(acknowledgmentTimeoutRef.current);
+    }
+
+    // acknowledgmentTimeoutRef.current = window.setTimeout(() => {
+    //   playAcknowledgmentAudio();
+    //   acknowledgmentTimeoutRef.current = null;
+    // }, 1000);
+
     setIsProcessing(true);
 
     const blob = await recorder.stopRecording();
@@ -450,6 +483,7 @@ export default function Home() {
     isRecording,
     isProcessing,
     isSpeaking,
+    playAcknowledgmentAudio,
     playUITone,
     recorder,
     speakText,
