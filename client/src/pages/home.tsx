@@ -145,10 +145,14 @@ export default function Home() {
   const recorder = useVoiceRecorder();
 
   const stopRequestedRef = useRef(false);
-  const lastSpokenTextRef = useRef<string>("");
   const isReplayingRef = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const acknowledgmentTimeoutRef = useRef<number | null>(null);
+  const speakSessionRef = useRef(0);
+  const lastPlayableMessageRef = useRef<{ id: string; text: string } | null>(
+    null,
+  );
+  const lastAutoPlayedMessageIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
@@ -309,6 +313,7 @@ export default function Home() {
   }, []);
 
   const stopSpeech = useCallback(() => {
+    speakSessionRef.current += 1;
     stopRequestedRef.current = true;
     playback.stop();
     isReplayingRef.current = false;
@@ -318,10 +323,24 @@ export default function Home() {
   }, [playback]);
 
   const speakText = useCallback(
-    async (text: string) => {
+    async (
+      messageId: string,
+      text: string,
+      mode: "auto" | "repeat" = "auto",
+    ) => {
       if (!text?.trim()) return;
 
-      lastSpokenTextRef.current = text;
+      if (mode === "auto" && lastAutoPlayedMessageIdRef.current === messageId) {
+        return;
+      }
+
+      lastPlayableMessageRef.current = { id: messageId, text };
+
+      if (mode === "auto") {
+        lastAutoPlayedMessageIdRef.current = messageId;
+      }
+
+      const sessionId = ++speakSessionRef.current;
       stopRequestedRef.current = false;
 
       await playback.init();
@@ -333,20 +352,27 @@ export default function Home() {
         await streamTTS(
           text,
           (chunk) => {
-            if (!stopRequestedRef.current) {
-              playback.pushAudio(chunk);
-            }
+            if (stopRequestedRef.current) return;
+            if (sessionId !== speakSessionRef.current) return;
+
+            playback.pushAudio(chunk);
           },
           {
             voice: voiceGenderRef.current,
           },
         );
 
-        if (!stopRequestedRef.current) {
+        if (
+          !stopRequestedRef.current &&
+          sessionId === speakSessionRef.current
+        ) {
           playback.signalComplete();
         }
       } finally {
-        if (!stopRequestedRef.current) {
+        if (
+          !stopRequestedRef.current &&
+          sessionId === speakSessionRef.current
+        ) {
           setIsSpeaking(false);
           isReplayingRef.current = false;
         }
@@ -400,7 +426,7 @@ export default function Home() {
       );
 
       if (assistantText.trim()) {
-        await speakText(assistantText);
+        await speakText(assistantId, assistantText, "auto");
       }
     } finally {
       setIsProcessing(false);
@@ -477,7 +503,7 @@ export default function Home() {
     setIsProcessing(false);
 
     if (assistantText.trim()) {
-      await speakText(assistantText);
+      await speakText(assistantId, assistantText, "auto");
     }
   }, [
     isRecording,
@@ -503,11 +529,12 @@ export default function Home() {
       return;
     }
 
-    if (!lastSpokenTextRef.current) return;
+    const lastPlayable = lastPlayableMessageRef.current;
+    if (!lastPlayable) return;
     if (isReplayingRef.current) return;
 
     isReplayingRef.current = true;
-    await speakText(lastSpokenTextRef.current);
+    await speakText(lastPlayable.id, lastPlayable.text, "repeat");
   }, [isPlaybackActive, playUITone, speakText, stopSpeech]);
 
   return (

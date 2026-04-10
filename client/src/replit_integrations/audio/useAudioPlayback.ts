@@ -1,3 +1,4 @@
+// useAudioPlayback.ts
 import { useRef, useState, useCallback } from "react";
 
 export type PlaybackState = "idle" | "playing" | "ended";
@@ -39,6 +40,7 @@ export function useAudioPlayback() {
 
   const sessionRef = useRef(0);
   const activeSessionRef = useRef(0);
+  const playRequestRef = useRef(0);
 
   const [state, setState] = useState<PlaybackState>("idle");
 
@@ -69,6 +71,12 @@ export function useAudioPlayback() {
     } catch {}
   }, []);
 
+  const invalidatePlayback = useCallback(() => {
+    sessionRef.current += 1;
+    activeSessionRef.current = 0;
+    playRequestRef.current += 1;
+  }, []);
+
   const init = useCallback(async () => {
     if (audioRef.current) return;
 
@@ -78,7 +86,12 @@ export function useAudioPlayback() {
     audio.setAttribute("playsinline", "true");
 
     audio.onplay = () => {
-      if (activeSessionRef.current !== sessionRef.current) return;
+      if (activeSessionRef.current !== sessionRef.current) {
+        try {
+          audio.pause();
+        } catch {}
+        return;
+      }
 
       isPlayingRef.current = true;
       isStartingRef.current = false;
@@ -93,6 +106,7 @@ export function useAudioPlayback() {
 
       resetElement();
       revokeCurrentUrl();
+      activeSessionRef.current = 0;
 
       if (stoppedRef.current) {
         setState("idle");
@@ -116,6 +130,7 @@ export function useAudioPlayback() {
 
       resetElement();
       revokeCurrentUrl();
+      activeSessionRef.current = 0;
 
       setState("idle");
     };
@@ -125,8 +140,7 @@ export function useAudioPlayback() {
 
   const hardReset = useCallback(
     (markStopped: boolean) => {
-      sessionRef.current += 1;
-      activeSessionRef.current = 0;
+      invalidatePlayback();
 
       stoppedRef.current = markStopped;
       completeRef.current = false;
@@ -139,7 +153,7 @@ export function useAudioPlayback() {
 
       setState("idle");
     },
-    [resetElement, revokeCurrentUrl],
+    [invalidatePlayback, resetElement, revokeCurrentUrl],
   );
 
   const playNext = useCallback(async () => {
@@ -155,8 +169,10 @@ export function useAudioPlayback() {
       return;
     }
 
+    const requestId = playRequestRef.current;
+
     while (queueRef.current.length > 0) {
-      if (stoppedRef.current) {
+      if (stoppedRef.current || requestId !== playRequestRef.current) {
         setState("idle");
         return;
       }
@@ -173,6 +189,7 @@ export function useAudioPlayback() {
 
         resetElement();
         revokeCurrentUrl();
+        activeSessionRef.current = 0;
 
         const url = URL.createObjectURL(blob);
         currentUrlRef.current = url;
@@ -192,11 +209,16 @@ export function useAudioPlayback() {
           return;
         }
 
-        if (sessionId !== sessionRef.current || stoppedRef.current) {
+        if (
+          requestId !== playRequestRef.current ||
+          sessionId !== sessionRef.current ||
+          stoppedRef.current
+        ) {
           isStartingRef.current = false;
           isPlayingRef.current = false;
           resetElement();
           revokeCurrentUrl();
+          activeSessionRef.current = 0;
           continue;
         }
 
@@ -206,6 +228,7 @@ export function useAudioPlayback() {
         isPlayingRef.current = false;
         resetElement();
         revokeCurrentUrl();
+        activeSessionRef.current = 0;
       }
     }
 
@@ -242,12 +265,10 @@ export function useAudioPlayback() {
 
       await init();
 
-      // ALWAYS kill everything first
       hardReset(false);
 
       stoppedRef.current = false;
       completeRef.current = false;
-
       queueRef.current = [base64Audio];
 
       await playNext();

@@ -1,4 +1,3 @@
-// ChatView.tsx
 import {
   useState,
   useRef,
@@ -18,7 +17,11 @@ interface ChatViewProps {
   onConversationIdChange: (conversationId: number) => void;
   onPlaybackControl: () => void;
   playbackLabel: string;
-  onSpeakText: (text: string) => Promise<void>;
+  onSpeakText: (
+    messageId: string,
+    text: string,
+    mode?: "auto" | "repeat",
+  ) => Promise<void>;
   onCaseReview: () => void;
 }
 
@@ -119,7 +122,7 @@ export function ChatView({
       );
 
       if (assistantText.trim()) {
-        await onSpeakText(assistantText);
+        await onSpeakText(assistantMsgId, assistantText, "auto");
       }
     } finally {
       setIsStreaming(false);
