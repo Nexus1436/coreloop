@@ -22,7 +22,6 @@ type DashboardData = {
   activeCaseTitle: string | null;
   currentFocus: string | null;
   lastCaseReviewSnippet: string | null;
-  lastHistoricalReviewSnippet: string | null;
 };
 
 const INTERLOOP_SETTINGS_KEY = "interloopSettings";
@@ -44,7 +43,6 @@ const defaultDashboardData: DashboardData = {
   activeCaseTitle: null,
   currentFocus: null,
   lastCaseReviewSnippet: null,
-  lastHistoricalReviewSnippet: null,
 };
 
 function isSettingsComplete(settings: InterloopSettingsValues): boolean {
@@ -316,7 +314,6 @@ export default function Home() {
         activeCaseTitle: data?.activeCaseTitle ?? null,
         currentFocus: data?.currentFocus ?? null,
         lastCaseReviewSnippet: data?.lastCaseReviewSnippet ?? null,
-        lastHistoricalReviewSnippet: data?.lastHistoricalReviewSnippet ?? null,
       });
     } catch (err) {
       console.warn("Failed to load dashboard data:", err);
@@ -553,59 +550,6 @@ export default function Home() {
     speakText,
   ]);
 
-  const runHistoricalReview = useCallback(async () => {
-    playUITone(720);
-
-    if (
-      !conversationIdRef.current ||
-      isProcessing ||
-      isRecording ||
-      isSpeaking
-    ) {
-      return;
-    }
-
-    const assistantId = nextId();
-
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantId, role: "assistant", text: "" },
-    ]);
-
-    setIsProcessing(true);
-
-    try {
-      const resp = await fetch("/api/historical-state-review", {
-        method: "POST",
-        credentials: "include",
-      });
-
-      if (!resp.ok) throw new Error("Historical review failed");
-
-      const data = await resp.json();
-      const text = data?.historicalReview ?? "";
-
-      setMessages((prev) =>
-        prev.map((m) => (m.id === assistantId ? { ...m, text } : m)),
-      );
-
-      if (text.trim()) {
-        await speakText(assistantId, text, "auto");
-      }
-
-      await loadDashboardData();
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [
-    isProcessing,
-    isRecording,
-    isSpeaking,
-    loadDashboardData,
-    playUITone,
-    speakText,
-  ]);
-
   const handleTap = useCallback(async () => {
     if (isSpeaking) {
       stopSpeech();
@@ -713,13 +657,6 @@ export default function Home() {
     {
       label: "Current Focus",
       value: dashboardData.currentFocus,
-    },
-  ].filter((row) => Boolean(row.value));
-
-  const recentInsightRows = [
-    {
-      label: "Last Pattern Insight",
-      value: dashboardData.lastHistoricalReviewSnippet,
     },
   ].filter((row) => Boolean(row.value));
 
@@ -879,7 +816,7 @@ export default function Home() {
               playbackLabel={playbackLabel}
               onSpeakText={speakText}
               onCaseReview={() => {}}
-              onHistoricalReview={runHistoricalReview}
+              onHistoricalReview={() => {}}
             />
           </>
         ) : (
@@ -900,47 +837,26 @@ export default function Home() {
               </h1>
 
               <p className="mt-4 text-sm text-gray-500">
-                Run focused reviews on your current case or long-term patterns.
+                Run focused reviews on your current case.
               </p>
 
-              {(currentStateRows.length > 0 ||
-                recentInsightRows.length > 0) && (
+              {currentStateRows.length > 0 && (
                 <div className="w-full mt-10 text-left">
-                  {currentStateRows.length > 0 && (
-                    <div className="flex flex-col gap-5">
-                      <div className="text-xs uppercase tracking-[0.14em] text-gray-600">
-                        Current State
-                      </div>
-                      {currentStateRows.map((row) => (
-                        <div key={row.label} className="w-full">
-                          <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
-                            {row.label}
-                          </div>
-                          <div className="mt-1 text-sm leading-relaxed text-gray-300">
-                            {row.value}
-                          </div>
-                        </div>
-                      ))}
+                  <div className="flex flex-col gap-5">
+                    <div className="text-xs uppercase tracking-[0.14em] text-gray-600">
+                      Current State
                     </div>
-                  )}
-
-                  {recentInsightRows.length > 0 && (
-                    <div className="mt-8 flex flex-col gap-5">
-                      <div className="text-xs uppercase tracking-[0.14em] text-gray-600">
-                        Recent Insight
-                      </div>
-                      {recentInsightRows.map((row) => (
-                        <div key={row.label} className="w-full">
-                          <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
-                            {row.label}
-                          </div>
-                          <div className="mt-1 text-sm leading-relaxed text-gray-300">
-                            {row.value}
-                          </div>
+                    {currentStateRows.map((row) => (
+                      <div key={row.label} className="w-full">
+                        <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
+                          {row.label}
                         </div>
-                      ))}
-                    </div>
-                  )}
+                        <div className="mt-1 text-sm leading-relaxed text-gray-300">
+                          {row.value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -960,24 +876,6 @@ export default function Home() {
                   </div>
                   <div className="mt-2 text-sm text-gray-500">
                     Break down the current mechanism and identify the next move.
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => {
-                    playUITone(720);
-                    setMode("B");
-                    window.setTimeout(() => {
-                      void runHistoricalReview();
-                    }, 50);
-                  }}
-                  className="w-full text-center py-5 transition-opacity hover:opacity-80 cursor-pointer"
-                >
-                  <div className="text-lg font-medium text-white">
-                    Get New Historical Data
-                  </div>
-                  <div className="mt-2 text-sm text-gray-500">
-                    Surface recurring patterns across your past sessions.
                   </div>
                 </button>
               </div>

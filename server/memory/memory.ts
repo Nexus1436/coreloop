@@ -71,7 +71,7 @@ export interface InterloopMemory {
     overanalysis: boolean;
     rushTendency: boolean;
     hesitationPattern: boolean;
-    notes: [];
+    notes: string[];
   };
 
   sessionMeta: {
@@ -278,35 +278,100 @@ export async function writeCaseReview(params: {
    FIXED PROMOTION LOGIC
 ===================================================== */
 
-function isValidMemoryCandidate(text: string): boolean {
-  const t = String(text ?? "").trim();
+function isValidMemoryCandidate(text: string | null): boolean {
+  if (!text) return false;
+
+  const t = String(text).replace(/\s+/g, " ").trim();
 
   if (!t) return false;
+  if (t.length < 16 || t.length > 110) return false;
+  if ((t.match(/[.!?]/g) ?? []).length > 1) return false;
 
-  if (t.length < 20) return false;
-
-  if (/\b(thi|giv|dropp|figur|someth|alway|recurr|hav)\b/i.test(t))
+  if (
+    /\b(your predecessor|what your predecessor|we figured out|let'?s move on|you don'?t have to use the word|that'?s something i figured out|this means|that means|what'?s happening is|the issue is|the problem is|it suggests|this suggests|likely because|coming from|driven by)\b/i.test(
+      t,
+    )
+  ) {
     return false;
+  }
 
-  const words = t.split(/\s+/);
-  const shortWords = words.filter((w) => w.length <= 3).length;
-  if (words.length > 0 && shortWords / words.length > 0.6) return false;
+  if (
+    /^(?:left|right)?\s*(?:knee|shoulder|hip|back|neck|ankle|elbow|wrist)\s+(?:pain|discomfort|tightness|stiffness|weakness|instability)\s+(?:shows up|recurs)\.?$/i.test(
+      t,
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    /^(?:hesitation|overthinking|rushing)\s+(?:shows up|recurs).+$/i.test(t)
+  ) {
+    return false;
+  }
 
   if (!/[a-z]{3,}\s+[a-z]{3,}/i.test(t)) return false;
+
+  const words = t.split(/\s+/);
+  if (words.length < 3 || words.length > 14) return false;
+
+  const shortWords = words.filter((w) => w.length <= 2).length;
+  if (words.length > 0 && shortWords / words.length > 0.45) return false;
 
   return true;
 }
 
-function normalizeMemoryCandidate(
-  text: string | null | undefined,
-): string | null {
-  const t = String(text ?? "").trim();
+function normalizeMemoryCandidate(text: string | null): string | null {
+  if (!text) return null;
+
+  const t = String(text).replace(/\s+/g, " ").trim();
 
   if (!t) return null;
 
-  let cleaned = t.replace(/\s+/g, " ").replace(/^\W+|\W+$/g, "");
+  let cleaned = t
+    .replace(/[*_`#>\[\]()]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^\W+|\W+$/g, "")
+    .trim();
 
   if (!cleaned) return null;
+
+  const sentenceMatch = cleaned.match(/^([^.!?]{0,140}[.!?])/);
+  if (sentenceMatch?.[1]) {
+    cleaned = sentenceMatch[1].trim();
+  }
+
+  cleaned = cleaned
+    .replace(/\bshows up\b/gi, "recurs")
+    .replace(/\bmade the movement worse\b/gi, "worsens movement quality")
+    .replace(/\bimproved the movement\b/gi, "improves movement quality")
+    .replace(/\baffects movement mechanics\b/gi, "changes movement mechanics")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const recurringSignalMatch = cleaned.match(
+    /^(left|right)?\s*(shoulder|neck|low back|lower back|mid back|upper back|back|hip|knee|ankle|elbow|wrist|foot|hamstring|quad|arm)\s+(pain|tightness|stiffness|weakness|instability|discomfort|irritation|soreness|tension)\s+recurs(?:\s+(during|with|after|before|under)\s+(.+))?$/i,
+  );
+
+  if (recurringSignalMatch) {
+    const side = recurringSignalMatch[1]?.trim();
+    const region = recurringSignalMatch[2].trim();
+    const signal = recurringSignalMatch[3].trim();
+    const preposition = recurringSignalMatch[4]?.trim();
+    const context = recurringSignalMatch[5]?.trim();
+    const base = `Recurring ${side ? `${side} ` : ""}${region} ${signal}`;
+    cleaned =
+      preposition && context ? `${base} ${preposition} ${context}` : base;
+  }
+
+  if (
+    /^(?:left|right)?\s*\w+\s+(?:pain|discomfort|tightness|stiffness)\s+recurs$/i.test(
+      cleaned,
+    )
+  ) {
+    return null;
+  }
+
+  if (cleaned.length > 110) return null;
 
   cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 
@@ -315,6 +380,17 @@ function normalizeMemoryCandidate(
   }
 
   return cleaned;
+}
+
+function canonicalMemoryKey(text: string): string {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/\b(recurring|persistent|ongoing|chronic)\b/g, "")
+    .replace(/\b(improves|worsens|reduces|restores)\b/g, "")
+    .replace(/\b(left|right)\b/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function buildMemoryStatementFromExamples(examples: string[]): string | null {
@@ -330,6 +406,9 @@ function buildMemoryStatementFromExamples(examples: string[]): string | null {
 
   const fillerPattern =
     /\b(thank you|thanks|that helped|this helped|great|okay|ok|yes|yep|yeah|got it|perfect|awesome|sounds good|i(?:'|’)ll let you know|let you know|makes sense)\b/i;
+
+  const assistantPattern =
+    /\b(your predecessor|what your predecessor|we figured out|let'?s move on|you don'?t have to use the word|that'?s something i figured out|this means|that means|what'?s happening is|the issue is|the problem is)\b/i;
 
   const symptomPattern =
     /\b(pain|tightness|tight|tension|strain|strained|stiffness|stiff|discomfort|irritation|irritated|aggravated|soreness|sore|catching|pinching|pulling|tugging|instability|unstable|weakness|weak)\b/i;
@@ -456,6 +535,10 @@ function buildMemoryStatementFromExamples(examples: string[]): string | null {
   }
 
   const usableExamples = cleanedExamples.filter((example) => {
+    if (example.length > 180) return false;
+    if ((example.match(/[.!?]/g) ?? []).length > 1) return false;
+    if (assistantPattern.test(example)) return false;
+
     if (
       fillerPattern.test(example) &&
       !symptomPattern.test(example) &&
@@ -489,14 +572,14 @@ function buildMemoryStatementFromExamples(examples: string[]): string | null {
 
       const outcome = /\bworse|aggravated\b/i.test(normalized)
         ? "made the movement worse"
-        : /\b(helped|improved|better|easier|relieved|reduced|less)\b/i.test(
+        : /\bhelped|improved|better|easier|relieved|reduced|less\b/i.test(
               normalized,
             )
           ? "improved the movement"
           : null;
 
       if (clause && outcome) {
-        return cleanStatementEnding(
+        return normalizeMemoryCandidate(
           `${clause.charAt(0).toUpperCase() + clause.slice(1)} ${outcome}`,
         );
       }
@@ -511,7 +594,7 @@ function buildMemoryStatementFromExamples(examples: string[]): string | null {
       const symptom = normalizeSymptomPhrase(symptomMatch[0].toLowerCase());
       const context = extractDurableContext(normalized);
 
-      return cleanStatementEnding(
+      return normalizeMemoryCandidate(
         context
           ? `${body.charAt(0).toUpperCase() + body.slice(1)} ${symptom} shows up ${context}`
           : `${body.charAt(0).toUpperCase() + body.slice(1)} ${symptom} shows up`,
@@ -519,7 +602,7 @@ function buildMemoryStatementFromExamples(examples: string[]): string | null {
     }
 
     if (mechanismPattern.test(normalized) && !fillerPattern.test(normalized)) {
-      return cleanStatementEnding(normalized);
+      return normalizeMemoryCandidate(cleanStatementEnding(normalized));
     }
   }
 
@@ -528,9 +611,9 @@ function buildMemoryStatementFromExamples(examples: string[]): string | null {
 
 function pushReadableStatement(target: string[], candidate: string | null) {
   const normalized = normalizeMemoryCandidate(candidate);
-  if (normalized && isValidMemoryCandidate(normalized)) {
-    target.push(normalized);
-  }
+  if (!normalized) return;
+  if (!isValidMemoryCandidate(normalized)) return;
+  target.push(normalized);
 }
 
 function uniqueStrings(items: string[]): string[] {
@@ -538,10 +621,16 @@ function uniqueStrings(items: string[]): string[] {
   const out: string[] = [];
 
   for (const item of items) {
-    const normalized = item.trim().toLowerCase();
+    if (!item || typeof item !== "string") continue;
+
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+
+    const normalized = canonicalMemoryKey(trimmed);
     if (!normalized || seen.has(normalized)) continue;
+
     seen.add(normalized);
-    out.push(item.trim());
+    out.push(trimmed);
   }
 
   return out;
@@ -579,7 +668,6 @@ function normalizeBodyRegion(text: string): string | null {
 
 function extractTextSources(
   recentTimeline: Array<{ summary: string | null }>,
-  recentCaseReviews: Array<{ reviewText?: string | null; structured?: any }>,
 ): string[] {
   const sources: string[] = [];
 
@@ -587,22 +675,28 @@ function extractTextSources(
     if (row.summary?.trim()) sources.push(row.summary.trim());
   }
 
-  for (const review of recentCaseReviews) {
-    if (review.reviewText?.trim()) sources.push(review.reviewText.trim());
+  return sources;
+}
 
+function extractStructuredReviewFacts(
+  recentCaseReviews: Array<{ structured?: any }>,
+): string[] {
+  const sources: string[] = [];
+
+  for (const review of recentCaseReviews) {
     const structured = (review.structured ?? {}) as any;
-    const structuredText = [
+    const parts = [
       typeof structured?.mechanism === "string" ? structured.mechanism : null,
       typeof structured?.constraint === "string" ? structured.constraint : null,
       typeof structured?.lever === "string" ? structured.lever : null,
       typeof structured?.outcomeDirection === "string"
         ? structured.outcomeDirection
         : null,
-    ]
-      .filter(Boolean)
-      .join(" ");
+    ].filter(Boolean);
 
-    if (structuredText.trim()) sources.push(structuredText.trim());
+    if (parts.length > 0) {
+      sources.push(parts.join(" ").trim());
+    }
   }
 
   return sources;
@@ -612,9 +706,7 @@ function buildContextualSignalStatement(text: string): string | null {
   return buildMemoryStatementFromExamples([text]);
 }
 
-function extractMechanismStatement(
-  text: string,
-): {
+function extractMechanismStatement(text: string): {
   statement: string;
   bucket: "confirmed" | "suspected" | "resolved";
 } | null {
@@ -623,6 +715,7 @@ function extractMechanismStatement(
 
   const mechanismLine = buildMemoryStatementFromExamples([input]);
   if (!mechanismLine) return null;
+  if (mechanismLine.length > 100) return null;
 
   if (
     /\b(resolved|went away|no longer|stopped showing up|fixed)\b/i.test(input)
@@ -661,6 +754,13 @@ function extractExperimentStatement(
 
   const statement = buildMemoryStatementFromExamples([input]);
   if (!statement) return null;
+  if (
+    !/\b(helped|improved|better|easier|relieved|reduced|less|worse|aggravated|hurt more|pain increased|made it worse|no change|same|didn'?t help|unchanged|neutral)\b/i.test(
+      input,
+    )
+  ) {
+    return null;
+  }
 
   if (/\b(no change|same|didn'?t help|unchanged|neutral)\b/i.test(input)) {
     return { bucket: "neutral", statement };
@@ -681,24 +781,26 @@ function extractExperimentStatement(
   return null;
 }
 
-function extractPerformanceStatement(
-  text: string,
-): {
+function extractPerformanceStatement(text: string): {
   bucket: "improvements" | "regressions" | "consistencyNotes";
   statement: string;
 } | null {
   const input = String(text ?? "").trim();
   if (!input) return null;
 
-  const cleaned = normalizeMemoryCandidate(input);
-  if (!cleaned) return null;
+  if ((input.match(/[.!?]/g) ?? []).length > 1 || input.length > 140) {
+    return null;
+  }
 
   if (
     /\b(improved|better|cleaner|smoother|more control|timing has improved)\b/i.test(
       input,
     )
   ) {
-    return { bucket: "improvements", statement: cleaned };
+    return {
+      bucket: "improvements",
+      statement: "Movement quality is improving.",
+    };
   }
 
   if (
@@ -706,7 +808,10 @@ function extractPerformanceStatement(
       input,
     )
   ) {
-    return { bucket: "regressions", statement: cleaned };
+    return {
+      bucket: "regressions",
+      statement: "Movement quality drops under fatigue or speed.",
+    };
   }
 
   if (
@@ -714,7 +819,10 @@ function extractPerformanceStatement(
       input,
     )
   ) {
-    return { bucket: "consistencyNotes", statement: cleaned };
+    return {
+      bucket: "consistencyNotes",
+      statement: "Movement quality is inconsistent across reps.",
+    };
   }
 
   return null;
@@ -871,12 +979,11 @@ export async function promoteTimelineToUserMemory(userId: string) {
     return unique(tokens).slice(0, 6).join(" ");
   }
 
-  function pushIfValid(target: string[], candidate: string) {
+  function pushIfValid(target: string[], candidate: string | null) {
     const normalized = normalizeMemoryCandidate(candidate);
-
-    if (normalized && isValidMemoryCandidate(normalized)) {
-      target.push(normalized);
-    }
+    if (!normalized) return;
+    if (!isValidMemoryCandidate(normalized)) return;
+    target.push(normalized);
   }
 
   type Evidence = {
@@ -886,6 +993,53 @@ export async function promoteTimelineToUserMemory(userId: string) {
     source: "timeline" | "case_review";
     weight: number;
   };
+
+  type BucketSupportMaps = {
+    pain: Map<string, number>;
+    confusion: Map<string, number>;
+    fear: Map<string, number>;
+    experimentSuccessful: Map<string, number>;
+    experimentFailed: Map<string, number>;
+    experimentNeutral: Map<string, number>;
+    performanceImprovement: Map<string, number>;
+    performanceRegression: Map<string, number>;
+    performanceConsistency: Map<string, number>;
+    mechanismConfirmed: Map<string, number>;
+    mechanismSuspected: Map<string, number>;
+    mechanismResolved: Map<string, number>;
+  };
+
+  function incrementSupport(
+    map: Map<string, number>,
+    candidate: string | null,
+  ) {
+    const normalized = normalizeMemoryCandidate(candidate ?? "");
+    if (!normalized) return;
+    if (!isValidMemoryCandidate(normalized)) return;
+
+    const key = canonicalMemoryKey(normalized);
+    if (!key) return;
+
+    map.set(key, (map.get(key) ?? 0) + 1);
+  }
+
+  function hasPromotionSupport(
+    candidate: string | null,
+    timelineSupport: Map<string, number>,
+    structuredSupport: Set<string>,
+  ): boolean {
+    const normalized = normalizeMemoryCandidate(candidate ?? "");
+    if (!normalized) return false;
+    if (!isValidMemoryCandidate(normalized)) return false;
+
+    const key = canonicalMemoryKey(normalized);
+    if (!key) return false;
+
+    const timelineCount = timelineSupport.get(key) ?? 0;
+    return (
+      timelineCount >= 2 || (timelineCount >= 1 && structuredSupport.has(key))
+    );
+  }
 
   const evidence: Evidence[] = [];
 
@@ -941,11 +1095,114 @@ export async function promoteTimelineToUserMemory(userId: string) {
 
   if (evidence.length === 0) return;
 
+  const timelineSourceTexts = recentTimeline
+    .map((row) => row.summary?.trim() ?? "")
+    .filter(Boolean);
+  const structuredSourceTexts = extractStructuredReviewFacts(
+    recentCaseReviews as any,
+  );
+
+  const supportMaps: BucketSupportMaps = {
+    pain: new Map(),
+    confusion: new Map(),
+    fear: new Map(),
+    experimentSuccessful: new Map(),
+    experimentFailed: new Map(),
+    experimentNeutral: new Map(),
+    performanceImprovement: new Map(),
+    performanceRegression: new Map(),
+    performanceConsistency: new Map(),
+    mechanismConfirmed: new Map(),
+    mechanismSuspected: new Map(),
+    mechanismResolved: new Map(),
+  };
+
+  for (const text of timelineSourceTexts) {
+    if (
+      /\b(pain|tightness|stiffness|strain|soreness|irritation)\b/i.test(text)
+    ) {
+      incrementSupport(supportMaps.pain, buildContextualSignalStatement(text));
+    }
+
+    if (
+      /\b(confused|unclear|not sure|can't tell|cannot tell|can't figure out|hard to tell|don't know what's happening)\b/i.test(
+        text,
+      )
+    ) {
+      incrementSupport(supportMaps.confusion, normalizeMemoryCandidate(text));
+    }
+
+    if (
+      /\b(hesitant|hesitation|afraid|fear|avoid|avoiding|reluctant|don't trust|do not trust|holding back)\b/i.test(
+        text,
+      )
+    ) {
+      incrementSupport(supportMaps.fear, normalizeMemoryCandidate(text));
+    }
+
+    const experiment = extractExperimentStatement(text);
+    if (experiment) {
+      if (experiment.bucket === "successful") {
+        incrementSupport(
+          supportMaps.experimentSuccessful,
+          experiment.statement,
+        );
+      } else if (experiment.bucket === "failed") {
+        incrementSupport(supportMaps.experimentFailed, experiment.statement);
+      } else {
+        incrementSupport(supportMaps.experimentNeutral, experiment.statement);
+      }
+    }
+
+    const performance = extractPerformanceStatement(text);
+    if (performance) {
+      if (performance.bucket === "improvements") {
+        incrementSupport(
+          supportMaps.performanceImprovement,
+          performance.statement,
+        );
+      } else if (performance.bucket === "regressions") {
+        incrementSupport(
+          supportMaps.performanceRegression,
+          performance.statement,
+        );
+      } else {
+        incrementSupport(
+          supportMaps.performanceConsistency,
+          performance.statement,
+        );
+      }
+    }
+
+    const mechanism = extractMechanismStatement(text);
+    if (mechanism) {
+      if (mechanism.bucket === "confirmed") {
+        incrementSupport(supportMaps.mechanismConfirmed, mechanism.statement);
+      } else if (mechanism.bucket === "suspected") {
+        incrementSupport(supportMaps.mechanismSuspected, mechanism.statement);
+      } else {
+        incrementSupport(supportMaps.mechanismResolved, mechanism.statement);
+      }
+    }
+  }
+
+  const structuredSupport = new Set<string>();
+
+  for (const text of structuredSourceTexts) {
+    const candidate = buildMemoryStatementFromExamples([text]);
+    const normalized = normalizeMemoryCandidate(candidate ?? "");
+    if (!normalized) continue;
+    if (!isValidMemoryCandidate(normalized)) continue;
+    structuredSupport.add(canonicalMemoryKey(normalized));
+  }
+
   const clusters: {
     label: string;
     tokens: string[];
     examples: string[];
     score: number;
+    timelineHits: number;
+    structuredHits: number;
   }[] = [];
 
   for (const item of evidence) {
@@ -965,12 +1222,19 @@ export async function promoteTimelineToUserMemory(userId: string) {
       cluster.examples.push(item.raw);
       cluster.tokens = unique([...cluster.tokens, ...item.tokens]);
       cluster.score += item.weight;
+      if (item.source === "timeline") {
+        cluster.timelineHits += 1;
+      } else {
+        cluster.structuredHits += 1;
+      }
     } else {
       clusters.push({
         label: buildLabel(item.tokens, item.normalized),
         tokens: [...item.tokens],
         examples: [item.raw],
         score: item.weight,
+        timelineHits: item.source === "timeline" ? 1 : 0,
+        structuredHits: item.source === "case_review" ? 1 : 0,
       });
     }
   }
@@ -980,6 +1244,8 @@ export async function promoteTimelineToUserMemory(userId: string) {
       label: buildLabel(cluster.tokens, cluster.label),
       examples: unique(cluster.examples),
       score: cluster.score,
+      timelineHits: cluster.timelineHits,
+      structuredHits: cluster.structuredHits,
     }))
     .sort((a, b) => b.score - a.score);
 
@@ -992,7 +1258,11 @@ export async function promoteTimelineToUserMemory(userId: string) {
 
   for (const cluster of rankedClusters.slice(0, 10)) {
     const memoryStatement = buildMemoryStatementFromExamples(cluster.examples);
-    if (memoryStatement) {
+    const hasSupport =
+      cluster.timelineHits >= 2 ||
+      (cluster.timelineHits >= 1 && cluster.structuredHits >= 1);
+
+    if (memoryStatement && hasSupport) {
       pushIfValid(themes, memoryStatement);
     }
   }
@@ -1001,17 +1271,20 @@ export async function promoteTimelineToUserMemory(userId: string) {
     const memoryStatement = buildMemoryStatementFromExamples(cluster.examples);
     if (!memoryStatement) continue;
 
-    if (cluster.score >= 3) {
+    const hasSupport =
+      cluster.timelineHits >= 2 ||
+      (cluster.timelineHits >= 1 && cluster.structuredHits >= 1);
+
+    if (!hasSupport) continue;
+
+    if (cluster.score >= 5) {
       pushIfValid(active, memoryStatement);
-    } else if (cluster.score >= 1) {
+    } else if (cluster.score >= 3) {
       pushIfValid(emerging, memoryStatement);
     }
   }
 
-  const sourceTexts = extractTextSources(
-    recentTimeline,
-    recentCaseReviews as any,
-  );
+  const sourceTexts = extractTextSources(recentTimeline);
 
   const existing = await db
     .select()
@@ -1093,19 +1366,39 @@ export async function promoteTimelineToUserMemory(userId: string) {
         /\b(?:i am|i'm)\s+(\d{1,2})\b|\b(\d{1,2})\s*(?:years?\s*old|yo)\b/i,
       );
       const age = Number(match?.[1] ?? match?.[2]);
-      if (Number.isFinite(age) && age > 0) identity.age = age;
+      if (Number.isFinite(age) && age >= 13 && age <= 90) identity.age = age;
     }
 
     if (!identity.height) {
       const match = text.match(
         /\b(\d\s*'\s*\d{1,2}(?:\"|”)?|\d\s*(?:ft|feet)\s*\d{1,2}|\d{2,3}\s*cm|1\.\d{1,2}\s*m)\b/i,
       );
-      if (match?.[1]) identity.height = match[1].replace(/\s+/g, " ").trim();
+      const height = match?.[1]?.replace(/\s+/g, " ").trim();
+      if (
+        height &&
+        /^(?:4|5|6|7)\s*'\s*\d{1,2}(?:\"|”)?$|^(?:4|5|6|7)\s*(?:ft|feet)\s*\d{1,2}$|^(?:140|1[5-9]\d|2[0-1]\d)\s*cm$|^1\.[4-9]\d\s*m$/i.test(
+          height,
+        )
+      ) {
+        identity.height = height;
+      }
     }
 
     if (!identity.weight) {
       const match = text.match(/\b(\d{2,3}\s*(?:lb|lbs|pounds|kg|kgs))\b/i);
-      if (match?.[1]) identity.weight = match[1].replace(/\s+/g, " ").trim();
+      const weight = match?.[1]?.replace(/\s+/g, " ").trim();
+      const poundsMatch = weight?.match(/^(\d{2,3})\s*(?:lb|lbs|pounds)$/i);
+      const kgMatch = weight?.match(/^(\d{2,3})\s*(?:kg|kgs)$/i);
+      const pounds = poundsMatch ? Number(poundsMatch[1]) : null;
+      const kilos = kgMatch ? Number(kgMatch[1]) : null;
+
+      if (
+        weight &&
+        ((pounds != null && pounds >= 80 && pounds <= 450) ||
+          (kilos != null && kilos >= 35 && kilos <= 205))
+      ) {
+        identity.weight = weight;
+      }
     }
 
     if (!identity.dominantHand) {
@@ -1175,9 +1468,9 @@ export async function promoteTimelineToUserMemory(userId: string) {
           .replace(/\s+/g, " ")
           .trim() + " affects movement mechanics",
       );
-      if (structureNote && isValidMemoryCandidate(structureNote)) {
-        anthropometry.notes.push(structureNote);
-      }
+      if (!structureNote) continue;
+      if (!isValidMemoryCandidate(structureNote)) continue;
+      anthropometry.notes.push(structureNote);
     }
 
     const region = normalizeBodyRegion(text);
@@ -1218,10 +1511,10 @@ export async function promoteTimelineToUserMemory(userId: string) {
     if (
       /\b(pain|tightness|stiffness|strain|soreness|irritation)\b/i.test(text)
     ) {
-      pushReadableStatement(
-        signalHistory.recurringPainSignals,
-        buildContextualSignalStatement(text),
-      );
+      const candidate = buildContextualSignalStatement(text);
+      if (hasPromotionSupport(candidate, supportMaps.pain, structuredSupport)) {
+        pushReadableStatement(signalHistory.recurringPainSignals, candidate);
+      }
     }
 
     if (
@@ -1229,10 +1522,15 @@ export async function promoteTimelineToUserMemory(userId: string) {
         text,
       )
     ) {
-      pushReadableStatement(
-        signalHistory.recurringConfusionSignals,
-        normalizeMemoryCandidate(text),
-      );
+      const candidate = normalizeMemoryCandidate(text);
+      if (
+        hasPromotionSupport(candidate, supportMaps.confusion, structuredSupport)
+      ) {
+        pushReadableStatement(
+          signalHistory.recurringConfusionSignals,
+          candidate,
+        );
+      }
     }
 
     if (
@@ -1240,36 +1538,73 @@ export async function promoteTimelineToUserMemory(userId: string) {
         text,
       )
     ) {
-      pushReadableStatement(
-        signalHistory.fearTriggers,
-        normalizeMemoryCandidate(text),
-      );
+      const candidate = normalizeMemoryCandidate(text);
+      if (hasPromotionSupport(candidate, supportMaps.fear, structuredSupport)) {
+        pushReadableStatement(signalHistory.fearTriggers, candidate);
+      }
     }
 
     const experiment = extractExperimentStatement(text);
     if (experiment) {
-      pushReadableStatement(
-        experiments[experiment.bucket],
-        experiment.statement,
-      );
+      const supportMap =
+        experiment.bucket === "successful"
+          ? supportMaps.experimentSuccessful
+          : experiment.bucket === "failed"
+            ? supportMaps.experimentFailed
+            : supportMaps.experimentNeutral;
+
+      if (
+        hasPromotionSupport(experiment.statement, supportMap, structuredSupport)
+      ) {
+        pushReadableStatement(
+          experiments[experiment.bucket],
+          experiment.statement,
+        );
+      }
     }
 
     const performance = extractPerformanceStatement(text);
     if (performance) {
-      pushReadableStatement(
-        performanceTrends[performance.bucket],
-        performance.statement,
-      );
+      const supportMap =
+        performance.bucket === "improvements"
+          ? supportMaps.performanceImprovement
+          : performance.bucket === "regressions"
+            ? supportMaps.performanceRegression
+            : supportMaps.performanceConsistency;
+
+      if (
+        hasPromotionSupport(
+          performance.statement,
+          supportMap,
+          structuredSupport,
+        )
+      ) {
+        pushReadableStatement(
+          performanceTrends[performance.bucket],
+          performance.statement,
+        );
+      }
     }
 
     const mechanism = extractMechanismStatement(text);
     if (mechanism) {
-      if (mechanism.bucket === "confirmed") {
-        pushReadableStatement(confirmedPatterns, mechanism.statement);
-      } else if (mechanism.bucket === "suspected") {
-        pushReadableStatement(suspectedPatterns, mechanism.statement);
-      } else if (mechanism.bucket === "resolved") {
-        pushReadableStatement(resolvedPatterns, mechanism.statement);
+      const supportMap =
+        mechanism.bucket === "confirmed"
+          ? supportMaps.mechanismConfirmed
+          : mechanism.bucket === "suspected"
+            ? supportMaps.mechanismSuspected
+            : supportMaps.mechanismResolved;
+
+      if (
+        hasPromotionSupport(mechanism.statement, supportMap, structuredSupport)
+      ) {
+        if (mechanism.bucket === "confirmed") {
+          pushReadableStatement(confirmedPatterns, mechanism.statement);
+        } else if (mechanism.bucket === "suspected") {
+          pushReadableStatement(suspectedPatterns, mechanism.statement);
+        } else if (mechanism.bucket === "resolved") {
+          pushReadableStatement(resolvedPatterns, mechanism.statement);
+        }
       }
     }
 
@@ -1279,28 +1614,16 @@ export async function promoteTimelineToUserMemory(userId: string) {
       )
     ) {
       overanalysisCount += 1;
-      pushReadableStatement(
-        cognitivePatterns.notes,
-        "Overthinking shows up during movement decisions.",
-      );
     }
 
     if (/\b(rush|rushing|too fast|hurry|skip the setup)\b/i.test(text)) {
       rushCount += 1;
-      pushReadableStatement(
-        cognitivePatterns.notes,
-        "Rushing the setup affects movement quality.",
-      );
     }
 
     if (
       /\b(hesitant|hesitation|afraid|fear|holding back|reluctant)\b/i.test(text)
     ) {
       hesitationCount += 1;
-      pushReadableStatement(
-        cognitivePatterns.notes,
-        "Hesitation shows up during execution.",
-      );
     }
   }
 
@@ -1310,6 +1633,27 @@ export async function promoteTimelineToUserMemory(userId: string) {
     cognitivePatterns.rushTendency || rushCount >= 2;
   cognitivePatterns.hesitationPattern =
     cognitivePatterns.hesitationPattern || hesitationCount >= 2;
+
+  if (overanalysisCount >= 2) {
+    pushReadableStatement(
+      cognitivePatterns.notes,
+      "Recurring overthinking disrupts movement decisions.",
+    );
+  }
+
+  if (rushCount >= 2) {
+    pushReadableStatement(
+      cognitivePatterns.notes,
+      "Rushing the setup degrades movement quality.",
+    );
+  }
+
+  if (hesitationCount >= 2) {
+    pushReadableStatement(
+      cognitivePatterns.notes,
+      "Hesitation interferes with committed movement execution.",
+    );
+  }
 
   const nextMemory = {
     ...current,
@@ -1418,19 +1762,5 @@ export async function promoteTimelineToUserMemory(userId: string) {
 }
 
 export async function rebuildAllUserMemory(): Promise<void> {
-  const rows = await db.select({ userId: userMemory.userId }).from(userMemory);
-
-  for (const row of rows) {
-    const userId = row.userId;
-
-    await db
-      .update(userMemory)
-      .set({
-        memory: createDefaultMemory(),
-        updatedAt: new Date(),
-      })
-      .where(eq(userMemory.userId, userId));
-
-    await promoteTimelineToUserMemory(userId);
-  }
+  return;
 }

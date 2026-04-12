@@ -4,8 +4,6 @@
 
 import { BASE_NARRATIVE_V2 } from "./prompts/base_narrative_v2_claude";
 import { CASE_REVIEW_NARRATIVE } from "./prompts/caseReviewNarrative";
-import { buildHistoricalStateReview } from "./prompts/historicalStateReview";
-import { buildHistoricalStateReviewInput } from "./builders/buildHistoricalStateReviewInput";
 
 import { isAuthenticated } from "./replit_integrations/auth";
 import type { Express, Request, Response } from "express";
@@ -1448,21 +1446,6 @@ export async function registerRoutes(
         .orderBy(desc(caseReviews.id))
         .limit(1);
 
-      const recentSummaries = await db
-        .select({
-          summary: conversations.summary,
-        })
-        .from(conversations)
-        .where(eq(conversations.userId, userId))
-        .orderBy(desc(conversations.createdAt), desc(conversations.id))
-        .limit(8);
-
-      const latestSummary =
-        recentSummaries.find((row) => {
-          const summary = normalizePreviewValue(row.summary);
-          return Boolean(summary && summary.length >= 35);
-        })?.summary ?? null;
-
       const activeCaseTitle = buildActiveCaseTitle(
         selectedCase?.movementContext,
         selectedCase?.activityType,
@@ -1470,10 +1453,6 @@ export async function registerRoutes(
       const currentFocusSnippet = extractPreviewSnippet(currentFocus, 160);
       const lastCaseReviewSnippet = extractPreviewSnippet(
         latestCaseReview?.reviewText,
-        160,
-      );
-      const lastHistoricalReviewSnippet = extractPreviewSnippet(
-        latestSummary,
         160,
       );
 
@@ -1486,14 +1465,12 @@ export async function registerRoutes(
         currentFocus: currentFocusSnippet,
         hasLatestCaseReview: Boolean(latestCaseReview?.reviewText),
         lastCaseReviewSnippet,
-        lastHistoricalReviewSnippet,
       });
 
       res.json({
         activeCaseTitle,
         currentFocus: currentFocusSnippet,
         lastCaseReviewSnippet,
-        lastHistoricalReviewSnippet,
       });
     } catch (err) {
       console.error("Failed to load dashboard preview:", err);
@@ -1540,29 +1517,6 @@ export async function registerRoutes(
       } catch (err) {
         console.error("Failed to fetch messages:", err);
         res.status(500).json({ error: "Failed to fetch messages" });
-      }
-    },
-  );
-
-  app.post(
-    "/api/historical-state-review",
-    isAuthenticated,
-    async (req: Request, res: Response) => {
-      try {
-        const authUser = req.user as any;
-        const userId = authUser?.claims?.sub;
-
-        if (!userId) {
-          return res.status(401).json({ error: "Unauthorized" });
-        }
-
-        const reviewInput = await buildHistoricalStateReviewInput(userId);
-        const historicalReview = await buildHistoricalStateReview(reviewInput);
-
-        res.json({ historicalReview });
-      } catch (err) {
-        console.error("Historical state review failed:", err);
-        res.status(500).json({ error: "Failed to generate historical review" });
       }
     },
   );

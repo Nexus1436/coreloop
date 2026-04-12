@@ -23,7 +23,6 @@ interface ChatViewProps {
     mode?: "auto" | "repeat",
   ) => Promise<void>;
   onCaseReview: () => void;
-  onHistoricalReview: () => void;
 }
 
 let msgCounter = 1000;
