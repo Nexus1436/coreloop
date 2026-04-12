@@ -734,12 +734,343 @@ function extractPreviewSnippet(
   return snippet;
 }
 
+function normalizeDashboardCandidate(value: string | null | undefined): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[*_`#>\-\[\]()'",.:;!?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isMechanismLikeText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  const explicitMechanismPatterns = [
+    /\bbecause\b/i,
+    /\bdue to\b/i,
+    /\bdriven by\b/i,
+    /\bcaused by\b/i,
+    /\bcoming from\b/i,
+    /\bhappening because\b/i,
+    /\bsuggests\b/i,
+    /\bindicates\b/i,
+    /\bmeans\b/i,
+    /\bpoints to\b/i,
+    /\bwhat'?s happening\b/i,
+    /\bthe issue is\b/i,
+    /\bthe problem is\b/i,
+  ];
+
+  const declarativeMechanismPatterns = [
+    /\bis breaking\b/i,
+    /\bis collapsing\b/i,
+    /\bis stalling\b/i,
+    /\bis opening too early\b/i,
+    /\bis shifting too early\b/i,
+    /\bis losing structure\b/i,
+    /\bis unstable\b/i,
+    /\bis dropping\b/i,
+    /\bis not holding\b/i,
+    /\bis over[-\s]?rotating\b/i,
+    /\bis under[-\s]?loading\b/i,
+    /\bis compensating\b/i,
+    /\bis taking over\b/i,
+    /\bis bearing the load\b/i,
+    /\bis driving the issue\b/i,
+    /\bbreaking before\b/i,
+    /\bopening before\b/i,
+    /\bshifting too early\b/i,
+    /\bstalling under\b/i,
+    /\bcollapsing under\b/i,
+    /\blosing structure once\b/i,
+    /\btrying to organize\b/i,
+  ];
+
+  const instructionPatterns = [
+    /^\s*focus on\b/i,
+    /^\s*try\b/i,
+    /^\s*make sure\b/i,
+    /^\s*keep\b/i,
+    /^\s*let\b/i,
+    /^\s*allow\b/i,
+    /^\s*shift\b/i,
+    /^\s*think about\b/i,
+    /^\s*the key is\b/i,
+    /^\s*this exercise\b/i,
+    /^\s*work on\b/i,
+  ];
+
+  if (instructionPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  return (
+    explicitMechanismPatterns.some((pattern) => pattern.test(text)) ||
+    declarativeMechanismPatterns.some((pattern) => pattern.test(text))
+  );
+}
+
+function isTestLikeText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  const testPatterns = [
+    /\bfocus on\b/i,
+    /\btry\b/i,
+    /\bmake sure\b/i,
+    /\bkeep\b/i,
+    /\blet\b/i,
+    /\ballow\b/i,
+    /\bshift\b/i,
+    /\bthink about\b/i,
+  ];
+
+  const diagnosisPatterns = [
+    /\bbecause\b/i,
+    /\bdue to\b/i,
+    /\bdriven by\b/i,
+    /\bcaused by\b/i,
+    /\bcoming from\b/i,
+    /\bhappening because\b/i,
+    /\bsuggests\b/i,
+    /\bindicates\b/i,
+    /\bmeans\b/i,
+    /\bpoints to\b/i,
+    /\bwhat'?s happening\b/i,
+    /\bthe issue is\b/i,
+    /\bthe problem is\b/i,
+  ];
+
+  if (!testPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  return !diagnosisPatterns.some((pattern) => pattern.test(text));
+}
+
+function isGenericCoachingFillerText(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  const fillerPatterns = [
+    /^\s*the key is\b/i,
+    /^\s*this matters\b/i,
+    /^\s*that matters\b/i,
+    /^\s*it'?s important\b/i,
+    /^\s*it is important\b/i,
+    /^\s*that should help\b/i,
+    /^\s*this should help\b/i,
+    /^\s*stay aware of\b/i,
+    /^\s*be aware of\b/i,
+    /^\s*consistency\b/i,
+    /^\s*this exercise\b/i,
+    /\baligns with\b/i,
+    /\bwhat you need\b/i,
+  ];
+
+  return fillerPatterns.some((pattern) => pattern.test(text));
+}
+
+function isStrongHypothesisCandidate(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+  if (text.length < 40) return false;
+  if (isGenericCoachingFillerText(text)) return false;
+  if (isTestLikeText(text)) return false;
+  if (!isMechanismLikeText(text)) return false;
+
+  return true;
+}
+
+function isStrongAdjustmentCandidate(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+  if (text.length < 30) return false;
+  if (isGenericCoachingFillerText(text)) return false;
+  if (!isTestLikeText(text)) return false;
+  if (isMechanismLikeText(text)) return false;
+
+  const executionVerbPatterns = [
+    /\bfocus\b/i,
+    /\btry\b/i,
+    /\bmake sure\b/i,
+    /\bkeep\b/i,
+    /\blet\b/i,
+    /\ballow\b/i,
+    /\bshift\b/i,
+    /\bthink about\b/i,
+    /\bload\b/i,
+    /\brelax\b/i,
+    /\bdrive\b/i,
+    /\bcontrol\b/i,
+    /\brotate\b/i,
+    /\bstack\b/i,
+    /\bmove\b/i,
+    /\bpress\b/i,
+    /\bpull\b/i,
+    /\bpush\b/i,
+    /\bhinge\b/i,
+    /\bbrace\b/i,
+    /\bstabilize\b/i,
+    /\bstabilise\b/i,
+    /\bhold\b/i,
+    /\bclear\b/i,
+    /\bstay\b/i,
+  ];
+
+  return executionVerbPatterns.some((pattern) => pattern.test(text));
+}
+
+function isLowSignalShiftText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  return (
+    /\bi found (?:an?|some)\b/i.test(text) ||
+    /\bi watched\b/i.test(text) ||
+    /\bi saw\b.*\bonline\b/i.test(text) ||
+    /\bi found\b.*\bonline\b/i.test(text) ||
+    /\bi came across\b/i.test(text) ||
+    /\bon youtube\b/i.test(text) ||
+    /\bin a video\b/i.test(text) ||
+    /\bin an article\b/i.test(text)
+  );
+}
+
+function areEquivalentDashboardCandidates(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftNormalized = normalizeDashboardCandidate(left);
+  const rightNormalized = normalizeDashboardCandidate(right);
+
+  return leftNormalized !== "" && leftNormalized === rightNormalized;
+}
+
+function cleanDashboardTitlePart(
+  value: string | null | undefined,
+): string | null {
+  const normalized = normalizePreviewValue(value);
+  if (!normalized) return null;
+
+  const cleaned = normalized.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+
+  const weakExactLabels = new Set([
+    "general movement",
+    "movement",
+    "issue",
+    "problem",
+    "pain",
+    "feels off",
+    "something is off",
+    "body feels off",
+    "not right",
+    "bad",
+    "unspecified",
+  ]);
+
+  const cleanedKey = normalizeCaseKey(cleaned);
+  if (weakExactLabels.has(cleanedKey)) return null;
+
+  const weakSentenceFragmentPatterns = [
+    /^(?:my\s+)?body\s+felt\s+(?:weird|off|wrong)$/i,
+    /^(?:something|it)\s+(?:was|felt|is)\s+(?:wrong|off|bad)$/i,
+    /^(?:my\s+)?[a-z\s]+?\s+was\s+bad$/i,
+    /^(?:it|this)\s+felt\s+off$/i,
+    /^(?:my\s+)?[a-z\s]+?\s+felt\s+(?:weird|off|wrong)$/i,
+  ];
+
+  if (weakSentenceFragmentPatterns.some((pattern) => pattern.test(cleaned))) {
+    return null;
+  }
+
+  return cleaned;
+}
+
+function getDisplayableMovementContext(
+  value: string | null | undefined,
+): string | null {
+  const cleaned = cleanDashboardTitlePart(value);
+  if (!cleaned) return null;
+
+  const validMovementLabels = new Set([
+    "hip",
+    "back",
+    "knee",
+    "ankle",
+    "shoulder",
+    "serve",
+    "swing",
+    "hinge",
+    "lunge",
+    "deadlift",
+  ]);
+
+  const lowInformationMovementLabels = new Set([
+    "movement",
+    "issue",
+    "problem",
+    "pain",
+    "bad",
+  ]);
+
+  if (lowInformationMovementLabels.has(normalizeCaseKey(cleaned))) {
+    return null;
+  }
+
+  if (
+    cleaned.length <= 3 &&
+    !validMovementLabels.has(normalizeCaseKey(cleaned))
+  ) {
+    return null;
+  }
+
+  return cleaned;
+}
+
+function getDisplayableActivityType(
+  value: string | null | undefined,
+): string | null {
+  const cleaned = cleanDashboardTitlePart(value);
+  if (!cleaned) return null;
+
+  const validActivityLabels = new Set([
+    "hip",
+    "back",
+    "knee",
+    "ankle",
+    "shoulder",
+    "serve",
+    "swing",
+    "hinge",
+    "lunge",
+    "deadlift",
+  ]);
+
+  if (
+    cleaned.length <= 3 &&
+    !validActivityLabels.has(normalizeCaseKey(cleaned))
+  ) {
+    return null;
+  }
+
+  return cleaned;
+}
+
 function buildActiveCaseTitle(
   movementContext: string | null | undefined,
   activityType: string | null | undefined,
 ): string | null {
-  const movement = normalizePreviewValue(movementContext);
-  const activity = normalizePreviewValue(activityType);
+  const movement = getDisplayableMovementContext(movementContext);
+  const activity = getDisplayableActivityType(activityType);
 
   if (movement && activity) return `${movement} — ${activity}`;
   return movement ?? activity ?? null;
@@ -1406,10 +1737,30 @@ export async function registerRoutes(
         recentCases[0] ??
         null;
 
-      let currentFocus: string | null = null;
+      let latestAdjustment:
+        | {
+            mechanicalFocus: string | null;
+            cue: string | null;
+          }
+        | undefined;
+      let latestHypothesis:
+        | {
+            hypothesis: string | null;
+          }
+        | undefined;
+      let latestOutcome:
+        | {
+            userFeedback: string | null;
+          }
+        | undefined;
+      let latestSignal:
+        | {
+            description: string | null;
+          }
+        | undefined;
 
       if (selectedCase) {
-        const [latestAdjustment] = await db
+        [latestAdjustment] = await db
           .select({
             mechanicalFocus: caseAdjustments.mechanicalFocus,
             cue: caseAdjustments.cue,
@@ -1419,22 +1770,32 @@ export async function registerRoutes(
           .orderBy(desc(caseAdjustments.id))
           .limit(1);
 
-        currentFocus =
-          normalizePreviewValue(latestAdjustment?.mechanicalFocus) ??
-          normalizePreviewValue(latestAdjustment?.cue);
+        [latestHypothesis] = await db
+          .select({
+            hypothesis: caseHypotheses.hypothesis,
+          })
+          .from(caseHypotheses)
+          .where(eq(caseHypotheses.caseId, selectedCase.id))
+          .orderBy(desc(caseHypotheses.id))
+          .limit(1);
 
-        if (!currentFocus) {
-          const [latestHypothesis] = await db
-            .select({
-              hypothesis: caseHypotheses.hypothesis,
-            })
-            .from(caseHypotheses)
-            .where(eq(caseHypotheses.caseId, selectedCase.id))
-            .orderBy(desc(caseHypotheses.id))
-            .limit(1);
+        [latestOutcome] = await db
+          .select({
+            userFeedback: caseOutcomes.userFeedback,
+          })
+          .from(caseOutcomes)
+          .where(eq(caseOutcomes.caseId, selectedCase.id))
+          .orderBy(desc(caseOutcomes.id))
+          .limit(1);
 
-          currentFocus = normalizePreviewValue(latestHypothesis?.hypothesis);
-        }
+        [latestSignal] = await db
+          .select({
+            description: caseSignals.description,
+          })
+          .from(caseSignals)
+          .where(eq(caseSignals.caseId, selectedCase.id))
+          .orderBy(desc(caseSignals.id))
+          .limit(1);
       }
 
       const [latestCaseReview] = await db
@@ -1450,10 +1811,84 @@ export async function registerRoutes(
         selectedCase?.movementContext,
         selectedCase?.activityType,
       );
-      const currentFocusSnippet = extractPreviewSnippet(currentFocus, 160);
+      const investigationState = !selectedCase
+        ? null
+        : String(selectedCase.status ?? "")
+              .trim()
+              .toLowerCase() === "resolved"
+          ? "Resolved"
+          : latestOutcome
+            ? "Testing"
+            : latestAdjustment
+              ? "Testing"
+              : latestHypothesis
+                ? "Narrowing"
+                : "Open";
+      const mechanismSourceCandidates = [
+        normalizePreviewValue(latestHypothesis?.hypothesis),
+        normalizePreviewValue(latestAdjustment?.mechanicalFocus),
+      ];
+      const selectedMechanismSource =
+        mechanismSourceCandidates.find((candidate) =>
+          isMechanismLikeText(candidate),
+        ) ?? null;
+      const currentMechanism = extractPreviewSnippet(
+        selectedMechanismSource,
+        220,
+      );
+
+      const testSourceCandidates = [
+        normalizePreviewValue(latestAdjustment?.cue),
+        normalizePreviewValue(latestAdjustment?.mechanicalFocus),
+      ].filter((candidate): candidate is string => Boolean(candidate));
+      const selectedTestSource =
+        testSourceCandidates.find(
+          (candidate) =>
+            isTestLikeText(candidate) &&
+            !areEquivalentDashboardCandidates(
+              candidate,
+              selectedMechanismSource,
+            ),
+        ) ?? null;
+      const currentTest = extractPreviewSnippet(selectedTestSource, 220);
+
+      const shiftSourceCandidates = [
+        {
+          value: normalizePreviewValue(latestAdjustment?.cue),
+          allowLowSignalFallback: false,
+        },
+        {
+          value: normalizePreviewValue(latestHypothesis?.hypothesis),
+          allowLowSignalFallback: false,
+        },
+        {
+          value: normalizePreviewValue(latestOutcome?.userFeedback),
+          allowLowSignalFallback: false,
+        },
+        {
+          value: normalizePreviewValue(latestSignal?.description),
+          allowLowSignalFallback: true,
+        },
+      ].filter(
+        (
+          candidate,
+        ): candidate is {
+          value: string;
+          allowLowSignalFallback: boolean;
+        } => Boolean(candidate.value),
+      );
+      const selectedShiftSource =
+        shiftSourceCandidates.find(
+          (candidate) => !isLowSignalShiftText(candidate.value),
+        )?.value ??
+        shiftSourceCandidates.find(
+          (candidate) => candidate.allowLowSignalFallback,
+        )?.value ??
+        null;
+      const lastShift = extractPreviewSnippet(selectedShiftSource, 220);
       const lastCaseReviewSnippet = extractPreviewSnippet(
         latestCaseReview?.reviewText,
-        160,
+        220,
       );
 
       console.log("DASHBOARD DEBUG:", {
@@ -1462,14 +1897,20 @@ export async function registerRoutes(
         movementContext: selectedCase?.movementContext ?? null,
         activityType: selectedCase?.activityType ?? null,
         activeCaseTitle,
-        currentFocus: currentFocusSnippet,
+        investigationState,
+        currentMechanism,
+        currentTest,
+        lastShift,
         hasLatestCaseReview: Boolean(latestCaseReview?.reviewText),
         lastCaseReviewSnippet,
       });
 
       res.json({
         activeCaseTitle,
-        currentFocus: currentFocusSnippet,
+        investigationState,
+        currentMechanism,
+        currentTest,
+        lastShift,
         lastCaseReviewSnippet,
       });
     } catch (err) {
@@ -2166,6 +2607,42 @@ ${toneGuidanceBlock}
                 content: `
 That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative and the Interloop response arc.
 
+=== CRITICAL MECHANISM ENFORCEMENT ===
+
+All explanations must resolve to a physical or mechanical cause.
+
+Do NOT say:
+- this is working
+- this is aligning well
+- this is a good sign
+- this means you're doing it right
+- this suggests progress
+
+Do NOT use generic interpretation language.
+
+Instead:
+- identify what is physically happening in the body
+- describe what is breaking, collapsing, shifting, or compensating
+- explain the mechanism directly
+
+If the response does not contain a clear mechanical explanation, it is invalid and must be rewritten.
+
+When the user reports improvement:
+- translate it into a confirmed mechanism
+- explain WHY it improved physically
+
+Do not stop at success language.
+
+=== LANGUAGE CONSTRAINT ===
+
+Reject phrases like:
+- "the key is"
+- "this is working"
+- "this aligns well"
+- "this is a good sign"
+
+These are invalid outputs and must not appear.
+
 Required response behavior:
 - Keep one dominant mechanism only
 - Do not reopen multiple explanations or branches
@@ -2307,9 +2784,34 @@ Produce the corrected response now.
               /\bthis is driven by\b/i,
               /\bdriven by\b/i,
               /\bwhat'?s happening is\b/i,
+              /\bis breaking\b/i,
+              /\bis collapsing\b/i,
+              /\bis stalling\b/i,
+              /\bis opening too early\b/i,
+              /\bis shifting too early\b/i,
+              /\bis losing structure\b/i,
+              /\bis unstable\b/i,
+              /\bis dropping\b/i,
+              /\bis not holding\b/i,
+              /\bis over[-\s]?rotating\b/i,
+              /\bis under[-\s]?loading\b/i,
+              /\bis compensating\b/i,
+              /\bis taking over\b/i,
+              /\bis bearing the load\b/i,
+              /\bis driving the issue\b/i,
+              /\bbreaking before\b/i,
+              /\bopening before\b/i,
+              /\bshifting too early\b/i,
+              /\bstalling under\b/i,
+              /\bcollapsing under\b/i,
+              /\blosing structure once\b/i,
+              /\btrying to organize\b/i,
             ]);
 
-            if (hypothesisSentence && hypothesisSentence.trim().length > 40) {
+            if (
+              hypothesisSentence &&
+              isStrongHypothesisCandidate(hypothesisSentence)
+            ) {
               await db.insert(caseHypotheses).values({
                 caseId: currentOpenCase.id,
                 hypothesis: hypothesisSentence,
@@ -2327,16 +2829,13 @@ Produce the corrected response now.
               /\bthink about\b/i,
             ]);
 
-            const hasExecutionVerb =
-              adjustmentSentence != null &&
-              /\b(focus|shift|load|relax|drive|keep|allow|control|rotate|stack|move|press|pull|push|hinge|brace|stabilize|stabilise)\b/i.test(
-                adjustmentSentence,
-              );
-
             if (
               adjustmentSentence &&
-              adjustmentSentence.trim().length > 30 &&
-              hasExecutionVerb
+              isStrongAdjustmentCandidate(adjustmentSentence) &&
+              !areEquivalentDashboardCandidates(
+                adjustmentSentence,
+                hypothesisSentence,
+              )
             ) {
               await db.insert(caseAdjustments).values({
                 caseId: currentOpenCase.id,

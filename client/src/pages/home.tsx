@@ -20,7 +20,10 @@ export interface ChatMessage {
 
 type DashboardData = {
   activeCaseTitle: string | null;
-  currentFocus: string | null;
+  investigationState: string | null;
+  currentMechanism: string | null;
+  currentTest: string | null;
+  lastShift: string | null;
   lastCaseReviewSnippet: string | null;
 };
 
@@ -41,7 +44,10 @@ const defaultSettings: InterloopSettingsValues = {
 
 const defaultDashboardData: DashboardData = {
   activeCaseTitle: null,
-  currentFocus: null,
+  investigationState: null,
+  currentMechanism: null,
+  currentTest: null,
+  lastShift: null,
   lastCaseReviewSnippet: null,
 };
 
@@ -312,7 +318,10 @@ export default function Home() {
 
       setDashboardData({
         activeCaseTitle: data?.activeCaseTitle ?? null,
-        currentFocus: data?.currentFocus ?? null,
+        investigationState: data?.investigationState ?? null,
+        currentMechanism: data?.currentMechanism ?? null,
+        currentTest: data?.currentTest ?? null,
+        lastShift: data?.lastShift ?? null,
         lastCaseReviewSnippet: data?.lastCaseReviewSnippet ?? null,
       });
     } catch (err) {
@@ -655,8 +664,24 @@ export default function Home() {
       value: dashboardData.activeCaseTitle,
     },
     {
-      label: "Current Focus",
-      value: dashboardData.currentFocus,
+      label: "Investigation State",
+      value: dashboardData.investigationState,
+    },
+    {
+      label: "Current Mechanism",
+      value: dashboardData.currentMechanism,
+    },
+    {
+      label: "Current Test",
+      value: dashboardData.currentTest,
+    },
+    {
+      label: "Last Shift",
+      value: dashboardData.lastShift,
+    },
+    {
+      label: "Last Case Review",
+      value: dashboardData.lastCaseReviewSnippet,
     },
   ].filter((row) => Boolean(row.value));
 
@@ -816,7 +841,6 @@ export default function Home() {
               playbackLabel={playbackLabel}
               onSpeakText={speakText}
               onCaseReview={() => {}}
-              onHistoricalReview={() => {}}
             />
           </>
         ) : (
