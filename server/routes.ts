@@ -4,6 +4,8 @@
 
 import { BASE_NARRATIVE_V2 } from "./prompts/base_narrative_v2_claude";
 import { CASE_REVIEW_NARRATIVE } from "./prompts/caseReviewNarrative";
+import { buildHistoricalStateReview } from "./prompts/historicalStateReview";
+import { buildHistoricalStateReviewInput } from "./builders/buildHistoricalStateReviewInput";
 
 import { isAuthenticated } from "./replit_integrations/auth";
 import type { Express, Request, Response } from "express";
@@ -31,6 +33,7 @@ import {
 
 import {
   getMemory,
+  updateMemory,
   writeTimelineEntry,
   writeCaseReview,
   promoteTimelineToUserMemory,
@@ -58,30 +61,14 @@ const elevenlabs = new ElevenLabsClient({
   apiKey: process.env.ELEVENLABS_API_KEY!,
 });
 
-const INTERLOOP_TTS_CONFIG = {
-  female: {
-    voiceId: "RjWJXbF7h9KPSuGnLo5x",
-    modelId: "eleven_multilingual_v2",
-    settings: {
-      stability: 0.36,
-      similarity_boost: 0.85,
-      style: 0.18,
-      use_speaker_boost: true,
-      speed: 1.08,
-    },
-  },
-  male: {
-    voiceId: "3WZjQ5NUrKH37Zw6Vgp7",
-    modelId: "eleven_multilingual_v2",
-    settings: {
-      stability: 0.38,
-      similarity_boost: 0.85,
-      style: 0.15,
-      use_speaker_boost: true,
-      speed: 1.06,
-    },
-  },
+const INTERLOOP_SETTINGS_VOICE_IDS = {
+  female_pilates: "VI2qcJpxMy5M6WFvpIrh",
+  female_yoga: "RjWJXbF7h9KPSuGnLo5x",
+  male_coach: "GwiNi5XZx3ydWAkkDpoQ",
+  male_pt: "3WZjQ5NUrKH37Zw6Vgp7",
 } as const;
+
+type PersistedInterloopVoice = keyof typeof INTERLOOP_SETTINGS_VOICE_IDS;
 
 // ==============================
 // UTILITY: TEXT CLAMP
@@ -98,6 +85,126 @@ function normalizeStoredFirstName(value: unknown): string | null {
   const trimmed = value.trim();
   if (!trimmed || /^null$/i.test(trimmed)) return null;
   return trimmed;
+}
+
+type PersistedInterloopSettings = {
+  name: string;
+  age: string;
+  height: string;
+  weight: string;
+  primaryActivity: string;
+  dominantHand: string;
+  activityLevel: string;
+  competitionLevel: string;
+  voice: PersistedInterloopVoice;
+  completed: boolean;
+};
+
+function normalizeSettingsText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeSettingsVoice(value: unknown): PersistedInterloopVoice {
+  if (typeof value === "string" && value in INTERLOOP_SETTINGS_VOICE_IDS) {
+    return value as PersistedInterloopVoice;
+  }
+
+  return "male_coach";
+}
+
+function normalizeCompletedFlag(value: unknown): boolean {
+  return value === true;
+}
+
+function normalizeAgeForMemory(value: unknown): number | null {
+  const normalized = normalizeSettingsText(value);
+  if (!normalized) return null;
+
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return null;
+
+  return parsed;
+}
+
+function buildPersistedSettings(
+  firstName: unknown,
+  memory: Awaited<ReturnType<typeof getMemory>>,
+): PersistedInterloopSettings {
+  const memoryWithPreferences = memory as typeof memory & {
+    preferences?: {
+      voice?: unknown;
+      activityLevel?: unknown;
+      setupCompleted?: unknown;
+    };
+  };
+
+  return {
+    name: normalizeStoredFirstName(firstName) ?? "",
+    age:
+      typeof memory.identity.age === "number" &&
+      Number.isFinite(memory.identity.age)
+        ? String(memory.identity.age)
+        : "",
+    height: normalizeSettingsText(memory.identity.height),
+    weight: normalizeSettingsText(memory.identity.weight),
+    primaryActivity: normalizeSettingsText(memory.sportContext.primarySport),
+    dominantHand: normalizeSettingsText(memory.identity.dominantHand),
+    activityLevel: normalizeSettingsText(
+      memoryWithPreferences.preferences?.activityLevel,
+    ),
+    competitionLevel: normalizeSettingsText(
+      memory.sportContext.competitionLevel,
+    ),
+    voice: normalizeSettingsVoice(memoryWithPreferences.preferences?.voice),
+    completed: normalizeCompletedFlag(
+      memoryWithPreferences.preferences?.setupCompleted,
+    ),
+  };
+}
+
+async function ensureUserRecord(userId: string, authUser: any) {
+  let [existingUser] = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  if (!existingUser) {
+    await db
+      .insert(users)
+      .values({
+        id: userId,
+        email: authUser?.claims?.email ?? null,
+        firstName: null,
+      })
+      .onConflictDoUpdate({
+        target: users.id,
+        set: {
+          email: authUser?.claims?.email ?? null,
+        },
+      });
+
+    [existingUser] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+  } else {
+    await db
+      .update(users)
+      .set({
+        email: authUser?.claims?.email ?? null,
+      })
+      .where(eq(users.id, userId));
+
+    [existingUser] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+  }
+
+  return existingUser;
 }
 
 function formatUnknownError(err: unknown): { error: string; stack?: string } {
@@ -565,115 +672,6 @@ function detectRecentUnansweredProfileAsk(
   return null;
 }
 
-function getOrganicProfileOnboardingGuidanceBlock(
-  currentUserText: string,
-  recentMessages: Array<{ role: string; content: string }>,
-  memoryBlock: string,
-): string {
-  const recentConversationText = recentMessages
-    .slice(-12)
-    .map((m) => String(m.content ?? "").trim())
-    .filter(Boolean)
-    .join("\n");
-
-  const contextText =
-    `${memoryBlock}\n${recentConversationText}\n${currentUserText}`.trim();
-
-  const unresolvedRecentAsk = detectRecentUnansweredProfileAsk(recentMessages);
-  const shouldDefer = isStrongLiveInvestigationTurn(
-    currentUserText,
-    recentMessages,
-  );
-
-  const profileChecks: Array<{
-    key: ProfileFieldKey;
-    known: boolean;
-    label: string;
-    naturalQuestion: string;
-  }> = [
-    {
-      key: "primary_sport",
-      known: hasPrimarySportProfileContext(contextText),
-      label: "primary sport",
-      naturalQuestion: "What activity is this showing up in most?",
-    },
-    {
-      key: "dominant_hand",
-      known: hasDominantHandProfileContext(contextText),
-      label: "dominant hand",
-      naturalQuestion: "Which side do you naturally lead with?",
-    },
-    {
-      key: "competition_level",
-      known: hasCompetitionLevelProfileContext(contextText),
-      label: "competition level",
-      naturalQuestion:
-        "Is that more recreational or are you competing seriously?",
-    },
-    {
-      key: "activity_level",
-      known: hasActivityLevelProfileContext(contextText),
-      label: "activity level",
-      naturalQuestion: "How often are you doing it right now?",
-    },
-    {
-      key: "age",
-      known: hasAgeProfileContext(contextText),
-      label: "age",
-      naturalQuestion: "How old are you?",
-    },
-    {
-      key: "height",
-      known: hasHeightProfileContext(contextText),
-      label: "height",
-      naturalQuestion: "How tall are you?",
-    },
-    {
-      key: "weight",
-      known: hasWeightProfileContext(contextText),
-      label: "weight",
-      naturalQuestion: "Roughly what do you weigh right now?",
-    },
-    {
-      key: "gender",
-      known: hasGenderProfileContext(contextText),
-      label: "gender",
-      naturalQuestion:
-        "How do you want me to think about sex differences here?",
-    },
-  ];
-
-  const missingFields = profileChecks.filter((entry) => !entry.known);
-  if (missingFields.length === 0) return "";
-
-  const nextMissing = missingFields[0];
-
-  return `
-=== ORGANIC PROFILE ONBOARDING ===
-This is a low-visibility profile layer, not a setup flow.
-Only these profile fields are in scope: primary sport, dominant hand, competition level, activity level, age, height, weight, gender.
-A field counts as known only when there is clear value-level evidence in durable memory, recent conversation, or the current user message.
-If the evidence is vague, topical, or indirect, treat the field as still missing.
-Missing profile fields in priority order: ${missingFields.map((field) => field.label).join(", ")}.
-Highest-priority missing field right now: ${nextMissing.label}.
-Strong live investigation this turn: ${shouldDefer ? "yes" : "no"}.
-Recent unanswered profile ask still open: ${unresolvedRecentAsk ?? "none"}.
-
-Rules:
-- Mechanism-first reasoning stays primary.
-- Do not ask any profile question if the current turn is a strong live investigation turn.
-- Do not ask any profile question if a recent profile ask is still unanswered.
-- At most one profile onboarding question may appear in a response.
-- Never ask multiple profile fields in one turn.
-- Never sound like intake, admin, a form, or a checklist.
-- Only ask if it naturally fits and helps ground future reasoning.
-- If a stronger mechanism question exists, use that instead and defer profile onboarding.
-
-If and only if a natural profile question truly fits this turn, prefer this style for the current highest-priority missing field:
-"${nextMissing.naturalQuestion}"
-`;
-}
-
 function isOpenCaseStatus(status: string | null | undefined): boolean {
   if (status == null) return true;
   return /open|active|current/i.test(String(status));
@@ -701,84 +699,6 @@ function qualifiesForTimelineSignal(text: string): boolean {
   return /pain|painful|tight|tightness|hurt|hurts|hurting|issue|problem|tweak|tweaked|strain|strained|straining|tension|discomfort|catching|catch|pinch|pinching|pinched|irritated|irritation|sore|soreness|stiff|stiffness|aggravated|aggravating|flare|flaring up|acting up|feels weird|feels wrong|not comfortable|uncomfortable|not sitting right|pulling|tugging|ache|aching|doesn't feel right|doesnt feel right|can't|cannot|struggle|confused|off|feels off|not right|not working|can't rotate|cant rotate|can't load|cant load|timing is off|timing feels off|mechanics feel wrong|movement is weird|doesn't feel stable|not stable|unstable|out of position|can't control|cant control|not coordinated|coordination is off|out of sync|awkward|something is off|rotation feels off|trunk rotation feels wrong/i.test(
     text.trim(),
   );
-}
-
-// ==============================
-// NAME EXTRACTION HELPERS
-// ==============================
-
-function extractConfidentExplicitName(text: string): string | null {
-  const match = text.match(
-    /\b(?:my name is|call me|i am|i'm|this is|it'?s)\s+([A-Za-z]{2,20})\b/i,
-  );
-  if (!match?.[1]) return null;
-
-  const raw = match[1];
-  const normalized = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
-
-  const blacklist = new Set([
-    "doing",
-    "going",
-    "trying",
-    "working",
-    "thinking",
-    "me",
-    "that",
-    "this",
-    "it",
-    "here",
-    "there",
-    "something",
-    "nothing",
-    "anything",
-    "everything",
-    "today",
-    "tomorrow",
-    "yesterday",
-  ]);
-
-  if (blacklist.has(normalized.toLowerCase())) return null;
-
-  return normalized;
-}
-
-function extractStandaloneNameReply(text: string): string | null {
-  const trimmed = text.trim();
-
-  if (!/^[A-Za-z]{2,20}$/.test(trimmed)) return null;
-
-  const normalized =
-    trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
-
-  const blacklist = new Set([
-    "Hi",
-    "Hey",
-    "Hello",
-    "Yo",
-    "Sup",
-    "Yes",
-    "No",
-    "Okay",
-    "Ok",
-    "Sure",
-    "Thanks",
-    "Thank",
-    "Please",
-    "Maybe",
-    "Doing",
-    "Going",
-    "Trying",
-    "Working",
-    "Thinking",
-  ]);
-
-  if (blacklist.has(normalized)) return null;
-
-  return normalized;
-}
-
-function askedWhatShouldICallYou(text: string): boolean {
-  return /what should i call you\??/i.test(text);
 }
 
 // ==============================
@@ -1150,6 +1070,98 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  app.get("/api/settings", isAuthenticated, async (req: any, res: any) => {
+    try {
+      const authUser = req.user as any;
+      const userId = authUser?.claims?.sub;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const userRecord = await ensureUserRecord(userId, authUser);
+      const memory = await getMemory(userId);
+
+      res.json(buildPersistedSettings(userRecord?.firstName, memory));
+    } catch (err) {
+      console.error("Failed to load settings:", err);
+      res.status(500).json({ error: "Failed to load settings" });
+    }
+  });
+
+  app.post("/api/settings", isAuthenticated, async (req: any, res: any) => {
+    try {
+      const authUser = req.user as any;
+      const userId = authUser?.claims?.sub;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      await ensureUserRecord(userId, authUser);
+
+      const body = req.body ?? {};
+
+      const name = normalizeStoredFirstName(body.name);
+      const age = normalizeAgeForMemory(body.age);
+      const height = normalizeSettingsText(body.height) || null;
+      const weight = normalizeSettingsText(body.weight) || null;
+      const primaryActivity =
+        normalizeSettingsText(body.primaryActivity) || null;
+      const dominantHand = normalizeSettingsText(body.dominantHand);
+      const normalizedDominantHand =
+        dominantHand === "left" || dominantHand === "right"
+          ? dominantHand
+          : null;
+      const activityLevel = normalizeSettingsText(body.activityLevel);
+      const competitionLevel =
+        normalizeSettingsText(body.competitionLevel) || null;
+      const voice = normalizeSettingsVoice(body.voice);
+      const completed = normalizeCompletedFlag(body.completed);
+
+      await db
+        .update(users)
+        .set({
+          firstName: name,
+          email: authUser?.claims?.email ?? null,
+        })
+        .where(eq(users.id, userId));
+
+      await updateMemory(userId, (memory) => {
+        memory.identity.name = name;
+        memory.identity.age = age;
+        memory.identity.height = height;
+        memory.identity.weight = weight;
+        memory.identity.dominantHand = normalizedDominantHand;
+        memory.sportContext.primarySport = primaryActivity;
+        memory.sportContext.competitionLevel = competitionLevel;
+
+        const memoryWithPreferences = memory as typeof memory & {
+          preferences?: {
+            voice?: string;
+            activityLevel?: string | null;
+            setupCompleted?: boolean;
+          };
+        };
+
+        if (!memoryWithPreferences.preferences) {
+          memoryWithPreferences.preferences = {};
+        }
+
+        memoryWithPreferences.preferences.voice = voice;
+        memoryWithPreferences.preferences.activityLevel = activityLevel || null;
+        memoryWithPreferences.preferences.setupCompleted = completed;
+      });
+
+      const updatedMemory = await getMemory(userId);
+
+      res.json(buildPersistedSettings(name, updatedMemory));
+    } catch (err) {
+      console.error("Failed to save settings:", err);
+      res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
   app.post("/api/stt", async (req: Request, res: Response) => {
     try {
       const { audio, mimeType } = req.body ?? {};
@@ -1190,20 +1202,50 @@ export async function registerRoutes(
 
   let ttsQueue: Promise<string> = Promise.resolve("");
 
-  app.post("/api/tts", async (req: Request, res: Response) => {
+  app.post("/api/tts", isAuthenticated, async (req: any, res: Response) => {
     try {
-      const { text, voice } = req.body ?? {};
+      const authUser = req.user as any;
+      const userId = authUser?.claims?.sub;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { text } = req.body ?? {};
 
       if (!text || !text.trim()) {
         return res.status(400).json({ error: "No text provided" });
       }
 
       const processedText = text.replace(/—/g, " — ").replace(/…/g, "... ");
+      const memory = await getMemory(userId);
 
-      const selectedVoice =
-        voice === "male"
-          ? INTERLOOP_TTS_CONFIG.male
-          : INTERLOOP_TTS_CONFIG.female;
+      const settingsVoice =
+        normalizeSettingsVoice((memory as any)?.preferences?.voice) ||
+        "male_coach";
+
+      const voiceId = INTERLOOP_SETTINGS_VOICE_IDS[settingsVoice];
+
+      const selectedVoice = {
+        voiceId,
+        modelId: "eleven_multilingual_v2",
+        settings:
+          settingsVoice === "female_pilates" || settingsVoice === "female_yoga"
+            ? {
+                stability: 0.36,
+                similarity_boost: 0.85,
+                style: 0.18,
+                use_speaker_boost: true,
+                speed: 1.08,
+              }
+            : {
+                stability: 0.38,
+                similarity_boost: 0.85,
+                style: 0.15,
+                use_speaker_boost: true,
+                speed: 1.06,
+              },
+      };
 
       const job = async () => {
         let audioStream;
@@ -1312,6 +1354,29 @@ export async function registerRoutes(
       } catch (err) {
         console.error("Failed to fetch messages:", err);
         res.status(500).json({ error: "Failed to fetch messages" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/historical-state-review",
+    isAuthenticated,
+    async (req: Request, res: Response) => {
+      try {
+        const authUser = req.user as any;
+        const userId = authUser?.claims?.sub;
+
+        if (!userId) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const reviewInput = await buildHistoricalStateReviewInput(userId);
+        const historicalReview = await buildHistoricalStateReview(reviewInput);
+
+        res.json({ historicalReview });
+      } catch (err) {
+        console.error("Historical state review failed:", err);
+        res.status(500).json({ error: "Failed to generate historical review" });
       }
     },
   );
@@ -1456,112 +1521,7 @@ export async function registerRoutes(
           .from(messages)
           .where(eq(messages.conversationId, convoId))
           .orderBy(asc(messages.createdAt));
-
-        const lastAssistantMessage =
-          [...previous].reverse().find((m) => m.role === "assistant") ?? null;
-
-        const previousAssistantAskedName = Boolean(
-          lastAssistantMessage &&
-            askedWhatShouldICallYou(String(lastAssistantMessage.content ?? "")),
-        );
-
         let storedFirstName = dbFirstName;
-        const explicitName = storedFirstName
-          ? null
-          : extractConfidentExplicitName(userText);
-        const standaloneNameReply =
-          !storedFirstName && previousAssistantAskedName
-            ? extractStandaloneNameReply(userText)
-            : null;
-
-        let capturedName: string | null = null;
-
-        if (!storedFirstName && explicitName) {
-          capturedName = explicitName;
-        } else if (!storedFirstName && standaloneNameReply) {
-          capturedName = standaloneNameReply;
-        }
-
-        if (!storedFirstName) {
-          await db.insert(messages).values({
-            conversationId: convoId,
-            userId: userId,
-            role: "user",
-            content: userText,
-          });
-
-          previous = [
-            ...previous,
-            {
-              id: 0,
-              conversationId: convoId,
-              userId,
-              role: "user",
-              content: userText,
-              createdAt: new Date(),
-            } as any,
-          ];
-
-          if (!capturedName) {
-            const onboardingPrompt =
-              "Hi, I’m Interloop. Before we begin, what should I call you?";
-
-            res.setHeader("Content-Type", "text/event-stream");
-
-            const words = onboardingPrompt.split(" ");
-
-            for (const word of words) {
-              res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
-            }
-
-            await db.insert(messages).values({
-              conversationId: convoId,
-              userId: userId,
-              role: "assistant",
-              content: onboardingPrompt,
-            });
-
-            res.write(`data: [DONE]\n\n`);
-            res.end();
-            return;
-          }
-
-          await db
-            .update(users)
-            .set({ firstName: capturedName })
-            .where(eq(users.id, userId));
-
-          storedFirstName = capturedName;
-          const onboardingMessage = `
-          Hi, I’m Interloop.
-
-          I help figure out what’s actually driving what you’re experiencing in your body by breaking it down to the underlying mechanism, not just the surface symptom.
-
-          Everything you describe is treated as signal — movement, tension, pain, timing, coordination, anything that changes. From there, I narrow it down to one thing that matters and we test it together.
-
-          You don’t need to organize it perfectly. It’s fine if it’s messy or if you ramble. Just describe what’s happening as you experience it, and I’ll sort through it.
-
-          Let’s begin.
-          `;
-          res.setHeader("Content-Type", "text/event-stream");
-
-          const words = onboardingMessage.split(" ");
-
-          for (const word of words) {
-            res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
-          }
-
-          await db.insert(messages).values({
-            conversationId: convoId,
-            userId: userId,
-            role: "assistant",
-            content: onboardingMessage,
-          });
-
-          res.write(`data: [DONE]\n\n`);
-          res.end();
-          return;
-        }
 
         await db.insert(messages).values({
           conversationId: convoId,
@@ -1863,17 +1823,6 @@ Identity authority rule:
 
         console.log("CHAT STAGE: prompt-assembly");
 
-        const organicProfileOnboardingBlock = !isCaseReview
-          ? getOrganicProfileOnboardingGuidanceBlock(
-              userText,
-              previous.map((m) => ({
-                role: String(m.role ?? ""),
-                content: String(m.content ?? ""),
-              })),
-              memoryBlock,
-            )
-          : "";
-
         const patternPriorityBlock = !isCaseReview
           ? `
 === PATTERN PRIORITY RULE ===
@@ -2017,8 +1966,6 @@ ${currentConversationSummaryBlock}
 ${memoryBlock}
 
 ${continuityBlock}
-
-${organicProfileOnboardingBlock}
 
 ${patternPriorityBlock}
 

@@ -23,6 +23,7 @@ interface ChatViewProps {
     mode?: "auto" | "repeat",
   ) => Promise<void>;
   onCaseReview: () => void;
+  onHistoricalReview: () => void;
 }
 
 let msgCounter = 1000;
@@ -60,7 +61,6 @@ export function ChatView({
   onPlaybackControl,
   playbackLabel,
   onSpeakText,
-  onCaseReview,
 }: ChatViewProps) {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -81,8 +81,6 @@ export function ChatView({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  const hasUserMessages = messages.some((m) => m.role === "user");
 
   const handleSend = async () => {
     const trimmed = inputValue.trim();
@@ -135,23 +133,6 @@ export function ChatView({
       animate={{ opacity: 1 }}
       className="h-screen min-h-0 flex flex-col bg-black relative overflow-hidden"
     >
-      {hasUserMessages && (
-        <div
-          className="absolute left-4 z-10"
-          style={{ top: "max(env(safe-area-inset-top), 1rem)" }}
-        >
-          <button
-            onClick={() => {
-              playUITone(720);
-              onCaseReview();
-            }}
-            className="text-white text-sm font-medium"
-          >
-            Case review
-          </button>
-        </div>
-      )}
-
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-14">
         <div className="max-w-xl mx-auto space-y-5 py-5">
           {messages.map((msg) => (

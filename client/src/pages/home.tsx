@@ -2,6 +2,10 @@ import { useState, useRef, useEffect, useCallback } from "react";
 
 import { CentralForm } from "@/components/central-form";
 import { ChatView } from "@/components/chat-view";
+import {
+  InterloopSettings,
+  type InterloopSettingsValues,
+} from "@/components/interloop-settings";
 
 import { transcribeAudio, streamTTS } from "@/lib/api";
 
@@ -12,6 +16,25 @@ export interface ChatMessage {
   id: string;
   role: "assistant" | "user";
   text: string;
+}
+
+const INTERLOOP_SETTINGS_KEY = "interloopSettings";
+
+const defaultSettings: InterloopSettingsValues = {
+  name: "",
+  age: "",
+  height: "",
+  weight: "",
+  primaryActivity: "",
+  dominantHand: "",
+  activityLevel: "",
+  competitionLevel: "",
+  voice: "male_coach",
+  completed: false,
+};
+
+function isSettingsComplete(settings: InterloopSettingsValues): boolean {
+  return typeof settings.name === "string" && settings.name.trim().length > 0;
 }
 
 let messageCounter = 0;
@@ -126,7 +149,7 @@ function normalizeLoadedMessages(payload: unknown): ChatMessage[] {
 }
 
 export default function Home() {
-  const [mode, setMode] = useState<"A" | "B">("A");
+  const [mode, setMode] = useState<"A" | "B" | "C">("A");
 
   const [conversationId, setConversationId] = useState<number | null>(null);
   const conversationIdRef = useRef<number | null>(null);
@@ -138,8 +161,10 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
-  const [voiceGender, setVoiceGender] = useState<"male" | "female">("female");
-  const voiceGenderRef = useRef(voiceGender);
+  const [settingsData, setSettingsData] =
+    useState<InterloopSettingsValues>(defaultSettings);
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const playback = useAudioPlayback();
   const recorder = useVoiceRecorder();
@@ -159,8 +184,29 @@ export default function Home() {
   }, [conversationId]);
 
   useEffect(() => {
-    voiceGenderRef.current = voiceGender;
-  }, [voiceGender]);
+    try {
+      const raw = localStorage.getItem(INTERLOOP_SETTINGS_KEY);
+
+      if (!raw) {
+        setSettingsData(defaultSettings);
+        setIsOnboardingOpen(true);
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as Partial<InterloopSettingsValues>;
+      const nextSettings: InterloopSettingsValues = {
+        ...defaultSettings,
+        ...parsed,
+        completed: parsed.completed === true,
+      };
+
+      setSettingsData(nextSettings);
+      setIsOnboardingOpen(!isSettingsComplete(nextSettings));
+    } catch {
+      setSettingsData(defaultSettings);
+      setIsOnboardingOpen(true);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -255,6 +301,35 @@ export default function Home() {
     };
   }, []);
 
+  const handleSaveSettings = useCallback(
+    async (values: InterloopSettingsValues) => {
+      const nextSettings = {
+        ...values,
+        completed: true,
+      };
+
+      localStorage.setItem(
+        INTERLOOP_SETTINGS_KEY,
+        JSON.stringify(nextSettings),
+      );
+      setSettingsData(nextSettings);
+
+      await fetch("/api/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify(nextSettings),
+      });
+
+      setIsOnboardingOpen(!isSettingsComplete(nextSettings));
+      setIsSettingsOpen(false);
+      setMode("A");
+    },
+    [],
+  );
+
   const playUITone = useCallback((frequency = 720, durationMs = 90) => {
     try {
       const AudioCtx =
@@ -303,8 +378,7 @@ export default function Home() {
 
   const playAcknowledgmentAudio = useCallback(() => {
     const clipNumber = pickAcknowledgmentClipNumber();
-    const gender = voiceGenderRef.current;
-    const path = `/ack/${gender}/ack_${clipNumber}.mp3`;
+    const path = `/ack/default/ack_${clipNumber}.mp3`;
     const audio = new Audio(path);
 
     void audio.play().catch((err) => {
@@ -349,18 +423,12 @@ export default function Home() {
       setIsSpeaking(true);
 
       try {
-        await streamTTS(
-          text,
-          (chunk) => {
-            if (stopRequestedRef.current) return;
-            if (sessionId !== speakSessionRef.current) return;
+        await streamTTS(text, (chunk) => {
+          if (stopRequestedRef.current) return;
+          if (sessionId !== speakSessionRef.current) return;
 
-            playback.pushAudio(chunk);
-          },
-          {
-            voice: voiceGenderRef.current,
-          },
-        );
+          playback.pushAudio(chunk);
+        });
 
         if (
           !stopRequestedRef.current &&
@@ -427,6 +495,50 @@ export default function Home() {
 
       if (assistantText.trim()) {
         await speakText(assistantId, assistantText, "auto");
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [isProcessing, isRecording, isSpeaking, playUITone, speakText]);
+
+  const runHistoricalReview = useCallback(async () => {
+    playUITone(720);
+
+    if (
+      !conversationIdRef.current ||
+      isProcessing ||
+      isRecording ||
+      isSpeaking
+    ) {
+      return;
+    }
+
+    const assistantId = nextId();
+
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantId, role: "assistant", text: "" },
+    ]);
+
+    setIsProcessing(true);
+
+    try {
+      const resp = await fetch("/api/historical-state-review", {
+        method: "POST",
+        credentials: "include",
+      });
+
+      if (!resp.ok) throw new Error("Historical review failed");
+
+      const data = await resp.json();
+      const text = data?.historicalReview ?? "";
+
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantId ? { ...m, text } : m)),
+      );
+
+      if (text.trim()) {
+        await speakText(assistantId, text, "auto");
       }
     } finally {
       setIsProcessing(false);
@@ -537,57 +649,70 @@ export default function Home() {
     await speakText(lastPlayable.id, lastPlayable.text, "repeat");
   }, [isPlaybackActive, playUITone, speakText, stopSpeech]);
 
-  return (
-    <div className="h-screen w-full bg-black relative overflow-hidden">
-      {mode === "A" ? (
-        <>
-          <div
-            className="absolute inset-0 flex flex-col justify-between px-4"
-            style={{
-              paddingTop: "max(env(safe-area-inset-top) + 2.5rem, 3rem)",
-              paddingBottom: "max(env(safe-area-inset-bottom) + 3.5rem, 4rem)",
-            }}
-          >
-            <div />
+  if (isOnboardingOpen) {
+    return (
+      <InterloopSettings
+        mode="onboarding"
+        initialValues={settingsData}
+        onSave={handleSaveSettings}
+        onClose={() => {}}
+      />
+    );
+  }
 
-            <div className="flex items-center justify-center">
-              <div
-                className="relative mx-auto"
-                style={{
-                  width: "min(560px, 84vw)",
-                  height: "min(560px, 84vw)",
-                  maxWidth: "100%",
-                }}
-                onClick={handleTap}
-              >
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="relative w-full h-full">
-                    <CentralForm
-                      isActive={isRecording || isProcessing || isSpeaking}
-                      isDimmed={false}
-                      isSpeaking={isSpeaking}
-                      getAmplitude={playback.getAmplitude}
-                    />
+  return (
+    <>
+      <div className="h-screen w-full bg-black relative overflow-hidden">
+        {mode === "A" ? (
+          <>
+            <div
+              className="absolute inset-0 flex flex-col justify-between px-4"
+              style={{
+                paddingTop: "max(env(safe-area-inset-top) + 2.5rem, 3rem)",
+                paddingBottom:
+                  "max(env(safe-area-inset-bottom) + 3.5rem, 4rem)",
+              }}
+            >
+              <div />
+
+              <div className="flex items-center justify-center">
+                <div
+                  className="relative mx-auto"
+                  style={{
+                    width: "min(560px, 84vw)",
+                    height: "min(560px, 84vw)",
+                    maxWidth: "100%",
+                  }}
+                  onClick={handleTap}
+                >
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="relative w-full h-full">
+                      <CentralForm
+                        isActive={isRecording || isProcessing || isSpeaking}
+                        isDimmed={false}
+                        isSpeaking={isSpeaking}
+                        getAmplitude={playback.getAmplitude}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <span className="text-sm text-gray-400">
+                      {isSpeaking
+                        ? "Stop"
+                        : isRecording
+                          ? "Listening..."
+                          : isProcessing
+                            ? "Reflecting..."
+                            : "Press here"}
+                    </span>
                   </div>
                 </div>
-
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <span className="text-sm text-gray-400">
-                    {isSpeaking
-                      ? "Stop"
-                      : isRecording
-                        ? "Listening..."
-                        : isProcessing
-                          ? "Reflecting..."
-                          : "Press here"}
-                  </span>
-                </div>
               </div>
+
+              <div />
             </div>
 
-            <div />
-          </div>
-          {(hasExchanged || messages.some((m) => m.role === "user")) && (
             <div
               className="absolute left-4 z-10"
               style={{
@@ -595,59 +720,165 @@ export default function Home() {
               }}
             >
               <button
-                onClick={runCaseReview}
+                onClick={() => setMode("C")}
                 className="text-white text-sm font-medium"
               >
-                Case review
+                Dashboard
               </button>
             </div>
-          )}
 
-          <div
-            className="absolute left-0 right-0 flex justify-between px-4 sm:px-8 text-gray-400 text-sm"
-            style={{
-              bottom: "max(env(safe-area-inset-bottom) + 1rem, 1.75rem)",
-              paddingBottom: "0.5rem",
-            }}
-          >
+            <div
+              className="absolute right-4 z-10"
+              style={{
+                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
+              }}
+            >
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className="text-gray-400 text-sm font-medium"
+                aria-label="Open settings"
+              >
+                Settings
+              </button>
+            </div>
+
+            <div
+              className="absolute left-0 right-0 flex justify-between px-4 sm:px-8 text-gray-400 text-sm"
+              style={{
+                bottom: "max(env(safe-area-inset-bottom) + 1rem, 1.75rem)",
+                paddingBottom: "0.5rem",
+              }}
+            >
+              <button
+                onClick={() => {
+                  playUITone(720);
+                  setMode("B");
+                }}
+              >
+                Prefer typing?
+              </button>
+
+              <button onClick={handlePlaybackControl}>{playbackLabel}</button>
+            </div>
+          </>
+        ) : mode === "B" ? (
+          <>
+            <div
+              className="absolute left-4 z-10"
+              style={{
+                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
+              }}
+            >
+              <button
+                onClick={() => setMode("C")}
+                className="text-white text-sm font-medium"
+              >
+                Dashboard
+              </button>
+            </div>
+
+            <div
+              className="absolute right-4 z-10"
+              style={{
+                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
+              }}
+            >
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className="text-gray-400 text-sm font-medium"
+              >
+                Settings
+              </button>
+            </div>
+
+            <ChatView
+              messages={messages}
+              setMessages={setMessages}
+              onBack={() => setMode("A")}
+              playUITone={(f = 720, d = 90) => playUITone(f, d)}
+              onConversationIdChange={(id) => {
+                conversationIdRef.current = id;
+                setConversationId(id);
+                localStorage.setItem("conversationId", String(id));
+              }}
+              onPlaybackControl={handlePlaybackControl}
+              playbackLabel={playbackLabel}
+              onSpeakText={speakText}
+              onCaseReview={() => {}}
+              onHistoricalReview={runHistoricalReview}
+            />
+          </>
+        ) : (
+          <div className="h-screen w-full bg-black flex flex-col items-center justify-center text-white px-6">
             <button
               onClick={() => {
                 playUITone(720);
-                setMode("B");
+                setMode("A");
               }}
+              className="absolute left-4 top-4 text-sm text-gray-400"
             >
-              Prefer typing?
+              Back
             </button>
 
-            <button
-              onClick={() => {
-                playUITone(720);
-                setVoiceGender((v) => (v === "female" ? "male" : "female"));
-              }}
-            >
-              Prefer {voiceGender === "female" ? "male" : "female"}
-            </button>
+            <div className="w-full max-w-xl mx-auto flex flex-col items-center text-center">
+              <h1 className="text-3xl font-semibold tracking-tight text-white">
+                Dashboard
+              </h1>
 
-            <button onClick={handlePlaybackControl}>{playbackLabel}</button>
+              <p className="mt-4 text-sm text-gray-500">
+                Run focused reviews on your current case or long-term patterns.
+              </p>
+
+              <div className="w-full mt-16 flex flex-col gap-10">
+                <button
+                  onClick={() => {
+                    playUITone(720);
+                    setMode("B");
+                    window.setTimeout(() => {
+                      void runCaseReview();
+                    }, 50);
+                  }}
+                  className="w-full text-center py-5 transition-opacity hover:opacity-80 cursor-pointer"
+                >
+                  <div className="text-lg font-medium text-white">
+                    Case Review
+                  </div>
+                  <div className="mt-2 text-sm text-gray-500">
+                    Break down the current mechanism and identify the next move.
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => {
+                    playUITone(720);
+                    setMode("B");
+                    window.setTimeout(() => {
+                      void runHistoricalReview();
+                    }, 50);
+                  }}
+                  className="w-full text-center py-5 transition-opacity hover:opacity-80 cursor-pointer"
+                >
+                  <div className="text-lg font-medium text-white">
+                    Historical Review
+                  </div>
+                  <div className="mt-2 text-sm text-gray-500">
+                    Surface recurring patterns across your past sessions.
+                  </div>
+                </button>
+              </div>
+            </div>
           </div>
-        </>
-      ) : (
-        <ChatView
-          messages={messages}
-          setMessages={setMessages}
-          onBack={() => setMode("A")}
-          playUITone={(f = 720, d = 90) => playUITone(f, d)}
-          onConversationIdChange={(id) => {
-            conversationIdRef.current = id;
-            setConversationId(id);
-            localStorage.setItem("conversationId", String(id));
-          }}
-          onPlaybackControl={handlePlaybackControl}
-          playbackLabel={playbackLabel}
-          onSpeakText={speakText}
-          onCaseReview={runCaseReview}
+        )}
+      </div>
+
+      {isSettingsOpen && (
+        <InterloopSettings
+          mode="settings"
+          initialValues={settingsData}
+          onSave={handleSaveSettings}
+          onClose={() => setIsSettingsOpen(false)}
         />
       )}
-    </div>
+    </>
   );
 }
