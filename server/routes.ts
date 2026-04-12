@@ -29,6 +29,7 @@ import {
   caseHypotheses,
   caseAdjustments,
   caseOutcomes,
+  caseReviews,
 } from "@shared/schema";
 
 import {
@@ -695,6 +696,57 @@ function extractFirstMatchingSentence(
   return null;
 }
 
+function normalizePreviewValue(
+  value: string | null | undefined,
+): string | null {
+  const trimmed = String(value ?? "").trim();
+  return trimmed ? trimmed : null;
+}
+
+function extractPreviewSnippet(
+  value: string | null | undefined,
+  max = 180,
+): string | null {
+  const text = normalizePreviewValue(value);
+  if (!text) return null;
+  if (text.length < 35) return null;
+
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  const meaningfulSentence =
+    sentences.find((sentence) => {
+      const normalized = sentence
+        .replace(/[*_`#>\-\[\]()]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!normalized || normalized.length < 35) return false;
+      if (/^[-–—\s]+$/.test(sentence)) return false;
+      if (/^[A-Z][A-Z\s]+:?$/.test(normalized)) return false;
+
+      const wordCount = normalized.split(" ").filter(Boolean).length;
+      return wordCount >= 6;
+    }) ?? text;
+
+  const snippet = normalizePreviewValue(clampText(meaningfulSentence, max));
+  if (!snippet || snippet.length < 35) return null;
+  return snippet;
+}
+
+function buildActiveCaseTitle(
+  movementContext: string | null | undefined,
+  activityType: string | null | undefined,
+): string | null {
+  const movement = normalizePreviewValue(movementContext);
+  const activity = normalizePreviewValue(activityType);
+
+  if (movement && activity) return `${movement} — ${activity}`;
+  return movement ?? activity ?? null;
+}
+
 function qualifiesForTimelineSignal(text: string): boolean {
   return /pain|painful|tight|tightness|hurt|hurts|hurting|issue|problem|tweak|tweaked|strain|strained|straining|tension|discomfort|catching|catch|pinch|pinching|pinched|irritated|irritation|sore|soreness|stiff|stiffness|aggravated|aggravating|flare|flaring up|acting up|feels weird|feels wrong|not comfortable|uncomfortable|not sitting right|pulling|tugging|ache|aching|doesn't feel right|doesnt feel right|can't|cannot|struggle|confused|off|feels off|not right|not working|can't rotate|cant rotate|can't load|cant load|timing is off|timing feels off|mechanics feel wrong|movement is weird|doesn't feel stable|not stable|unstable|out of position|can't control|cant control|not coordinated|coordination is off|out of sync|awkward|something is off|rotation feels off|trunk rotation feels wrong/i.test(
     text.trim(),
@@ -1236,14 +1288,14 @@ export async function registerRoutes(
                 similarity_boost: 0.85,
                 style: 0.18,
                 use_speaker_boost: true,
-                speed: 1.08,
+                speed: 0.92,
               }
             : {
                 stability: 0.38,
                 similarity_boost: 0.85,
                 style: 0.15,
                 use_speaker_boost: true,
-                speed: 1.06,
+                speed: 0.92,
               },
       };
 
@@ -1312,6 +1364,140 @@ export async function registerRoutes(
     } catch (err) {
       console.error("Failed to fetch conversations:", err);
       res.status(500).json({ error: "Failed to fetch conversations" });
+    }
+  });
+
+  app.get("/api/dashboard", isAuthenticated, async (req: any, res: any) => {
+    try {
+      const authUser = req.user as any;
+      const userId = authUser?.claims?.sub;
+
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const recentCases = await db
+        .select({
+          id: cases.id,
+          movementContext: cases.movementContext,
+          activityType: cases.activityType,
+          status: cases.status,
+          updatedAt: cases.updatedAt,
+        })
+        .from(cases)
+        .where(eq(cases.userId, userId))
+        .orderBy(desc(cases.updatedAt), desc(cases.id))
+        .limit(12);
+
+      const meaningfulCases = recentCases.filter((row) => {
+        const movement = normalizeOptionalLabel(row.movementContext);
+        const activity = normalizeOptionalLabel(row.activityType);
+
+        const isWeakMovement =
+          movement === "" || movement === "general movement";
+
+        const isWeakActivity = activity === "" || activity === "unspecified";
+
+        return !(isWeakMovement && isWeakActivity);
+      });
+
+      const selectedCase =
+        meaningfulCases.find((row) => isOpenCaseStatus(row.status)) ??
+        meaningfulCases[0] ??
+        recentCases.find((row) => isOpenCaseStatus(row.status)) ??
+        recentCases[0] ??
+        null;
+
+      let currentFocus: string | null = null;
+
+      if (selectedCase) {
+        const [latestAdjustment] = await db
+          .select({
+            mechanicalFocus: caseAdjustments.mechanicalFocus,
+            cue: caseAdjustments.cue,
+          })
+          .from(caseAdjustments)
+          .where(eq(caseAdjustments.caseId, selectedCase.id))
+          .orderBy(desc(caseAdjustments.id))
+          .limit(1);
+
+        currentFocus =
+          normalizePreviewValue(latestAdjustment?.mechanicalFocus) ??
+          normalizePreviewValue(latestAdjustment?.cue);
+
+        if (!currentFocus) {
+          const [latestHypothesis] = await db
+            .select({
+              hypothesis: caseHypotheses.hypothesis,
+            })
+            .from(caseHypotheses)
+            .where(eq(caseHypotheses.caseId, selectedCase.id))
+            .orderBy(desc(caseHypotheses.id))
+            .limit(1);
+
+          currentFocus = normalizePreviewValue(latestHypothesis?.hypothesis);
+        }
+      }
+
+      const [latestCaseReview] = await db
+        .select({
+          reviewText: caseReviews.reviewText,
+        })
+        .from(caseReviews)
+        .where(eq(caseReviews.userId, userId))
+        .orderBy(desc(caseReviews.id))
+        .limit(1);
+
+      const recentSummaries = await db
+        .select({
+          summary: conversations.summary,
+        })
+        .from(conversations)
+        .where(eq(conversations.userId, userId))
+        .orderBy(desc(conversations.createdAt), desc(conversations.id))
+        .limit(8);
+
+      const latestSummary =
+        recentSummaries.find((row) => {
+          const summary = normalizePreviewValue(row.summary);
+          return Boolean(summary && summary.length >= 35);
+        })?.summary ?? null;
+
+      const activeCaseTitle = buildActiveCaseTitle(
+        selectedCase?.movementContext,
+        selectedCase?.activityType,
+      );
+      const currentFocusSnippet = extractPreviewSnippet(currentFocus, 160);
+      const lastCaseReviewSnippet = extractPreviewSnippet(
+        latestCaseReview?.reviewText,
+        160,
+      );
+      const lastHistoricalReviewSnippet = extractPreviewSnippet(
+        latestSummary,
+        160,
+      );
+
+      console.log("DASHBOARD DEBUG:", {
+        userId,
+        selectedCaseId: selectedCase?.id ?? null,
+        movementContext: selectedCase?.movementContext ?? null,
+        activityType: selectedCase?.activityType ?? null,
+        activeCaseTitle,
+        currentFocus: currentFocusSnippet,
+        hasLatestCaseReview: Boolean(latestCaseReview?.reviewText),
+        lastCaseReviewSnippet,
+        lastHistoricalReviewSnippet,
+      });
+
+      res.json({
+        activeCaseTitle,
+        currentFocus: currentFocusSnippet,
+        lastCaseReviewSnippet,
+        lastHistoricalReviewSnippet,
+      });
+    } catch (err) {
+      console.error("Failed to load dashboard preview:", err);
+      res.status(500).json({ error: "Failed to load dashboard preview" });
     }
   });
 

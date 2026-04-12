@@ -718,10 +718,6 @@ export default function Home() {
 
   const recentInsightRows = [
     {
-      label: "Last Case Review",
-      value: dashboardData.lastCaseReviewSnippet,
-    },
-    {
       label: "Last Pattern Insight",
       value: dashboardData.lastHistoricalReviewSnippet,
     },
@@ -960,7 +956,7 @@ export default function Home() {
                   className="w-full text-center py-5 transition-opacity hover:opacity-80 cursor-pointer"
                 >
                   <div className="text-lg font-medium text-white">
-                    Case Review
+                    Get New Case Review
                   </div>
                   <div className="mt-2 text-sm text-gray-500">
                     Break down the current mechanism and identify the next move.
@@ -978,7 +974,7 @@ export default function Home() {
                   className="w-full text-center py-5 transition-opacity hover:opacity-80 cursor-pointer"
                 >
                   <div className="text-lg font-medium text-white">
-                    Historical Review
+                    Get New Historical Data
                   </div>
                   <div className="mt-2 text-sm text-gray-500">
                     Surface recurring patterns across your past sessions.
