@@ -18,6 +18,13 @@ export interface ChatMessage {
   text: string;
 }
 
+type DashboardData = {
+  activeCaseTitle: string | null;
+  currentFocus: string | null;
+  lastCaseReviewSnippet: string | null;
+  lastHistoricalReviewSnippet: string | null;
+};
+
 const INTERLOOP_SETTINGS_KEY = "interloopSettings";
 
 const defaultSettings: InterloopSettingsValues = {
@@ -31,6 +38,13 @@ const defaultSettings: InterloopSettingsValues = {
   competitionLevel: "",
   voice: "male_coach",
   completed: false,
+};
+
+const defaultDashboardData: DashboardData = {
+  activeCaseTitle: null,
+  currentFocus: null,
+  lastCaseReviewSnippet: null,
+  lastHistoricalReviewSnippet: null,
 };
 
 function isSettingsComplete(settings: InterloopSettingsValues): boolean {
@@ -165,6 +179,8 @@ export default function Home() {
     useState<InterloopSettingsValues>(defaultSettings);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [dashboardData, setDashboardData] =
+    useState<DashboardData>(defaultDashboardData);
 
   const playback = useAudioPlayback();
   const recorder = useVoiceRecorder();
@@ -285,6 +301,33 @@ export default function Home() {
       cancelled = true;
     };
   }, []);
+
+  const loadDashboardData = useCallback(async () => {
+    try {
+      const resp = await fetch("/api/dashboard", {
+        credentials: "include",
+      });
+
+      if (!resp.ok) throw new Error("Failed to load dashboard");
+
+      const data = await resp.json();
+
+      setDashboardData({
+        activeCaseTitle: data?.activeCaseTitle ?? null,
+        currentFocus: data?.currentFocus ?? null,
+        lastCaseReviewSnippet: data?.lastCaseReviewSnippet ?? null,
+        lastHistoricalReviewSnippet: data?.lastHistoricalReviewSnippet ?? null,
+      });
+    } catch (err) {
+      console.warn("Failed to load dashboard data:", err);
+      setDashboardData(defaultDashboardData);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isOnboardingOpen) return;
+    void loadDashboardData();
+  }, [isOnboardingOpen, loadDashboardData]);
 
   useEffect(() => {
     if (playback.state === "ended" || playback.state === "idle") {
@@ -496,10 +539,19 @@ export default function Home() {
       if (assistantText.trim()) {
         await speakText(assistantId, assistantText, "auto");
       }
+
+      await loadDashboardData();
     } finally {
       setIsProcessing(false);
     }
-  }, [isProcessing, isRecording, isSpeaking, playUITone, speakText]);
+  }, [
+    isProcessing,
+    isRecording,
+    isSpeaking,
+    loadDashboardData,
+    playUITone,
+    speakText,
+  ]);
 
   const runHistoricalReview = useCallback(async () => {
     playUITone(720);
@@ -540,10 +592,19 @@ export default function Home() {
       if (text.trim()) {
         await speakText(assistantId, text, "auto");
       }
+
+      await loadDashboardData();
     } finally {
       setIsProcessing(false);
     }
-  }, [isProcessing, isRecording, isSpeaking, playUITone, speakText]);
+  }, [
+    isProcessing,
+    isRecording,
+    isSpeaking,
+    loadDashboardData,
+    playUITone,
+    speakText,
+  ]);
 
   const handleTap = useCallback(async () => {
     if (isSpeaking) {
@@ -566,11 +627,6 @@ export default function Home() {
     if (acknowledgmentTimeoutRef.current != null) {
       window.clearTimeout(acknowledgmentTimeoutRef.current);
     }
-
-    // acknowledgmentTimeoutRef.current = window.setTimeout(() => {
-    //   playAcknowledgmentAudio();
-    //   acknowledgmentTimeoutRef.current = null;
-    // }, 1000);
 
     setIsProcessing(true);
 
@@ -648,6 +704,28 @@ export default function Home() {
     isReplayingRef.current = true;
     await speakText(lastPlayable.id, lastPlayable.text, "repeat");
   }, [isPlaybackActive, playUITone, speakText, stopSpeech]);
+
+  const currentStateRows = [
+    {
+      label: "Active Case",
+      value: dashboardData.activeCaseTitle,
+    },
+    {
+      label: "Current Focus",
+      value: dashboardData.currentFocus,
+    },
+  ].filter((row) => Boolean(row.value));
+
+  const recentInsightRows = [
+    {
+      label: "Last Case Review",
+      value: dashboardData.lastCaseReviewSnippet,
+    },
+    {
+      label: "Last Pattern Insight",
+      value: dashboardData.lastHistoricalReviewSnippet,
+    },
+  ].filter((row) => Boolean(row.value));
 
   if (isOnboardingOpen) {
     return (
@@ -828,6 +906,47 @@ export default function Home() {
               <p className="mt-4 text-sm text-gray-500">
                 Run focused reviews on your current case or long-term patterns.
               </p>
+
+              {(currentStateRows.length > 0 ||
+                recentInsightRows.length > 0) && (
+                <div className="w-full mt-10 text-left">
+                  {currentStateRows.length > 0 && (
+                    <div className="flex flex-col gap-5">
+                      <div className="text-xs uppercase tracking-[0.14em] text-gray-600">
+                        Current State
+                      </div>
+                      {currentStateRows.map((row) => (
+                        <div key={row.label} className="w-full">
+                          <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
+                            {row.label}
+                          </div>
+                          <div className="mt-1 text-sm leading-relaxed text-gray-300">
+                            {row.value}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {recentInsightRows.length > 0 && (
+                    <div className="mt-8 flex flex-col gap-5">
+                      <div className="text-xs uppercase tracking-[0.14em] text-gray-600">
+                        Recent Insight
+                      </div>
+                      {recentInsightRows.map((row) => (
+                        <div key={row.label} className="w-full">
+                          <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
+                            {row.label}
+                          </div>
+                          <div className="mt-1 text-sm leading-relaxed text-gray-300">
+                            {row.value}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="w-full mt-16 flex flex-col gap-10">
                 <button

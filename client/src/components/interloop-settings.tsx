@@ -58,9 +58,15 @@ export function InterloopSettings({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black text-white">
-      <div className="h-full w-full flex items-center justify-center px-6 py-8">
-        <div className="w-full max-w-xl rounded-2xl border border-[#1f1f1f] bg-[#0b0b0b] p-6 sm:p-8">
+    <div className="fixed inset-0 z-50 bg-black text-white overflow-y-auto">
+      <div
+        className="w-full px-6 pt-6 pb-24"
+        style={{
+          paddingTop: "max(env(safe-area-inset-top) + 1.5rem, 2rem)",
+          paddingBottom: "max(env(safe-area-inset-bottom) + 5rem, 6rem)",
+        }}
+      >
+        <div className="w-full max-w-xl mx-auto rounded-2xl border border-[#1f1f1f] bg-[#0b0b0b] p-6 sm:p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-medium">Interloop Setup</h1>
@@ -194,7 +200,7 @@ export function InterloopSettings({
             </label>
           </div>
 
-          <div className="mt-8 flex items-center justify-end gap-3">
+          <div className="mt-10 flex items-center justify-end gap-3">
             {!isOnboarding && (
               <button
                 onClick={onClose}
