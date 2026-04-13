@@ -1798,14 +1798,22 @@ export async function registerRoutes(
           .limit(1);
       }
 
-      const [latestCaseReview] = await db
-        .select({
-          reviewText: caseReviews.reviewText,
-        })
-        .from(caseReviews)
-        .where(eq(caseReviews.userId, userId))
-        .orderBy(desc(caseReviews.id))
-        .limit(1);
+      let latestCaseReview:
+        | {
+            reviewText: string | null;
+          }
+        | undefined;
+
+      if (selectedCase) {
+        [latestCaseReview] = await db
+          .select({
+            reviewText: caseReviews.reviewText,
+          })
+          .from(caseReviews)
+          .where(eq(caseReviews.caseId, selectedCase.id))
+          .orderBy(desc(caseReviews.id))
+          .limit(1);
+      }
 
       const activeCaseTitle = buildActiveCaseTitle(
         selectedCase?.movementContext,
@@ -2123,19 +2131,48 @@ export async function registerRoutes(
           } as any,
         ];
 
+        let resolvedActiveCase: {
+          id: number;
+          userId: string;
+          conversationId: number | null;
+          movementContext: string | null;
+          activityType: string | null;
+          status: string | null;
+        } | null = null;
+
         try {
           const outcomeResult = detectOutcomeResult(userText);
 
           if (outcomeResult) {
-            const [activeCase] = await db
-              .select({
-                id: cases.id,
-                status: cases.status,
-              })
-              .from(cases)
-              .where(eq(cases.userId, userId))
-              .orderBy(desc(cases.updatedAt), desc(cases.id))
-              .limit(1);
+            if (!resolvedActiveCase) {
+              const [conversationOpenCase] = await db
+                .select({
+                  id: cases.id,
+                  userId: cases.userId,
+                  conversationId: cases.conversationId,
+                  movementContext: cases.movementContext,
+                  activityType: cases.activityType,
+                  status: cases.status,
+                })
+                .from(cases)
+                .where(
+                  and(
+                    eq(cases.userId, userId),
+                    eq(cases.conversationId, convoId),
+                  ),
+                )
+                .orderBy(desc(cases.updatedAt), desc(cases.id))
+                .limit(1);
+
+              if (
+                conversationOpenCase &&
+                isOpenCaseStatus(conversationOpenCase.status)
+              ) {
+                resolvedActiveCase = conversationOpenCase;
+              }
+            }
+
+            const activeCase = resolvedActiveCase;
 
             if (activeCase && isOpenCaseStatus(activeCase.status)) {
               const [latestOutcome] = await db
@@ -2190,6 +2227,7 @@ export async function registerRoutes(
             const recentUserCases = await db
               .select({
                 id: cases.id,
+                userId: cases.userId,
                 conversationId: cases.conversationId,
                 movementContext: cases.movementContext,
                 activityType: cases.activityType,
@@ -2281,6 +2319,8 @@ export async function registerRoutes(
             });
 
             if (matchedOpenCase) {
+              resolvedActiveCase = matchedOpenCase;
+
               await db.insert(caseSignals).values({
                 userId,
                 caseId: matchedOpenCase.id,
@@ -2319,6 +2359,8 @@ export async function registerRoutes(
               }
 
               if (newCase) {
+                resolvedActiveCase = newCase;
+
                 try {
                   await db.insert(caseSignals).values({
                     userId,
@@ -2360,6 +2402,31 @@ export async function registerRoutes(
           }
         } catch (err) {
           console.error("Case creation flow failed:", err);
+        }
+
+        if (!resolvedActiveCase) {
+          const [conversationOpenCase] = await db
+            .select({
+              id: cases.id,
+              userId: cases.userId,
+              conversationId: cases.conversationId,
+              movementContext: cases.movementContext,
+              activityType: cases.activityType,
+              status: cases.status,
+            })
+            .from(cases)
+            .where(
+              and(eq(cases.userId, userId), eq(cases.conversationId, convoId)),
+            )
+            .orderBy(desc(cases.updatedAt), desc(cases.id))
+            .limit(1);
+
+          if (
+            conversationOpenCase &&
+            isOpenCaseStatus(conversationOpenCase.status)
+          ) {
+            resolvedActiveCase = conversationOpenCase;
+          }
         }
 
         const memory = await getMemory(userId);
@@ -2573,12 +2640,22 @@ ${toneGuidanceBlock}
           const isWeak =
             /could be|might be|possibly|several|a few things/i.test(
               assistantText,
-            );
+            ) ||
+            /aligning well|this is working|good sign|this suggests progress/i.test(
+              assistantText,
+            ) ||
+            /\bthe key is\b/i.test(assistantText) ||
+            /\bthis means\b/i.test(assistantText);
 
           const isGenericSuccess =
             /glad to hear|great to hear|happy to hear|fantastic|great to see|keep it up|let me know|feel free to reach out/i.test(
               assistantText,
             );
+
+          const hasWeakMechanismLanguage =
+            /aligning well|this is working|good sign|suggests progress/i.test(
+              assistantText,
+            ) || /\bthe key is\b/i.test(assistantText);
 
           const hasLabels =
             /hypothesis:|guardrail:|lever:|sequence:|narrowing question:/i.test(
@@ -2591,6 +2668,7 @@ ${toneGuidanceBlock}
           if (
             !isValidResponse(assistantText) ||
             isWeak ||
+            hasWeakMechanismLanguage ||
             isGenericSuccess ||
             closureDrift ||
             hasLabels ||
@@ -2749,19 +2827,10 @@ Produce the corrected response now.
         });
 
         try {
-          const [currentOpenCase] = await db
-            .select({
-              id: cases.id,
-              status: cases.status,
-            })
-            .from(cases)
-            .where(
-              and(eq(cases.userId, userId), eq(cases.conversationId, convoId)),
-            )
-            .orderBy(desc(cases.updatedAt), desc(cases.id))
-            .limit(1);
-
-          if (currentOpenCase && isOpenCaseStatus(currentOpenCase.status)) {
+          if (
+            resolvedActiveCase &&
+            isOpenCaseStatus(resolvedActiveCase.status)
+          ) {
             const hypothesisSentence = extractFirstMatchingSentence(finalText, [
               /\bsuggests\b/i,
               /\bindicates\b/i,
@@ -2813,7 +2882,7 @@ Produce the corrected response now.
               isStrongHypothesisCandidate(hypothesisSentence)
             ) {
               await db.insert(caseHypotheses).values({
-                caseId: currentOpenCase.id,
+                caseId: resolvedActiveCase.id,
                 hypothesis: hypothesisSentence,
               });
             }
@@ -2838,7 +2907,7 @@ Produce the corrected response now.
               )
             ) {
               await db.insert(caseAdjustments).values({
-                caseId: currentOpenCase.id,
+                caseId: resolvedActiveCase.id,
                 cue: adjustmentSentence,
                 mechanicalFocus: adjustmentSentence,
               });
@@ -2856,26 +2925,44 @@ Produce the corrected response now.
           });
 
           if (isCaseReview && finalText.length > 60) {
-            const [latestCase] = await db
-              .select()
-              .from(cases)
-              .where(eq(cases.userId, userId))
-              .orderBy(desc(cases.id))
-              .limit(1);
+            let caseReviewTarget = resolvedActiveCase;
 
-            console.log("LATEST CASE FOR REVIEW:", latestCase?.id ?? null);
+            if (!caseReviewTarget) {
+              const [conversationCase] = await db
+                .select({
+                  id: cases.id,
+                  userId: cases.userId,
+                  conversationId: cases.conversationId,
+                  movementContext: cases.movementContext,
+                  activityType: cases.activityType,
+                  status: cases.status,
+                })
+                .from(cases)
+                .where(
+                  and(
+                    eq(cases.userId, userId),
+                    eq(cases.conversationId, convoId),
+                  ),
+                )
+                .orderBy(desc(cases.updatedAt), desc(cases.id))
+                .limit(1);
 
-            if (latestCase) {
+              caseReviewTarget = conversationCase ?? null;
+            }
+
+            console.log("CASE REVIEW TARGET:", caseReviewTarget?.id ?? null);
+
+            if (caseReviewTarget) {
               await writeCaseReview({
                 userId,
-                caseId: latestCase.id,
+                caseId: caseReviewTarget.id,
                 reviewText: finalText,
               });
 
-              console.log("CASE REVIEW STORED:", latestCase.id);
+              console.log("CASE REVIEW STORED:", caseReviewTarget.id);
             } else {
               console.warn(
-                "CASE REVIEW SKIPPED: no existing case found for user",
+                "CASE REVIEW SKIPPED: no conversation-scoped case found for user",
                 userId,
               );
             }
