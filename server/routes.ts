@@ -747,9 +747,7 @@ function extractFirstMatchingSentence(
       if (isMechanismLikeText(normalized)) score += 5;
       if (isTestLikeText(normalized)) score += 5;
       if (
-        /\b(?:because|due to|driven by|caused by|suggests|indicates|means|points to)\b/i.test(
-          normalized,
-        )
+        /\b(?:because|due to|driven by|caused by|points to)\b/i.test(normalized)
       ) {
         score += 4;
       }
@@ -835,9 +833,6 @@ function isMechanismLikeText(value: string | null | undefined): boolean {
     /\bcaused by\b/i,
     /\bcoming from\b/i,
     /\bhappening because\b/i,
-    /\bsuggests\b/i,
-    /\bindicates\b/i,
-    /\bmeans\b/i,
     /\bpoints to\b/i,
     /\bwhat'?s happening\b/i,
     /\bthe issue is\b/i,
@@ -943,9 +938,6 @@ function isTestLikeText(value: string | null | undefined): boolean {
     /\bcaused by\b/i,
     /\bcoming from\b/i,
     /\bhappening because\b/i,
-    /\bsuggests\b/i,
-    /\bindicates\b/i,
-    /\bmeans\b/i,
     /\bpoints to\b/i,
     /\bwhat'?s happening\b/i,
     /\bthe issue is\b/i,
@@ -1055,7 +1047,7 @@ function isStrongHypothesisCandidate(
     return false;
   }
 
-  return /\b(?:because|due to|driven by|caused by|coming from|suggests|indicates|means|points to|breaking|collapsing|stalling|opening too early|shifting too early|losing structure|compensating|taking over|bearing the load)\b/i.test(
+  return /\b(?:because|due to|driven by|caused by|coming from|points to|breaking|collapsing|stalling|opening too early|shifting too early|losing structure|compensating|taking over|bearing the load)\b/i.test(
     text,
   );
 }
@@ -1104,9 +1096,6 @@ function isStrongAdjustmentCandidate(
     /\bdue to\b/i,
     /\bdriven by\b/i,
     /\bcaused by\b/i,
-    /\bsuggests\b/i,
-    /\bindicates\b/i,
-    /\bmeans\b/i,
     /\bthe issue is\b/i,
     /\bthe problem is\b/i,
     /\bthis is happening\b/i,
