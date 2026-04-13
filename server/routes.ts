@@ -676,22 +676,104 @@ function isOpenCaseStatus(status: string | null | undefined): boolean {
   return /open|active|current/i.test(String(status));
 }
 
+async function getConversationOpenCase(
+  userId: string,
+  conversationId: number,
+): Promise<{
+  id: number;
+  userId: string;
+  conversationId: number | null;
+  movementContext: string | null;
+  activityType: string | null;
+  status: string | null;
+} | null> {
+  const [conversationOpenCase] = await db
+    .select({
+      id: cases.id,
+      userId: cases.userId,
+      conversationId: cases.conversationId,
+      movementContext: cases.movementContext,
+      activityType: cases.activityType,
+      status: cases.status,
+    })
+    .from(cases)
+    .where(
+      and(eq(cases.userId, userId), eq(cases.conversationId, conversationId)),
+    )
+    .orderBy(desc(cases.updatedAt), desc(cases.id))
+    .limit(1);
+
+  if (!conversationOpenCase || !isOpenCaseStatus(conversationOpenCase.status)) {
+    return null;
+  }
+
+  return conversationOpenCase;
+}
+
 function extractFirstMatchingSentence(
   text: string,
   patterns: RegExp[],
 ): string | null {
   const sentences = text
+    .replace(/\s+/g, " ")
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.trim())
     .filter(Boolean);
 
-  for (const sentence of sentences) {
-    if (patterns.some((pattern) => pattern.test(sentence))) {
-      return clampText(sentence, 400);
-    }
-  }
+  const candidates = sentences
+    .map((sentence) => {
+      const normalized = sentence
+        .replace(/[*_`#>\[\]()]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
 
-  return null;
+      const wordCount = normalized.split(" ").filter(Boolean).length;
+      const patternMatches = patterns.filter((pattern) =>
+        pattern.test(normalized),
+      ).length;
+
+      if (!normalized) return null;
+      if (normalized.length < 35) return null;
+      if (wordCount < 6) return null;
+      if (!/[.!?]$/.test(sentence)) return null;
+      if (/^[A-Z][A-Z\s]+:?$/.test(normalized)) return null;
+      if (isLowSignalShiftText(normalized)) return null;
+      if (isGenericCoachingFillerText(normalized)) return null;
+      if (patternMatches === 0) return null;
+
+      let score = patternMatches * 5;
+      if (isStrongHypothesisCandidate(normalized)) score += 12;
+      if (isStrongAdjustmentCandidate(normalized)) score += 12;
+      if (isMechanismLikeText(normalized)) score += 5;
+      if (isTestLikeText(normalized)) score += 5;
+      if (
+        /\b(?:because|due to|driven by|caused by|suggests|indicates|means|points to)\b/i.test(
+          normalized,
+        )
+      ) {
+        score += 4;
+      }
+      if (
+        /^(?:focus on|try|make sure|keep|let|allow|shift|think about)\b/i.test(
+          normalized,
+        )
+      ) {
+        score += 4;
+      }
+      if (normalized.length >= 55) score += 2;
+      if (normalized.length > 240) score -= 3;
+
+      return {
+        sentence: clampText(sentence, 400),
+        score,
+      };
+    })
+    .filter((candidate): candidate is { sentence: string; score: number } =>
+      Boolean(candidate),
+    )
+    .sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.sentence ?? null;
 }
 
 function normalizePreviewValue(
@@ -801,7 +883,23 @@ function isMechanismLikeText(value: string | null | undefined): boolean {
     /^\s*work on\b/i,
   ];
 
+  const genericSuccessPatterns = [
+    /\bthis is working\b/i,
+    /\bworking well\b/i,
+    /\baligning well\b/i,
+    /\bthis is aligning\b/i,
+    /\bgood sign\b/i,
+    /\bthis should help\b/i,
+    /\bthat should help\b/i,
+    /\bkeep it up\b/i,
+    /\bglad to hear\b/i,
+  ];
+
   if (instructionPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  if (genericSuccessPatterns.some((pattern) => pattern.test(text))) {
     return false;
   }
 
@@ -815,15 +913,27 @@ function isTestLikeText(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
 
-  const testPatterns = [
-    /\bfocus on\b/i,
-    /\btry\b/i,
-    /\bmake sure\b/i,
-    /\bkeep\b/i,
-    /\blet\b/i,
-    /\ballow\b/i,
-    /\bshift\b/i,
-    /\bthink about\b/i,
+  const concreteActionStartPatterns = [
+    /^\s*focus on\b/i,
+    /^\s*try\b/i,
+    /^\s*make sure\b/i,
+    /^\s*keep\b/i,
+    /^\s*let\b/i,
+    /^\s*allow\b/i,
+    /^\s*shift\b/i,
+    /^\s*think about\b/i,
+    /^\s*load\b/i,
+    /^\s*relax\b/i,
+    /^\s*drive\b/i,
+    /^\s*rotate\b/i,
+    /^\s*brace\b/i,
+    /^\s*stack\b/i,
+    /^\s*press\b/i,
+    /^\s*pull\b/i,
+    /^\s*push\b/i,
+    /^\s*hinge\b/i,
+    /^\s*hold\b/i,
+    /^\s*stay\b/i,
   ];
 
   const diagnosisPatterns = [
@@ -842,11 +952,31 @@ function isTestLikeText(value: string | null | undefined): boolean {
     /\bthe problem is\b/i,
   ];
 
-  if (!testPatterns.some((pattern) => pattern.test(text))) {
+  const vagueAdvicePatterns = [
+    /\bthe key is\b/i,
+    /\bthis should help\b/i,
+    /\bthat should help\b/i,
+    /\bstay aware of\b/i,
+    /\bbe aware of\b/i,
+    /\bconsistency\b/i,
+    /\bkeep working on\b/i,
+  ];
+
+  if (!concreteActionStartPatterns.some((pattern) => pattern.test(text))) {
     return false;
   }
 
-  return !diagnosisPatterns.some((pattern) => pattern.test(text));
+  if (diagnosisPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  if (vagueAdvicePatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  return /\b(?:hip|rib|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|hinge|foot|feet|ankle|knee|glute|serve|swing|contact|backswing|pressure)\b/i.test(
+    text,
+  );
 }
 
 function isGenericCoachingFillerText(
@@ -869,6 +999,16 @@ function isGenericCoachingFillerText(
     /^\s*this exercise\b/i,
     /\baligns with\b/i,
     /\bwhat you need\b/i,
+    /\bthis is working\b/i,
+    /\bworking well\b/i,
+    /\baligning well\b/i,
+    /\bthis is aligning\b/i,
+    /\bgood sign\b/i,
+    /\bglad to hear\b/i,
+    /\bgreat to hear\b/i,
+    /\bhappy to hear\b/i,
+    /\bkeep it up\b/i,
+    /\blet me know\b/i,
   ];
 
   return fillerPatterns.some((pattern) => pattern.test(text));
@@ -879,12 +1019,45 @@ function isStrongHypothesisCandidate(
 ): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
-  if (text.length < 40) return false;
+  if (text.length < 45) return false;
+  if (text.length > 260) return false;
   if (isGenericCoachingFillerText(text)) return false;
   if (isTestLikeText(text)) return false;
   if (!isMechanismLikeText(text)) return false;
 
-  return true;
+  const directivePatterns = [
+    /^\s*focus on\b/i,
+    /^\s*try\b/i,
+    /^\s*make sure\b/i,
+    /^\s*keep\b/i,
+    /^\s*let\b/i,
+    /^\s*allow\b/i,
+    /^\s*shift\b/i,
+    /^\s*think about\b/i,
+    /^\s*work on\b/i,
+  ];
+
+  const vagueInterpretationPatterns = [
+    /\bthis is working\b/i,
+    /\baligning well\b/i,
+    /\bgood sign\b/i,
+    /\bthis should help\b/i,
+    /\bthat should help\b/i,
+    /\bthe key is\b/i,
+    /\bimportant thing\b/i,
+  ];
+
+  if (directivePatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  if (vagueInterpretationPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  return /\b(?:because|due to|driven by|caused by|coming from|suggests|indicates|means|points to|breaking|collapsing|stalling|opening too early|shifting too early|losing structure|compensating|taking over|bearing the load)\b/i.test(
+    text,
+  );
 }
 
 function isStrongAdjustmentCandidate(
@@ -892,40 +1065,93 @@ function isStrongAdjustmentCandidate(
 ): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
-  if (text.length < 30) return false;
+  if (text.length < 25) return false;
+  if (text.length > 220) return false;
   if (isGenericCoachingFillerText(text)) return false;
   if (!isTestLikeText(text)) return false;
   if (isMechanismLikeText(text)) return false;
 
-  const executionVerbPatterns = [
-    /\bfocus\b/i,
-    /\btry\b/i,
-    /\bmake sure\b/i,
-    /\bkeep\b/i,
-    /\blet\b/i,
-    /\ballow\b/i,
-    /\bshift\b/i,
-    /\bthink about\b/i,
-    /\bload\b/i,
-    /\brelax\b/i,
-    /\bdrive\b/i,
-    /\bcontrol\b/i,
-    /\brotate\b/i,
-    /\bstack\b/i,
-    /\bmove\b/i,
-    /\bpress\b/i,
-    /\bpull\b/i,
-    /\bpush\b/i,
-    /\bhinge\b/i,
-    /\bbrace\b/i,
-    /\bstabilize\b/i,
-    /\bstabilise\b/i,
-    /\bhold\b/i,
-    /\bclear\b/i,
-    /\bstay\b/i,
+  const actionStartPatterns = [
+    /^\s*focus on\b/i,
+    /^\s*try\b/i,
+    /^\s*make sure\b/i,
+    /^\s*keep\b/i,
+    /^\s*let\b/i,
+    /^\s*allow\b/i,
+    /^\s*shift\b/i,
+    /^\s*think about\b/i,
+    /^\s*load\b/i,
+    /^\s*relax\b/i,
+    /^\s*drive\b/i,
+    /^\s*control\b/i,
+    /^\s*rotate\b/i,
+    /^\s*stack\b/i,
+    /^\s*move\b/i,
+    /^\s*press\b/i,
+    /^\s*pull\b/i,
+    /^\s*push\b/i,
+    /^\s*hinge\b/i,
+    /^\s*brace\b/i,
+    /^\s*stabilize\b/i,
+    /^\s*stabilise\b/i,
+    /^\s*hold\b/i,
+    /^\s*clear\b/i,
+    /^\s*stay\b/i,
   ];
 
-  return executionVerbPatterns.some((pattern) => pattern.test(text));
+  const rejectMixedPatterns = [
+    /\bbecause\b/i,
+    /\bdue to\b/i,
+    /\bdriven by\b/i,
+    /\bcaused by\b/i,
+    /\bsuggests\b/i,
+    /\bindicates\b/i,
+    /\bmeans\b/i,
+    /\bthe issue is\b/i,
+    /\bthe problem is\b/i,
+    /\bthis is happening\b/i,
+    /\bwhich means\b/i,
+    /\bso that\b/i,
+  ];
+
+  const concreteBodyActionPatterns = [
+    /\bhip\b/i,
+    /\brib\b/i,
+    /\bpelvis\b/i,
+    /\btrunk\b/i,
+    /\bshoulder\b/i,
+    /\bback\b/i,
+    /\bspine\b/i,
+    /\bbrace\b/i,
+    /\bload\b/i,
+    /\bstack\b/i,
+    /\brotate\b/i,
+    /\bhinge\b/i,
+    /\bfoot\b/i,
+    /\bfeet\b/i,
+    /\bankle\b/i,
+    /\bknee\b/i,
+    /\bglute\b/i,
+    /\bserve\b/i,
+    /\bswing\b/i,
+    /\bcontact\b/i,
+    /\bbackswing\b/i,
+    /\bpressure\b/i,
+  ];
+
+  if (!actionStartPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  if (rejectMixedPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  if (!concreteBodyActionPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+
+  return true;
 }
 
 function isLowSignalShiftText(value: string | null | undefined): boolean {
@@ -940,7 +1166,15 @@ function isLowSignalShiftText(value: string | null | undefined): boolean {
     /\bi came across\b/i.test(text) ||
     /\bon youtube\b/i.test(text) ||
     /\bin a video\b/i.test(text) ||
-    /\bin an article\b/i.test(text)
+    /\bin an article\b/i.test(text) ||
+    /\bthis is working\b/i.test(text) ||
+    /\baligning well\b/i.test(text) ||
+    /\bgood sign\b/i.test(text) ||
+    /\bthe key is\b/i.test(text) ||
+    /\bthis should help\b/i.test(text) ||
+    /\bthat should help\b/i.test(text) ||
+    /\bglad to hear\b/i.test(text) ||
+    /\bkeep it up\b/i.test(text)
   );
 }
 
@@ -2140,36 +2374,17 @@ export async function registerRoutes(
           status: string | null;
         } | null = null;
 
+        resolvedActiveCase = await getConversationOpenCase(userId, convoId);
+
         try {
           const outcomeResult = detectOutcomeResult(userText);
 
           if (outcomeResult) {
             if (!resolvedActiveCase) {
-              const [conversationOpenCase] = await db
-                .select({
-                  id: cases.id,
-                  userId: cases.userId,
-                  conversationId: cases.conversationId,
-                  movementContext: cases.movementContext,
-                  activityType: cases.activityType,
-                  status: cases.status,
-                })
-                .from(cases)
-                .where(
-                  and(
-                    eq(cases.userId, userId),
-                    eq(cases.conversationId, convoId),
-                  ),
-                )
-                .orderBy(desc(cases.updatedAt), desc(cases.id))
-                .limit(1);
-
-              if (
-                conversationOpenCase &&
-                isOpenCaseStatus(conversationOpenCase.status)
-              ) {
-                resolvedActiveCase = conversationOpenCase;
-              }
+              resolvedActiveCase = await getConversationOpenCase(
+                userId,
+                convoId,
+              );
             }
 
             const activeCase = resolvedActiveCase;
@@ -2224,106 +2439,17 @@ export async function registerRoutes(
             const derivedCaseContext = deriveCaseContext(userText);
             const derivedBodyRegion = deriveBodyRegion(userText);
             const derivedSignalType = deriveSignalType(userText);
-            const recentUserCases = await db
-              .select({
-                id: cases.id,
-                userId: cases.userId,
-                conversationId: cases.conversationId,
-                movementContext: cases.movementContext,
-                activityType: cases.activityType,
-                status: cases.status,
-              })
-              .from(cases)
-              .where(eq(cases.userId, userId))
-              .orderBy(desc(cases.updatedAt), desc(cases.id))
-              .limit(12);
-
-            const openCases = recentUserCases.filter((row) =>
-              isOpenCaseStatus(row.status),
-            );
-
-            // Resolved cases are history, not blockers. Only unresolved open cases
-            // are considered here, and even then only when the current problem
-            // strongly looks like the same fixable issue.
-            const openCasesWithLatestSignal = await Promise.all(
-              openCases.map(async (row) => {
-                const [latestSignal] = await db
-                  .select({
-                    bodyRegion: caseSignals.bodyRegion,
-                    signalType: caseSignals.signalType,
-                    description: caseSignals.description,
-                  })
-                  .from(caseSignals)
-                  .where(eq(caseSignals.caseId, row.id))
-                  .orderBy(desc(caseSignals.id))
-                  .limit(1);
-
-                return {
-                  ...row,
-                  latestSignal,
-                };
-              }),
-            );
-
-            const derivedMovementKey = normalizeOptionalLabel(
-              derivedCaseContext.movementContext,
-            );
-            const derivedActivityKey = normalizeOptionalLabel(
-              derivedCaseContext.activityType,
-            );
-            const derivedBodyRegionKey =
-              normalizeOptionalLabel(derivedBodyRegion);
-            const derivedSignalTypeKey =
-              normalizeOptionalLabel(derivedSignalType);
-
-            const matchedOpenCase = openCasesWithLatestSignal.find((row) => {
-              const rowMovementKey = normalizeOptionalLabel(
-                row.movementContext,
+            if (!resolvedActiveCase) {
+              resolvedActiveCase = await getConversationOpenCase(
+                userId,
+                convoId,
               );
-              const rowActivityKey = normalizeOptionalLabel(row.activityType);
-              const rowBodyRegionKey = normalizeOptionalLabel(
-                row.latestSignal?.bodyRegion,
-              );
-              const rowSignalTypeKey = normalizeOptionalLabel(
-                row.latestSignal?.signalType,
-              );
+            }
 
-              const sameBodyRegion =
-                derivedBodyRegionKey !== "" &&
-                rowBodyRegionKey !== "" &&
-                derivedBodyRegionKey === rowBodyRegionKey;
-
-              const sameSignalType =
-                derivedSignalTypeKey !== "" &&
-                rowSignalTypeKey !== "" &&
-                derivedSignalTypeKey === rowSignalTypeKey;
-
-              const sameStrongMovementContext =
-                hasStrongCaseContext(derivedCaseContext.movementContext) &&
-                hasStrongCaseContext(row.movementContext) &&
-                derivedMovementKey === rowMovementKey;
-
-              const sameStrongActivity =
-                hasStrongCaseActivity(derivedCaseContext.activityType) &&
-                hasStrongCaseActivity(row.activityType) &&
-                derivedActivityKey === rowActivityKey;
-
-              // Bias toward opening a new case. Only append to an existing open
-              // case when it matches the same unresolved problem strongly enough
-              // that the intervention path is likely the same.
-              return (
-                sameBodyRegion &&
-                (sameStrongMovementContext ||
-                  (sameStrongActivity && sameSignalType))
-              );
-            });
-
-            if (matchedOpenCase) {
-              resolvedActiveCase = matchedOpenCase;
-
+            if (resolvedActiveCase) {
               await db.insert(caseSignals).values({
                 userId,
-                caseId: matchedOpenCase.id,
+                caseId: resolvedActiveCase.id,
                 description: clampText(userText, 800),
                 activityType: derivedCaseContext.activityType,
                 movementContext: derivedCaseContext.movementContext,
@@ -2405,28 +2531,7 @@ export async function registerRoutes(
         }
 
         if (!resolvedActiveCase) {
-          const [conversationOpenCase] = await db
-            .select({
-              id: cases.id,
-              userId: cases.userId,
-              conversationId: cases.conversationId,
-              movementContext: cases.movementContext,
-              activityType: cases.activityType,
-              status: cases.status,
-            })
-            .from(cases)
-            .where(
-              and(eq(cases.userId, userId), eq(cases.conversationId, convoId)),
-            )
-            .orderBy(desc(cases.updatedAt), desc(cases.id))
-            .limit(1);
-
-          if (
-            conversationOpenCase &&
-            isOpenCaseStatus(conversationOpenCase.status)
-          ) {
-            resolvedActiveCase = conversationOpenCase;
-          }
+          resolvedActiveCase = await getConversationOpenCase(userId, convoId);
         }
 
         const memory = await getMemory(userId);
@@ -2832,17 +2937,12 @@ Produce the corrected response now.
             isOpenCaseStatus(resolvedActiveCase.status)
           ) {
             const hypothesisSentence = extractFirstMatchingSentence(finalText, [
-              /\bsuggests\b/i,
-              /\bindicates\b/i,
-              /\bmeans\b/i,
-              /\bpoints to\b/i,
-              /\bpoints back to\b/i,
-              /\blikely due to\b/i,
+              /\bbecause\b/i,
               /\bdue to\b/i,
+              /\bdriven by\b/i,
+              /\bcaused by\b/i,
               /\bcomes from\b/i,
               /\bis coming from\b/i,
-              /\bcaused by\b/i,
-              /\bis caused by\b/i,
               /\bhappening because\b/i,
               /\bthis is happening because\b/i,
               /\bthe issue is\b/i,
@@ -2851,8 +2951,6 @@ Produce the corrected response now.
               /\bthis comes from\b/i,
               /\bthis usually comes from\b/i,
               /\bthis is driven by\b/i,
-              /\bdriven by\b/i,
-              /\bwhat'?s happening is\b/i,
               /\bis breaking\b/i,
               /\bis collapsing\b/i,
               /\bis stalling\b/i,
@@ -2881,21 +2979,49 @@ Produce the corrected response now.
               hypothesisSentence &&
               isStrongHypothesisCandidate(hypothesisSentence)
             ) {
-              await db.insert(caseHypotheses).values({
-                caseId: resolvedActiveCase.id,
-                hypothesis: hypothesisSentence,
-              });
+              const [latestStoredHypothesis] = await db
+                .select({
+                  hypothesis: caseHypotheses.hypothesis,
+                })
+                .from(caseHypotheses)
+                .where(eq(caseHypotheses.caseId, resolvedActiveCase.id))
+                .orderBy(desc(caseHypotheses.id))
+                .limit(1);
+
+              if (
+                !areEquivalentDashboardCandidates(
+                  hypothesisSentence,
+                  latestStoredHypothesis?.hypothesis,
+                )
+              ) {
+                await db.insert(caseHypotheses).values({
+                  caseId: resolvedActiveCase.id,
+                  hypothesis: hypothesisSentence,
+                });
+              }
             }
 
             const adjustmentSentence = extractFirstMatchingSentence(finalText, [
-              /\bfocus on\b/i,
-              /\btry\b/i,
-              /\bmake sure\b/i,
-              /\blet\b/i,
-              /\ballow\b/i,
-              /\bshift\b/i,
-              /\bkeep\b/i,
-              /\bthink about\b/i,
+              /^\s*focus on\b/i,
+              /^\s*try\b/i,
+              /^\s*make sure\b/i,
+              /^\s*let\b/i,
+              /^\s*allow\b/i,
+              /^\s*shift\b/i,
+              /^\s*keep\b/i,
+              /^\s*think about\b/i,
+              /^\s*load\b/i,
+              /^\s*relax\b/i,
+              /^\s*drive\b/i,
+              /^\s*rotate\b/i,
+              /^\s*brace\b/i,
+              /^\s*stack\b/i,
+              /^\s*press\b/i,
+              /^\s*pull\b/i,
+              /^\s*push\b/i,
+              /^\s*hinge\b/i,
+              /^\s*hold\b/i,
+              /^\s*stay\b/i,
             ]);
 
             if (
@@ -2906,11 +3032,33 @@ Produce the corrected response now.
                 hypothesisSentence,
               )
             ) {
-              await db.insert(caseAdjustments).values({
-                caseId: resolvedActiveCase.id,
-                cue: adjustmentSentence,
-                mechanicalFocus: adjustmentSentence,
-              });
+              const [latestStoredAdjustment] = await db
+                .select({
+                  cue: caseAdjustments.cue,
+                  mechanicalFocus: caseAdjustments.mechanicalFocus,
+                })
+                .from(caseAdjustments)
+                .where(eq(caseAdjustments.caseId, resolvedActiveCase.id))
+                .orderBy(desc(caseAdjustments.id))
+                .limit(1);
+
+              const isDuplicateAdjustment =
+                areEquivalentDashboardCandidates(
+                  adjustmentSentence,
+                  latestStoredAdjustment?.cue,
+                ) ||
+                areEquivalentDashboardCandidates(
+                  adjustmentSentence,
+                  latestStoredAdjustment?.mechanicalFocus,
+                );
+
+              if (!isDuplicateAdjustment) {
+                await db.insert(caseAdjustments).values({
+                  caseId: resolvedActiveCase.id,
+                  cue: adjustmentSentence,
+                  mechanicalFocus: adjustmentSentence,
+                });
+              }
             }
           }
         } catch (err) {
@@ -2928,26 +3076,7 @@ Produce the corrected response now.
             let caseReviewTarget = resolvedActiveCase;
 
             if (!caseReviewTarget) {
-              const [conversationCase] = await db
-                .select({
-                  id: cases.id,
-                  userId: cases.userId,
-                  conversationId: cases.conversationId,
-                  movementContext: cases.movementContext,
-                  activityType: cases.activityType,
-                  status: cases.status,
-                })
-                .from(cases)
-                .where(
-                  and(
-                    eq(cases.userId, userId),
-                    eq(cases.conversationId, convoId),
-                  ),
-                )
-                .orderBy(desc(cases.updatedAt), desc(cases.id))
-                .limit(1);
-
-              caseReviewTarget = conversationCase ?? null;
+              caseReviewTarget = await getConversationOpenCase(userId, convoId);
             }
 
             console.log("CASE REVIEW TARGET:", caseReviewTarget?.id ?? null);
