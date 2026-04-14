@@ -1973,6 +1973,7 @@ export async function registerRoutes(
         | undefined;
       let latestOutcome:
         | {
+            result: string | null;
             userFeedback: string | null;
           }
         | undefined;
@@ -2004,6 +2005,7 @@ export async function registerRoutes(
 
         [latestOutcome] = await db
           .select({
+            result: caseOutcomes.result,
             userFeedback: caseOutcomes.userFeedback,
           })
           .from(caseOutcomes)
@@ -2023,14 +2025,26 @@ export async function registerRoutes(
 
       let latestCaseReview:
         | {
+            id: number;
+            caseId: number;
             reviewText: string | null;
+            createdAt: Date | null;
           }
         | undefined;
+      let caseReviewsList: Array<{
+        id: number;
+        caseId: number;
+        reviewText: string | null;
+        createdAt: Date | null;
+      }> = [];
 
       if (selectedCase) {
         [latestCaseReview] = await db
           .select({
+            id: caseReviews.id,
+            caseId: caseReviews.caseId,
             reviewText: caseReviews.reviewText,
+            createdAt: caseReviews.createdAt,
           })
           .from(caseReviews)
           .where(eq(caseReviews.caseId, selectedCase.id))
@@ -2038,18 +2052,30 @@ export async function registerRoutes(
           .limit(1);
       }
 
+      caseReviewsList = await db
+        .select({
+          id: caseReviews.id,
+          caseId: caseReviews.caseId,
+          reviewText: caseReviews.reviewText,
+          createdAt: caseReviews.createdAt,
+        })
+        .from(caseReviews)
+        .innerJoin(cases, eq(caseReviews.caseId, cases.id))
+        .where(eq(cases.userId, userId))
+        .orderBy(desc(caseReviews.createdAt))
+        .limit(5);
+
       const activeCaseTitle = buildActiveCaseTitle(
         selectedCase?.movementContext,
         selectedCase?.activityType,
       );
+      const latestOutcomeResult = String(latestOutcome?.result ?? "").trim();
       const investigationState = !selectedCase
         ? null
-        : String(selectedCase.status ?? "")
-              .trim()
-              .toLowerCase() === "resolved"
+        : latestOutcomeResult === "Improved"
           ? "Resolved"
-          : latestOutcome
-            ? "Testing"
+          : latestOutcomeResult === "Same" || latestOutcomeResult === "Worse"
+            ? "Testing (no improvement)"
             : latestAdjustment
               ? "Testing"
               : latestHypothesis
@@ -2133,6 +2159,7 @@ export async function registerRoutes(
         currentTest,
         lastShift,
         hasLatestCaseReview: Boolean(latestCaseReview?.reviewText),
+        caseReviewsCount: caseReviewsList.length,
         lastCaseReviewSnippet,
       });
 
@@ -2143,6 +2170,7 @@ export async function registerRoutes(
         currentTest,
         lastShift,
         lastCaseReviewSnippet,
+        caseReviewsList,
       });
     } catch (err) {
       console.error("Failed to load dashboard preview:", err);

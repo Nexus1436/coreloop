@@ -69,11 +69,11 @@ export function InterloopSettings({
         <div className="w-full max-w-xl mx-auto rounded-2xl border border-[#1f1f1f] bg-[#0b0b0b] p-6 sm:p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-medium">Interloop Setup</h1>
+              <h1 className="text-2xl font-medium">Your Setup</h1>
               <p className="mt-2 text-sm text-gray-400">
                 {isOnboarding
                   ? "Complete these fields before entering the app."
-                  : "Update your local Interloop settings."}
+                  : "Update your setup."}
               </p>
             </div>
 

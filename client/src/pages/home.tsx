@@ -25,6 +25,12 @@ type DashboardData = {
   currentTest: string | null;
   lastShift: string | null;
   lastCaseReviewSnippet: string | null;
+  caseReviewsList: {
+    id: number;
+    caseId: number;
+    reviewText: string;
+    createdAt: string;
+  }[];
 };
 
 const INTERLOOP_SETTINGS_KEY = "interloopSettings";
@@ -49,6 +55,7 @@ const defaultDashboardData: DashboardData = {
   currentTest: null,
   lastShift: null,
   lastCaseReviewSnippet: null,
+  caseReviewsList: [],
 };
 
 function isSettingsComplete(settings: InterloopSettingsValues): boolean {
@@ -323,6 +330,7 @@ export default function Home() {
         currentTest: data?.currentTest ?? null,
         lastShift: data?.lastShift ?? null,
         lastCaseReviewSnippet: data?.lastCaseReviewSnippet ?? null,
+        caseReviewsList: data?.caseReviewsList ?? [],
       });
     } catch (err) {
       console.warn("Failed to load dashboard data:", err);
@@ -559,6 +567,47 @@ export default function Home() {
     speakText,
   ]);
 
+  const handleInterloopExplanation = useCallback(async () => {
+    if (isProcessing || isRecording || isSpeaking) {
+      return;
+    }
+
+    setMode("B");
+
+    const assistantId = nextId();
+    setMessages([{ id: assistantId, role: "assistant", text: "" }]);
+    setIsProcessing(true);
+
+    let assistantText = "";
+
+    try {
+      await sendChat(
+        conversationIdRef.current,
+        `Hi... I'm meeting you for the first time. Tell me who you are in a natural, conversational way. Do not sound clinical, instructional, or like a system explanation. Do not use numbered lists or step-by-step guidance. Make it clear that I do not need to explain things cleanly, and that I can ramble, be messy, and start with whatever feels most noticeable. Sound human, direct, and warm. Start with: "Hi... I'm Interloop."`,
+        (id) => {
+          conversationIdRef.current = id;
+          setConversationId(id);
+          localStorage.setItem("conversationId", String(id));
+        },
+        (chunk) => {
+          assistantText = mergeStream(assistantText, chunk);
+
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, text: assistantText } : m,
+            ),
+          );
+        },
+      );
+
+      if (assistantText.trim()) {
+        await speakText(assistantId, assistantText, "auto");
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [isProcessing, isRecording, isSpeaking, speakText]);
+
   const handleTap = useCallback(async () => {
     if (isSpeaking) {
       stopSpeech();
@@ -658,14 +707,33 @@ export default function Home() {
     await speakText(lastPlayable.id, lastPlayable.text, "repeat");
   }, [isPlaybackActive, playUITone, speakText, stopSpeech]);
 
+  const handleOpenCaseReview = useCallback(
+    (review: {
+      id: number;
+      caseId: number;
+      reviewText: string;
+      createdAt: string;
+    }) => {
+      setMode("B");
+
+      setMessages([
+        {
+          id: `review-${review.id}`,
+          role: "assistant",
+          text: review.reviewText,
+        },
+      ]);
+    },
+    [],
+  );
+
+  const currentInvestigationState =
+    dashboardData.investigationState ?? "No active case";
+
   const currentStateRows = [
     {
       label: "Active Case",
       value: dashboardData.activeCaseTitle,
-    },
-    {
-      label: "Investigation State",
-      value: dashboardData.investigationState,
     },
     {
       label: "Current Mechanism",
@@ -678,10 +746,6 @@ export default function Home() {
     {
       label: "Last Shift",
       value: dashboardData.lastShift,
-    },
-    {
-      label: "Last Case Review",
-      value: dashboardData.lastCaseReviewSnippet,
     },
   ].filter((row) => Boolean(row.value));
 
@@ -735,12 +799,12 @@ export default function Home() {
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                     <span className="text-sm text-gray-400">
                       {isSpeaking
-                        ? "Stop"
+                        ? "Tap to stop"
                         : isRecording
-                          ? "Listening..."
+                          ? "Press again to send"
                           : isProcessing
-                            ? "Reflecting..."
-                            : "Press here"}
+                            ? "Thinking..."
+                            : "Press here to talk"}
                     </span>
                   </div>
                 </div>
@@ -759,7 +823,7 @@ export default function Home() {
                 onClick={() => setMode("C")}
                 className="text-white text-sm font-medium"
               >
-                Dashboard
+                Your Investigation
               </button>
             </div>
 
@@ -772,9 +836,9 @@ export default function Home() {
               <button
                 onClick={() => setIsSettingsOpen(true)}
                 className="text-gray-400 text-sm font-medium"
-                aria-label="Open settings"
+                aria-label="Open your setup"
               >
-                Settings
+                Your Setup
               </button>
             </div>
 
@@ -794,6 +858,10 @@ export default function Home() {
                 Prefer typing?
               </button>
 
+              <button onClick={handleInterloopExplanation}>
+                Who is Interloop?
+              </button>
+
               <button onClick={handlePlaybackControl}>{playbackLabel}</button>
             </div>
           </>
@@ -809,7 +877,7 @@ export default function Home() {
                 onClick={() => setMode("C")}
                 className="text-white text-sm font-medium"
               >
-                Dashboard
+                Your Investigation
               </button>
             </div>
 
@@ -823,7 +891,7 @@ export default function Home() {
                 onClick={() => setIsSettingsOpen(true)}
                 className="text-gray-400 text-sm font-medium"
               >
-                Settings
+                Your Setup
               </button>
             </div>
 
@@ -857,51 +925,93 @@ export default function Home() {
 
             <div className="w-full max-w-xl mx-auto flex flex-col items-center text-center">
               <h1 className="text-3xl font-semibold tracking-tight text-white">
-                Dashboard
+                Your Investigation
               </h1>
 
               <p className="mt-4 text-sm text-gray-500">
                 Run focused reviews on your current case.
               </p>
 
-              {currentStateRows.length > 0 && (
-                <div className="w-full mt-10 text-left">
-                  <div className="flex flex-col gap-5">
+              <div className="w-full mt-10 text-left">
+                <div className="flex flex-col gap-5">
+                  <div>
                     <div className="text-xs uppercase tracking-[0.14em] text-gray-600">
                       Current State
                     </div>
-                    {currentStateRows.map((row) => (
-                      <div key={row.label} className="w-full">
-                        <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
-                          {row.label}
-                        </div>
-                        <div className="mt-1 text-sm leading-relaxed text-gray-300">
-                          {row.value}
-                        </div>
-                      </div>
-                    ))}
+                    <div className="mt-1 text-sm leading-relaxed text-gray-300">
+                      {currentInvestigationState}
+                    </div>
                   </div>
-                </div>
-              )}
 
-              <div className="w-full mt-16 flex flex-col gap-10">
-                <button
-                  onClick={() => {
-                    playUITone(720);
-                    setMode("B");
-                    window.setTimeout(() => {
-                      void runCaseReview();
-                    }, 50);
-                  }}
-                  className="w-full text-center py-5 transition-opacity hover:opacity-80 cursor-pointer"
-                >
-                  <div className="text-lg font-medium text-white">
-                    Get New Case Review
+                  {currentStateRows.map((row) => (
+                    <div key={row.label} className="w-full">
+                      <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
+                        {row.label}
+                      </div>
+                      <div className="mt-1 text-sm leading-relaxed text-gray-300">
+                        {row.value}
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="w-full mt-6">
+                    <button
+                      onClick={() => {
+                        playUITone(720);
+                        setMode("B");
+                        window.setTimeout(() => {
+                          void runCaseReview();
+                        }, 50);
+                      }}
+                      className="w-full text-center py-5 transition-opacity hover:opacity-80 cursor-pointer"
+                    >
+                      <div className="text-lg font-medium text-white">
+                        Get New Case Review
+                      </div>
+                      <div className="mt-2 text-sm text-gray-500">
+                        Break down the current mechanism and identify the next
+                        move.
+                      </div>
+                    </button>
                   </div>
-                  <div className="mt-2 text-sm text-gray-500">
-                    Break down the current mechanism and identify the next move.
-                  </div>
-                </button>
+
+                  {dashboardData.caseReviewsList?.length > 0 && (
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
+                        Case Reviews
+                      </div>
+
+                      <div className="mt-2 flex flex-col gap-4">
+                        {dashboardData.caseReviewsList.map((review) => {
+                          const preview = review.reviewText?.slice(0, 140);
+
+                          const date = new Date(
+                            review.createdAt,
+                          ).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                          });
+
+                          return (
+                            <button
+                              key={review.id}
+                              onClick={() => handleOpenCaseReview(review)}
+                              className="text-left hover:opacity-80 transition"
+                            >
+                              <div className="text-sm text-white">
+                                Case Review — {date}
+                              </div>
+
+                              <div className="text-sm text-gray-400 mt-1">
+                                {preview}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
