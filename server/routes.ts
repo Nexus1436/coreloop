@@ -1554,14 +1554,14 @@ function areMateriallyEquivalentAdjustments(
   const sameTargets =
     leftTargets.size > 0 &&
     rightTargets.size > 0 &&
-    [...leftTargets].every((token) => rightTargets.has(token)) &&
-    [...rightTargets].every((token) => leftTargets.has(token));
+    Array.from(leftTargets).every((token) => rightTargets.has(token)) &&
+    Array.from(rightTargets).every((token) => leftTargets.has(token));
 
   const sameGoals =
     leftGoals.size > 0 &&
     rightGoals.size > 0 &&
-    [...leftGoals].every((token) => rightGoals.has(token)) &&
-    [...rightGoals].every((token) => leftGoals.has(token));
+    Array.from(leftGoals).every((token) => rightGoals.has(token)) &&
+    Array.from(rightGoals).every((token) => leftGoals.has(token));
 
   if (sameTargets && sameGoals) {
     const leftTokens = tokenizeAdjustmentMeaning(leftCanonical);
@@ -1879,6 +1879,42 @@ function qualifiesForTimelineSignal(text: string): boolean {
   return (
     (hasStrongSymptom && hasBodyRegion) ||
     (hasStrongSymptom && hasMovementMechanic) ||
+    hasSpecificMovementBreakdown
+  );
+}
+
+function qualifiesForNewCaseOpen(text: string): boolean {
+  const input = text.trim().toLowerCase();
+  if (!input) return false;
+
+  const hasBodyRegion =
+    /\b(?:hip|back|low back|mid back|shoulder|knee|ankle|elbow|wrist|neck|foot|feet|leg|arm|glute|spine|lumbar|thoracic|hamstring|quad|calf|shin)\b/i.test(
+      input,
+    );
+
+  const hasStrongSymptom =
+    /\b(?:pain|painful|tight|tightness|stiff|stiffness|sore|soreness|hurt|hurts|hurting|discomfort|pinch|pinching|pinched|ache|aching|cannot|can't|cant|limited|limitation|restricted|unstable|instability)\b/i.test(
+      input,
+    );
+
+  const hasMovementMechanic =
+    /\b(?:rotate|rotation|load|hinge|swing|serve|backswing|contact point|contact|breakdown|breaks down|collapse|collapses|shift|shifting|compensation|compensating|lunge|deadlift|squat|brace|stack)\b/i.test(
+      input,
+    );
+
+  const hasSpecificMovementBreakdown =
+    /\b(?:timing is off on (?:my )?(?:serve|swing)|my timing is off at contact|unstable at contact|can't load into (?:my |the )?(?:right |left )?hip|cant load into (?:my |the )?(?:right |left )?hip|my knee collapses when i lunge|knee collapses when i lunge|my back hurts on (?:the )?backswing|my hip tightens when i rotate|my shoulder feels unstable at contact)\b/i.test(
+      input,
+    ) ||
+    /\b(?:collapses|breaks down|gives out)\b.*\b(?:when|on|during)\b.*\b(?:rotate|rotation|lunge|serve|swing|backswing|contact)\b/i.test(
+      input,
+    ) ||
+    /\b(?:cannot|can't|cant)\b.*\b(?:load|rotate|hinge|swing|serve)\b.*\b(?:hip|backswing|contact|serve)\b/i.test(
+      input,
+    );
+
+  return (
+    (hasBodyRegion && hasStrongSymptom && hasMovementMechanic) ||
     hasSpecificMovementBreakdown
   );
 }
@@ -3027,13 +3063,14 @@ export async function registerRoutes(
         }
 
         try {
-          const shouldCreateCase =
+          const shouldCaptureSignal =
             !isCaseReview && qualifiesForTimelineSignal(userText);
 
-          if (shouldCreateCase) {
+          if (shouldCaptureSignal) {
             const derivedCaseContext = deriveCaseContext(userText);
             const derivedBodyRegion = deriveBodyRegion(userText);
             const derivedSignalType = deriveSignalType(userText);
+
             if (!resolvedActiveCase) {
               resolvedActiveCase = await getConversationOpenCase(
                 userId,
@@ -3051,7 +3088,7 @@ export async function registerRoutes(
                 bodyRegion: derivedBodyRegion,
                 signalType: derivedSignalType,
               });
-            } else {
+            } else if (qualifiesForNewCaseOpen(userText)) {
               let newCase:
                 | {
                     id: number;
