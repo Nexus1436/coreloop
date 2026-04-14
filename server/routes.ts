@@ -774,6 +774,162 @@ function extractFirstMatchingSentence(
   return candidates[0]?.sentence ?? null;
 }
 
+function extractBestHypothesisSentence(text: string): string | null {
+  const hypothesisPatterns: RegExp[] = [
+    /\bbecause\b/i,
+    /\bdue to\b/i,
+    /\bdriven by\b/i,
+    /\bcaused by\b/i,
+    /\bcomes from\b/i,
+    /\bis coming from\b/i,
+    /\bhappening because\b/i,
+    /\bthis is happening because\b/i,
+    /\bthe issue is\b/i,
+    /\bthe problem is\b/i,
+    /\bwhat'?s going on is\b/i,
+    /\bwhat'?s happening is\b/i,
+    /\bthis comes from\b/i,
+    /\bthis usually comes from\b/i,
+    /\bthis is driven by\b/i,
+    /\bis breaking\b/i,
+    /\bis collapsing\b/i,
+    /\bis stalling\b/i,
+    /\bis opening too early\b/i,
+    /\bis shifting too early\b/i,
+    /\bis losing structure\b/i,
+    /\bis unstable\b/i,
+    /\bis dropping\b/i,
+    /\bis not holding\b/i,
+    /\bis over[-\s]?rotating\b/i,
+    /\bis under[-\s]?loading\b/i,
+    /\bis compensating\b/i,
+    /\bis taking over\b/i,
+    /\bis bearing the load\b/i,
+    /\bis driving the issue\b/i,
+    /\bbreaking before\b/i,
+    /\bopening before\b/i,
+    /\bshifting too early\b/i,
+    /\bstalling under\b/i,
+    /\bcollapsing under\b/i,
+    /\blosing structure once\b/i,
+    /\btrying to organize\b/i,
+  ];
+
+  const sentences = text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  const candidates = sentences
+    .map((sentence) => {
+      const normalized = sentence
+        .replace(/[*_`#>\[\]()]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const wordCount = normalized.split(" ").filter(Boolean).length;
+      const patternMatches = hypothesisPatterns.filter((pattern) =>
+        pattern.test(normalized),
+      ).length;
+
+      if (!normalized) return null;
+      if (normalized.length < 40) return null;
+      if (normalized.length > 260) return null;
+      if (wordCount < 7) return null;
+      if (!/[.!?]$/.test(sentence)) return null;
+      if (patternMatches === 0) return null;
+      if (!isStrongHypothesisCandidate(normalized)) return null;
+
+      let score = patternMatches * 6;
+      if (hasExplanatoryMechanismLanguage(normalized)) score += 8;
+      if (hasMechanismBreakdownLanguage(normalized)) score += 8;
+      if (hasMechanismAnchor(normalized)) score += 6;
+      if (normalized.length >= 55) score += 2;
+
+      return {
+        sentence: clampText(sentence, 400),
+        score,
+      };
+    })
+    .filter((candidate): candidate is { sentence: string; score: number } =>
+      Boolean(candidate),
+    )
+    .sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.sentence ?? null;
+}
+
+function extractBestAdjustmentSentence(text: string): string | null {
+  const adjustmentPatterns: RegExp[] = [
+    /^\s*focus on\b/i,
+    /^\s*try\b/i,
+    /^\s*make sure\b/i,
+    /^\s*let\b/i,
+    /^\s*allow\b/i,
+    /^\s*shift\b/i,
+    /^\s*keep\b/i,
+    /^\s*think about\b/i,
+    /^\s*load\b/i,
+    /^\s*relax\b/i,
+    /^\s*drive\b/i,
+    /^\s*rotate\b/i,
+    /^\s*brace\b/i,
+    /^\s*stack\b/i,
+    /^\s*press\b/i,
+    /^\s*pull\b/i,
+    /^\s*push\b/i,
+    /^\s*hinge\b/i,
+    /^\s*hold\b/i,
+    /^\s*stay\b/i,
+  ];
+
+  const sentences = text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  const candidates = sentences
+    .map((sentence) => {
+      const normalized = sentence
+        .replace(/[*_`#>\[\]()]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const wordCount = normalized.split(" ").filter(Boolean).length;
+      const patternMatches = adjustmentPatterns.filter((pattern) =>
+        pattern.test(normalized),
+      ).length;
+
+      if (!normalized) return null;
+      if (normalized.length < 20) return null;
+      if (normalized.length > 180) return null;
+      if (wordCount < 4) return null;
+      if (!/[.!?]$/.test(sentence)) return null;
+      if (patternMatches === 0) return null;
+      if (!isStrongAdjustmentCandidate(normalized)) return null;
+
+      let score = patternMatches * 6;
+      if (hasAdjustmentDirectiveStart(normalized)) score += 8;
+      if (hasConcreteAdjustmentAnchor(normalized)) score += 8;
+      if (!isClearlyBundledAdjustmentSequence(normalized)) score += 6;
+      if (!hasDiagnosisLanguage(normalized)) score += 6;
+      if (normalized.length >= 35 && normalized.length <= 110) score += 2;
+
+      return {
+        sentence: clampText(sentence, 300),
+        score,
+      };
+    })
+    .filter((candidate): candidate is { sentence: string; score: number } =>
+      Boolean(candidate),
+    )
+    .sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.sentence ?? null;
+}
+
 function normalizePreviewValue(
   value: string | null | undefined,
 ): string | null {
@@ -966,7 +1122,7 @@ function isTestLikeText(value: string | null | undefined): boolean {
     return false;
   }
 
-  return /\b(?:hip|rib|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|hinge|foot|feet|ankle|knee|glute|serve|swing|contact|backswing|pressure)\b/i.test(
+  return /\b(?:hip|rib|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|hinge|foot|feet|ankle|knee|glute|serve|swing|contact|backswing|pressure|front leg|front side|transfer|release|structure)\b/i.test(
     text,
   );
 }
@@ -1006,6 +1162,422 @@ function isGenericCoachingFillerText(
   return fillerPatterns.some((pattern) => pattern.test(text));
 }
 
+function hasExplanatoryMechanismLanguage(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:because|due to|driven by|caused by|coming from|comes from|is coming from|happening because|the issue is|the problem is|what'?s happening is|what'?s going on is|this is happening because)\b/i.test(
+    text,
+  );
+}
+
+function hasMechanismBreakdownLanguage(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:breaking|collapsing|opening too early|shifting too early|losing structure|compensating|taking over|bearing the load|bearing load|stalling under load|stalling under|dropping too early|not holding|under[-\s]?loading|over[-\s]?rotating|driving the issue|opening before|breaking before|collapsing under)\b/i.test(
+    text,
+  );
+}
+
+function hasMechanismAnchor(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:hip|hips|trunk|ribcage|rib cage|pelvis|pelvic|front side|back side|shoulder|shoulders|scapula|scapular|arm|elbow|wrist|hand|back|spine|lumbar|thoracic|load|loading|rotation|rotate|transfer|brace|stack|stacked|contact|backswing|serve|swing|release|front leg|back leg|glute|glutes)\b/i.test(
+    text,
+  );
+}
+
+function isVagueMechanismStatement(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+
+  const exactVaguePatterns = [
+    /^this is (?:about )?timing[.!?]?$/i,
+    /^this is coordination[.!?]?$/i,
+    /^this is a movement issue[.!?]?$/i,
+    /^this is a sequencing issue[.!?]?$/i,
+    /^something is off in the sequence[.!?]?$/i,
+    /^your body is trying to adjust[.!?]?$/i,
+    /^this is movement[.!?]?$/i,
+    /^this is mechanics[.!?]?$/i,
+    /^this is alignment[.!?]?$/i,
+    /^this is a good sign[.!?]?$/i,
+    /^this should help[.!?]?$/i,
+  ];
+
+  if (exactVaguePatterns.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+
+  return /\b(?:this is|it is|it'?s|that is|that'?s)\s+(?:about\s+)?(?:timing|coordination|movement|mechanics|alignment|sequence|sequencing)\b/i.test(
+    normalized,
+  );
+}
+
+function normalizeHypothesisMeaning(value: string | null | undefined): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[*_`#>\-\[\]()'",.:;!?]/g, " ")
+    .replace(
+      /\b(?:your|you are|you're|youre|the issue is|the problem is|what's happening is|what’s happening is|what's going on is|what’s going on is|this is happening because|this usually comes from|this comes from|this is driven by|because|due to|coming from|comes from|is coming from)\b/g,
+      " ",
+    )
+    .replace(/\bopen(?:ing)? early(?: through)?\b/g, " opening too early ")
+    .replace(/\bopening too early(?: in| through)?\b/g, " opening too early ")
+    .replace(/\bshift(?:ing)? early\b/g, " shifting too early ")
+    .replace(/\blose(?:s|ing)? structure\b/g, " losing structure ")
+    .replace(/\btake(?:s|ing)? over\b/g, " taking over ")
+    .replace(/\bbear(?:ing|s)?(?: the)? load\b/g, " bearing load ")
+    .replace(
+      /\bstall(?:ing|s)? under(?: the)? load\b/g,
+      " stalling under load ",
+    )
+    .replace(/\bdrop(?:ping|s)? too early\b/g, " dropping too early ")
+    .replace(/\bcompensat(?:e|es|ing)\b/g, " compensating ")
+    .replace(/\brotat(?:e|es|ing|ion)\b/g, " rotation ")
+    .replace(/\bload(?:ing)?\b/g, " load ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeHypothesisMeaning(value: string | null | undefined): string[] {
+  const stopwords = new Set([
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "were",
+    "that",
+    "this",
+    "it",
+    "in",
+    "on",
+    "at",
+    "to",
+    "of",
+    "for",
+    "and",
+    "with",
+    "before",
+    "after",
+    "once",
+    "still",
+    "through",
+    "into",
+    "from",
+    "under",
+    "up",
+    "down",
+    "too",
+    "early",
+  ]);
+
+  return normalizeHypothesisMeaning(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .filter((token) => !stopwords.has(token));
+}
+
+function areMateriallyEquivalentHypotheses(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftNormalized = normalizeHypothesisMeaning(left);
+  const rightNormalized = normalizeHypothesisMeaning(right);
+
+  if (!leftNormalized || !rightNormalized) return false;
+  if (leftNormalized === rightNormalized) return true;
+
+  const leftTokens = tokenizeHypothesisMeaning(leftNormalized);
+  const rightTokens = tokenizeHypothesisMeaning(rightNormalized);
+
+  if (leftTokens.length === 0 || rightTokens.length === 0) return false;
+
+  const smaller =
+    leftTokens.length <= rightTokens.length ? leftTokens : rightTokens;
+  const largerSet = new Set(
+    leftTokens.length <= rightTokens.length ? rightTokens : leftTokens,
+  );
+
+  const sharedCount = smaller.filter((token) => largerSet.has(token)).length;
+
+  return sharedCount >= Math.max(3, smaller.length - 1);
+}
+
+function hasAdjustmentDirectiveStart(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /^(?:focus on|try|make sure|let|allow|shift|keep|think about|load|relax|drive|rotate|brace|stack|press|pull|push|hinge|hold|stay)\b/i.test(
+    text,
+  );
+}
+
+function hasConcreteAdjustmentAnchor(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:hip|hips|trunk|ribcage|rib cage|pelvis|pelvic|shoulder|shoulders|back|spine|front leg|front side|back leg|glute|glutes|contact|backswing|serve|swing|rotation|rotate|load|release|transfer|brace|stack|structure)\b/i.test(
+    text,
+  );
+}
+
+function hasDiagnosisLanguage(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:because|since|due to|caused by|driven by|the issue is|the problem is|what'?s happening is|which means|so that)\b/i.test(
+    text,
+  );
+}
+
+function isLowInformationAdjustmentText(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  return (
+    /\bstay aware of\b/i.test(text) ||
+    /\bbe aware of\b/i.test(text) ||
+    /\bkeep working on\b/i.test(text) ||
+    /\bconsistency\b/i.test(text) ||
+    /\bjust keep doing that\b/i.test(text) ||
+    /\bbe mindful of\b/i.test(text) ||
+    /\bthis should help\b/i.test(text) ||
+    /\bthat should help\b/i.test(text) ||
+    /\bclean things up\b/i.test(text) ||
+    /\bgood place to start\b/i.test(text) ||
+    /\bimprove the sequence\b/i.test(text) ||
+    /\bstay organized\b/i.test(text) ||
+    /\bmove better\b/i.test(text) ||
+    /\bcontrol it more\b/i.test(text) ||
+    /\bclean that up\b/i.test(text)
+  );
+}
+
+function isClearlyBundledAdjustmentSequence(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  const directiveMatches =
+    text.match(
+      /\b(?:focus on|try|make sure|let|allow|shift|keep|think about|load|relax|drive|rotate|brace|stack|press|pull|push|hinge|hold|stay|clear)\b/gi,
+    ) ?? [];
+
+  if (directiveMatches.length >= 4) return true;
+
+  if (
+    directiveMatches.length >= 3 &&
+    (/,/.test(text) || /\band\b|\bthen\b|\bwhile\b/i.test(text))
+  ) {
+    return true;
+  }
+
+  if (
+    /\bfirst\b.*\bthen\b/i.test(text) ||
+    /\bwhile keeping\b/i.test(text) ||
+    /,\s*(?:keep|load|rotate|brace|hold|stay|clear)\b/i.test(text)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function canonicalizeAdjustmentMeaning(
+  value: string | null | undefined,
+): string {
+  const normalized = String(value ?? "")
+    .toLowerCase()
+    .replace(/[*_`#>\-\[\]()'",.:;!?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return "";
+
+  if (
+    /\b(?:keep the )?(?:ribcage|rib cage)\s+(?:stacked|structure)\b.*\b(?:through rotation|as you rotate|into rotation)\b/i.test(
+      normalized,
+    ) ||
+    /\bstay stacked\b.*\b(?:through rotation|as you rotate|into rotation)\b/i.test(
+      normalized,
+    ) ||
+    /\bhold (?:the )?(?:ribcage )?structure\b.*\b(?:through rotation|as you rotate|into rotation)\b/i.test(
+      normalized,
+    )
+  ) {
+    return "ribcage stacked through rotation";
+  }
+
+  if (
+    /\blet (?:the )?hip turn before (?:the )?trunk\b/i.test(normalized) ||
+    /\ballow (?:the )?hip to turn first before (?:the )?trunk(?: goes| turns)?\b/i.test(
+      normalized,
+    ) ||
+    /\bhip first trunk second\b/i.test(normalized) ||
+    /\bhip first[, ]+trunk second\b/i.test(normalized)
+  ) {
+    return "hip before trunk";
+  }
+
+  return normalized;
+}
+
+function extractAdjustmentTargetSet(
+  value: string | null | undefined,
+): Set<string> {
+  const text = canonicalizeAdjustmentMeaning(value);
+  const targets = new Set<string>();
+
+  const patterns: Array<[string, RegExp]> = [
+    ["hip", /\bhip\b/i],
+    ["trunk", /\btrunk\b/i],
+    ["ribcage", /\bribcage|rib cage\b/i],
+    ["pelvis", /\bpelvis|pelvic\b/i],
+    ["shoulder", /\bshoulder\b/i],
+    ["back", /\bback|spine\b/i],
+    ["front-leg", /\bfront leg\b/i],
+    ["front-side", /\bfront side\b/i],
+    ["contact", /\bcontact\b/i],
+    ["transfer", /\btransfer\b/i],
+    ["release", /\brelease\b/i],
+    ["rotation", /\brotation|rotate\b/i],
+    ["load", /\bload\b/i],
+    ["structure", /\bstructure|stacked|stack\b/i],
+    ["brace", /\bbrace\b/i],
+  ];
+
+  for (const [label, pattern] of patterns) {
+    if (pattern.test(text)) targets.add(label);
+  }
+
+  return targets;
+}
+
+function extractAdjustmentGoalSet(
+  value: string | null | undefined,
+): Set<string> {
+  const text = canonicalizeAdjustmentMeaning(value);
+  const goals = new Set<string>();
+
+  const patterns: Array<[string, RegExp]> = [
+    ["brace", /\bbrace\b/i],
+    ["stay-over", /\bstay over\b/i],
+    ["stack", /\bstacked|stack\b/i],
+    ["hold-structure", /\bhold structure|structure\b/i],
+    ["load", /\bload\b/i],
+    ["turn-before", /\bbefore\b.*\btrunk\b|\bhip before trunk\b/i],
+    ["rotate", /\brotate|rotation\b/i],
+    ["transfer", /\btransfer\b/i],
+    ["release", /\brelease\b/i],
+    ["contact", /\bcontact\b/i],
+  ];
+
+  for (const [label, pattern] of patterns) {
+    if (pattern.test(text)) goals.add(label);
+  }
+
+  return goals;
+}
+
+function tokenizeAdjustmentMeaning(value: string | null | undefined): string[] {
+  const stopwords = new Set([
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "were",
+    "that",
+    "this",
+    "it",
+    "in",
+    "on",
+    "at",
+    "to",
+    "of",
+    "for",
+    "and",
+    "with",
+    "you",
+    "your",
+    "as",
+    "into",
+    "through",
+    "before",
+    "after",
+    "first",
+    "second",
+  ]);
+
+  return canonicalizeAdjustmentMeaning(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .filter((token) => !stopwords.has(token));
+}
+
+function areMateriallyEquivalentAdjustments(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftCanonical = canonicalizeAdjustmentMeaning(left);
+  const rightCanonical = canonicalizeAdjustmentMeaning(right);
+
+  if (!leftCanonical || !rightCanonical) return false;
+  if (leftCanonical === rightCanonical) return true;
+
+  const leftTargets = extractAdjustmentTargetSet(leftCanonical);
+  const rightTargets = extractAdjustmentTargetSet(rightCanonical);
+  const leftGoals = extractAdjustmentGoalSet(leftCanonical);
+  const rightGoals = extractAdjustmentGoalSet(rightCanonical);
+
+  const sameTargets =
+    leftTargets.size > 0 &&
+    rightTargets.size > 0 &&
+    [...leftTargets].every((token) => rightTargets.has(token)) &&
+    [...rightTargets].every((token) => leftTargets.has(token));
+
+  const sameGoals =
+    leftGoals.size > 0 &&
+    rightGoals.size > 0 &&
+    [...leftGoals].every((token) => rightGoals.has(token)) &&
+    [...rightGoals].every((token) => leftGoals.has(token));
+
+  if (sameTargets && sameGoals) {
+    const leftTokens = tokenizeAdjustmentMeaning(leftCanonical);
+    const rightTokens = tokenizeAdjustmentMeaning(rightCanonical);
+    const smaller =
+      leftTokens.length <= rightTokens.length ? leftTokens : rightTokens;
+    const largerSet = new Set(
+      leftTokens.length <= rightTokens.length ? rightTokens : leftTokens,
+    );
+    const sharedCount = smaller.filter((token) => largerSet.has(token)).length;
+    return sharedCount >= Math.max(2, smaller.length - 1);
+  }
+
+  return false;
+}
+
 function isStrongHypothesisCandidate(
   value: string | null | undefined,
 ): boolean {
@@ -1015,7 +1587,7 @@ function isStrongHypothesisCandidate(
   if (text.length > 260) return false;
   if (isGenericCoachingFillerText(text)) return false;
   if (isTestLikeText(text)) return false;
-  if (!isMechanismLikeText(text)) return false;
+  if (isVagueMechanismStatement(text)) return false;
 
   const directivePatterns = [
     /^\s*focus on\b/i,
@@ -1037,6 +1609,11 @@ function isStrongHypothesisCandidate(
     /\bthat should help\b/i,
     /\bthe key is\b/i,
     /\bimportant thing\b/i,
+    /\bthis is timing\b/i,
+    /\bthis is coordination\b/i,
+    /\bmovement issue\b/i,
+    /\bsequence issue\b/i,
+    /\balignment issue\b/i,
   ];
 
   if (directivePatterns.some((pattern) => pattern.test(text))) {
@@ -1047,9 +1624,19 @@ function isStrongHypothesisCandidate(
     return false;
   }
 
-  return /\b(?:because|due to|driven by|caused by|coming from|points to|breaking|collapsing|stalling|opening too early|shifting too early|losing structure|compensating|taking over|bearing the load)\b/i.test(
-    text,
-  );
+  if (!hasMechanismAnchor(text)) {
+    return false;
+  }
+
+  const hasMechanismSignal =
+    hasExplanatoryMechanismLanguage(text) ||
+    hasMechanismBreakdownLanguage(text);
+
+  if (!hasMechanismSignal) {
+    return false;
+  }
+
+  return true;
 }
 
 function isStrongAdjustmentCandidate(
@@ -1057,38 +1644,26 @@ function isStrongAdjustmentCandidate(
 ): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
-  if (text.length < 25) return false;
-  if (text.length > 220) return false;
+  if (text.length < 20) return false;
+  if (text.length > 180) return false;
   if (isGenericCoachingFillerText(text)) return false;
+  if (isLowInformationAdjustmentText(text)) return false;
   if (!isTestLikeText(text)) return false;
   if (isMechanismLikeText(text)) return false;
+  if (hasDiagnosisLanguage(text)) return false;
+  if (isClearlyBundledAdjustmentSequence(text)) return false;
+  if (!hasAdjustmentDirectiveStart(text)) return false;
+  if (!hasConcreteAdjustmentAnchor(text)) return false;
 
-  const actionStartPatterns = [
-    /^\s*focus on\b/i,
-    /^\s*try\b/i,
-    /^\s*make sure\b/i,
-    /^\s*keep\b/i,
-    /^\s*let\b/i,
-    /^\s*allow\b/i,
-    /^\s*shift\b/i,
-    /^\s*think about\b/i,
-    /^\s*load\b/i,
-    /^\s*relax\b/i,
-    /^\s*drive\b/i,
-    /^\s*control\b/i,
-    /^\s*rotate\b/i,
-    /^\s*stack\b/i,
-    /^\s*move\b/i,
-    /^\s*press\b/i,
-    /^\s*pull\b/i,
-    /^\s*push\b/i,
-    /^\s*hinge\b/i,
-    /^\s*brace\b/i,
-    /^\s*stabilize\b/i,
-    /^\s*stabilise\b/i,
-    /^\s*hold\b/i,
-    /^\s*clear\b/i,
-    /^\s*stay\b/i,
+  const vagueActionPatterns = [
+    /\bmove better\b/i,
+    /\bstay organized\b/i,
+    /\bimprove the sequence\b/i,
+    /\bcontrol it more\b/i,
+    /\bclean that up\b/i,
+    /\bclean things up\b/i,
+    /\bwork on it\b/i,
+    /\bkeep doing that\b/i,
   ];
 
   const rejectMixedPatterns = [
@@ -1096,6 +1671,7 @@ function isStrongAdjustmentCandidate(
     /\bdue to\b/i,
     /\bdriven by\b/i,
     /\bcaused by\b/i,
+    /\bsince\b/i,
     /\bthe issue is\b/i,
     /\bthe problem is\b/i,
     /\bthis is happening\b/i,
@@ -1103,40 +1679,11 @@ function isStrongAdjustmentCandidate(
     /\bso that\b/i,
   ];
 
-  const concreteBodyActionPatterns = [
-    /\bhip\b/i,
-    /\brib\b/i,
-    /\bpelvis\b/i,
-    /\btrunk\b/i,
-    /\bshoulder\b/i,
-    /\bback\b/i,
-    /\bspine\b/i,
-    /\bbrace\b/i,
-    /\bload\b/i,
-    /\bstack\b/i,
-    /\brotate\b/i,
-    /\bhinge\b/i,
-    /\bfoot\b/i,
-    /\bfeet\b/i,
-    /\bankle\b/i,
-    /\bknee\b/i,
-    /\bglute\b/i,
-    /\bserve\b/i,
-    /\bswing\b/i,
-    /\bcontact\b/i,
-    /\bbackswing\b/i,
-    /\bpressure\b/i,
-  ];
-
-  if (!actionStartPatterns.some((pattern) => pattern.test(text))) {
+  if (vagueActionPatterns.some((pattern) => pattern.test(text))) {
     return false;
   }
 
   if (rejectMixedPatterns.some((pattern) => pattern.test(text))) {
-    return false;
-  }
-
-  if (!concreteBodyActionPatterns.some((pattern) => pattern.test(text))) {
     return false;
   }
 
@@ -2392,7 +2939,7 @@ export async function registerRoutes(
           .from(messages)
           .where(eq(messages.conversationId, convoId))
           .orderBy(asc(messages.createdAt));
-        let storedFirstName = dbFirstName;
+        const storedFirstName = dbFirstName;
 
         await db.insert(messages).values({
           conversationId: convoId,
@@ -2984,44 +3531,7 @@ Produce the corrected response now.
             resolvedActiveCase &&
             isOpenCaseStatus(resolvedActiveCase.status)
           ) {
-            const hypothesisSentence = extractFirstMatchingSentence(finalText, [
-              /\bbecause\b/i,
-              /\bdue to\b/i,
-              /\bdriven by\b/i,
-              /\bcaused by\b/i,
-              /\bcomes from\b/i,
-              /\bis coming from\b/i,
-              /\bhappening because\b/i,
-              /\bthis is happening because\b/i,
-              /\bthe issue is\b/i,
-              /\bthe problem is\b/i,
-              /\bwhat'?s going on is\b/i,
-              /\bthis comes from\b/i,
-              /\bthis usually comes from\b/i,
-              /\bthis is driven by\b/i,
-              /\bis breaking\b/i,
-              /\bis collapsing\b/i,
-              /\bis stalling\b/i,
-              /\bis opening too early\b/i,
-              /\bis shifting too early\b/i,
-              /\bis losing structure\b/i,
-              /\bis unstable\b/i,
-              /\bis dropping\b/i,
-              /\bis not holding\b/i,
-              /\bis over[-\s]?rotating\b/i,
-              /\bis under[-\s]?loading\b/i,
-              /\bis compensating\b/i,
-              /\bis taking over\b/i,
-              /\bis bearing the load\b/i,
-              /\bis driving the issue\b/i,
-              /\bbreaking before\b/i,
-              /\bopening before\b/i,
-              /\bshifting too early\b/i,
-              /\bstalling under\b/i,
-              /\bcollapsing under\b/i,
-              /\blosing structure once\b/i,
-              /\btrying to organize\b/i,
-            ]);
+            const hypothesisSentence = extractBestHypothesisSentence(finalText);
 
             if (
               hypothesisSentence &&
@@ -3037,7 +3547,7 @@ Produce the corrected response now.
                 .limit(1);
 
               if (
-                !areEquivalentDashboardCandidates(
+                !areMateriallyEquivalentHypotheses(
                   hypothesisSentence,
                   latestStoredHypothesis?.hypothesis,
                 )
@@ -3049,33 +3559,17 @@ Produce the corrected response now.
               }
             }
 
-            const adjustmentSentence = extractFirstMatchingSentence(finalText, [
-              /^\s*focus on\b/i,
-              /^\s*try\b/i,
-              /^\s*make sure\b/i,
-              /^\s*let\b/i,
-              /^\s*allow\b/i,
-              /^\s*shift\b/i,
-              /^\s*keep\b/i,
-              /^\s*think about\b/i,
-              /^\s*load\b/i,
-              /^\s*relax\b/i,
-              /^\s*drive\b/i,
-              /^\s*rotate\b/i,
-              /^\s*brace\b/i,
-              /^\s*stack\b/i,
-              /^\s*press\b/i,
-              /^\s*pull\b/i,
-              /^\s*push\b/i,
-              /^\s*hinge\b/i,
-              /^\s*hold\b/i,
-              /^\s*stay\b/i,
-            ]);
+            const adjustmentSentence = extractBestAdjustmentSentence(finalText);
 
             if (
               adjustmentSentence &&
               isStrongAdjustmentCandidate(adjustmentSentence) &&
+              !isStrongHypothesisCandidate(adjustmentSentence) &&
               !areEquivalentDashboardCandidates(
+                adjustmentSentence,
+                hypothesisSentence,
+              ) &&
+              !areMateriallyEquivalentHypotheses(
                 adjustmentSentence,
                 hypothesisSentence,
               )
@@ -3091,11 +3585,11 @@ Produce the corrected response now.
                 .limit(1);
 
               const isDuplicateAdjustment =
-                areEquivalentDashboardCandidates(
+                areMateriallyEquivalentAdjustments(
                   adjustmentSentence,
                   latestStoredAdjustment?.cue,
                 ) ||
-                areEquivalentDashboardCandidates(
+                areMateriallyEquivalentAdjustments(
                   adjustmentSentence,
                   latestStoredAdjustment?.mechanicalFocus,
                 );
