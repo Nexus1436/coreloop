@@ -821,7 +821,7 @@ export default function Home() {
             >
               <button
                 onClick={() => setMode("C")}
-                className="text-white text-sm font-medium"
+                className="text-gray-400 text-sm font-medium"
               >
                 Your Investigation
               </button>
@@ -875,7 +875,7 @@ export default function Home() {
             >
               <button
                 onClick={() => setMode("C")}
-                className="text-white text-sm font-medium"
+                className="text-gray-400 text-sm font-medium"
               >
                 Your Investigation
               </button>
