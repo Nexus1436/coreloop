@@ -1300,8 +1300,39 @@ function buildActiveCaseTitle(
 }
 
 function qualifiesForTimelineSignal(text: string): boolean {
-  return /pain|painful|tight|tightness|hurt|hurts|hurting|issue|problem|tweak|tweaked|strain|strained|straining|tension|discomfort|catching|catch|pinch|pinching|pinched|irritated|irritation|sore|soreness|stiff|stiffness|aggravated|aggravating|flare|flaring up|acting up|feels weird|feels wrong|not comfortable|uncomfortable|not sitting right|pulling|tugging|ache|aching|doesn't feel right|doesnt feel right|can't|cannot|struggle|confused|off|feels off|not right|not working|can't rotate|cant rotate|can't load|cant load|timing is off|timing feels off|mechanics feel wrong|movement is weird|doesn't feel stable|not stable|unstable|out of position|can't control|cant control|not coordinated|coordination is off|out of sync|awkward|something is off|rotation feels off|trunk rotation feels wrong/i.test(
-    text.trim(),
+  const input = text.trim().toLowerCase();
+  if (!input) return false;
+
+  const hasBodyRegion =
+    /\b(?:hip|back|low back|mid back|shoulder|knee|ankle|elbow|wrist|neck|foot|feet|leg|arm|glute|spine|lumbar|thoracic|hamstring|quad|calf|shin)\b/i.test(
+      input,
+    );
+
+  const hasStrongSymptom =
+    /\b(?:pain|painful|tight|tightness|stiff|stiffness|sore|soreness|hurt|hurts|hurting|discomfort|pinch|pinching|pinched|ache|aching|cannot|can't|cant|limited|limitation|restricted|unstable|instability)\b/i.test(
+      input,
+    );
+
+  const hasMovementMechanic =
+    /\b(?:rotate|rotation|load|hinge|swing|serve|backswing|contact point|contact|coordination|breakdown|breaks down|collapse|collapses|shift|shifting|compensation|compensating|lunge|deadlift|squat|brace|stack)\b/i.test(
+      input,
+    );
+
+  const hasSpecificMovementBreakdown =
+    /\b(?:timing is off on (?:my )?(?:serve|swing)|my timing is off at contact|timing breaks down on (?:the )?backswing|unstable at contact|can't load|cant load|breaks down on (?:the )?backswing|collapses when i rotate|collapses when i lunge|can't rotate|cant rotate|can't hinge|cant hinge|hurts on (?:the )?backswing|tightens when i rotate)\b/i.test(
+      input,
+    ) ||
+    /\b(?:collapses|breaks down|gives out)\b.*\b(?:when|on|during)\b.*\b(?:rotate|rotation|lunge|serve|swing|backswing|contact)\b/i.test(
+      input,
+    ) ||
+    /\b(?:cannot|can't|cant)\b.*\b(?:load|rotate|hinge|swing|serve)\b/i.test(
+      input,
+    );
+
+  return (
+    (hasStrongSymptom && hasBodyRegion) ||
+    (hasStrongSymptom && hasMovementMechanic) ||
+    hasSpecificMovementBreakdown
   );
 }
 
