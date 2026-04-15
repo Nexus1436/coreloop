@@ -802,7 +802,13 @@ export default function Home() {
                   </div>
 
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <span className="text-sm text-gray-400">
+                    <span
+                      className="text-sm"
+                      style={{
+                        color: "#ffc83d",
+                        textShadow: "0 0 10px rgba(255,184,0,0.25)",
+                      }}
+                    >
                       {isSpeaking
                         ? "Tap to stop"
                         : isRecording
