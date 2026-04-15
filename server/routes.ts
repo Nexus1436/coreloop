@@ -1769,6 +1769,17 @@ function isLowSignalShiftText(value: string | null | undefined): boolean {
   );
 }
 
+function isValidLastShiftSignalFallback(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+  if (isReviewStyleCaseLayerText(text)) return false;
+  if (isLowSignalShiftText(text)) return false;
+  if (!qualifiesForTimelineSignal(text)) return false;
+  return extractPreviewSnippet(text, 220) != null;
+}
+
 function areEquivalentDashboardCandidates(
   left: string | null | undefined,
   right: string | null | undefined,
@@ -2888,8 +2899,7 @@ export async function registerRoutes(
         shiftSourceCandidates.find(
           (candidate) =>
             candidate.allowLowSignalFallback &&
-            !isReviewStyleCaseLayerText(candidate.value) &&
-            extractPreviewSnippet(candidate.value, 220) != null,
+            isValidLastShiftSignalFallback(candidate.value),
         )?.value ??
         null;
 
