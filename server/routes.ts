@@ -70,7 +70,7 @@ const INTERLOOP_SETTINGS_VOICE_IDS = {
 type PersistedInterloopVoice = keyof typeof INTERLOOP_SETTINGS_VOICE_IDS;
 
 // ==============================
-// UTILITY: TEXT CLAMP
+// BASIC HELPERS
 // ==============================
 
 function clampText(s: string, max = 800): string {
@@ -240,6 +240,24 @@ function isFallbackActivityType(value: string | null | undefined): boolean {
   return normalizeCaseKey(value) === "unspecified";
 }
 
+function normalizeOptionalLabel(value: string | null | undefined): string {
+  return normalizeCaseKey(value);
+}
+
+function hasStrongCaseContext(value: string | null | undefined): boolean {
+  return (
+    !isFallbackMovementContext(value) && normalizeOptionalLabel(value) !== ""
+  );
+}
+
+function hasStrongCaseActivity(value: string | null | undefined): boolean {
+  return !isFallbackActivityType(value) && normalizeOptionalLabel(value) !== "";
+}
+
+// ==============================
+// SIGNAL / CASE CONTEXT
+// ==============================
+
 function buildCompactMovementContext(text: string): string | null {
   const input = text.trim();
 
@@ -316,8 +334,7 @@ function deriveCaseContext(text: string): {
     /\bin\s+my\s+([^.!?,;\n]{6,60})/i,
   ];
 
-  let movementContext = "";
-  movementContext = buildCompactMovementContext(input) ?? "";
+  let movementContext = buildCompactMovementContext(input) ?? "";
 
   if (!movementContext) {
     const serveMatch = input.match(
@@ -451,19 +468,9 @@ function deriveSignalType(text: string): string | null {
   return signalPatterns.find((entry) => entry.regex.test(input))?.label ?? null;
 }
 
-function normalizeOptionalLabel(value: string | null | undefined): string {
-  return normalizeCaseKey(value);
-}
-
-function hasStrongCaseContext(value: string | null | undefined): boolean {
-  return (
-    !isFallbackMovementContext(value) && normalizeOptionalLabel(value) !== ""
-  );
-}
-
-function hasStrongCaseActivity(value: string | null | undefined): boolean {
-  return !isFallbackActivityType(value) && normalizeOptionalLabel(value) !== "";
-}
+// ==============================
+// PROFILE / INVESTIGATION HELPERS
+// ==============================
 
 type ProfileFieldKey =
   | "primary_sport"
@@ -671,9 +678,168 @@ function detectRecentUnansweredProfileAsk(
   return null;
 }
 
+// ==============================
+// CASE CONTINUITY
+// ==============================
+
 function isOpenCaseStatus(status: string | null | undefined): boolean {
   if (status == null) return true;
   return /open|active|current/i.test(String(status));
+}
+
+function normalizeCaseLineValue(value: string | null | undefined): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[*_`#>\-\[\]()'",.:;!?]/g, " ")
+    .replace(
+      /\b(?:general|movement|mechanics|issue|problem|unspecified)\b/g,
+      " ",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeCaseLineValue(value: string | null | undefined): string[] {
+  return normalizeCaseLineValue(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function caseLineValuesPlausiblySame(
+  existingValue: string | null | undefined,
+  incomingValue: string | null | undefined,
+  isFallback: (value: string | null | undefined) => boolean,
+): boolean {
+  if (isFallback(existingValue) || isFallback(incomingValue)) {
+    return true;
+  }
+
+  const existingNormalized = normalizeCaseLineValue(existingValue);
+  const incomingNormalized = normalizeCaseLineValue(incomingValue);
+
+  if (!existingNormalized || !incomingNormalized) {
+    return true;
+  }
+
+  if (
+    existingNormalized === incomingNormalized ||
+    existingNormalized.includes(incomingNormalized) ||
+    incomingNormalized.includes(existingNormalized)
+  ) {
+    return true;
+  }
+
+  const existingTokens = tokenizeCaseLineValue(existingValue);
+  const incomingTokens = tokenizeCaseLineValue(incomingValue);
+
+  if (existingTokens.length === 0 || incomingTokens.length === 0) {
+    return true;
+  }
+
+  const existingSet = new Set(existingTokens);
+  const sharedCount = incomingTokens.filter((token) =>
+    existingSet.has(token),
+  ).length;
+
+  return sharedCount > 0;
+}
+
+function bodyRegionsPlausiblySame(
+  existingValue: string | null | undefined,
+  incomingValue: string | null | undefined,
+): boolean {
+  const existingNormalized = normalizeCaseKey(existingValue);
+  const incomingNormalized = normalizeCaseKey(incomingValue);
+
+  if (!existingNormalized || !incomingNormalized) {
+    return true;
+  }
+
+  if (existingNormalized === incomingNormalized) {
+    return true;
+  }
+
+  const backFamily = new Set(["back", "low back", "mid back"]);
+  if (
+    backFamily.has(existingNormalized) &&
+    backFamily.has(incomingNormalized)
+  ) {
+    return true;
+  }
+
+  const legFamily = new Set(["leg", "hip", "knee", "ankle", "foot"]);
+  if (legFamily.has(existingNormalized) && legFamily.has(incomingNormalized)) {
+    return true;
+  }
+
+  const armFamily = new Set(["arm", "shoulder", "elbow", "wrist"]);
+  if (armFamily.has(existingNormalized) && armFamily.has(incomingNormalized)) {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldOpenNewCaseAgainstCurrentOpenCase(args: {
+  existingMovementContext: string | null | undefined;
+  existingActivityType: string | null | undefined;
+  existingBodyRegion?: string | null | undefined;
+  nextMovementContext: string | null | undefined;
+  nextActivityType: string | null | undefined;
+  nextBodyRegion?: string | null | undefined;
+}): boolean {
+  const {
+    existingMovementContext,
+    existingActivityType,
+    existingBodyRegion,
+    nextMovementContext,
+    nextActivityType,
+    nextBodyRegion,
+  } = args;
+
+  const nextMovementIsWeak = isFallbackMovementContext(nextMovementContext);
+  const nextActivityIsWeak = isFallbackActivityType(nextActivityType);
+  const nextBodyIsWeak = !normalizeCaseKey(nextBodyRegion);
+
+  if (nextMovementIsWeak && nextActivityIsWeak && nextBodyIsWeak) {
+    return false;
+  }
+
+  const movementSame = caseLineValuesPlausiblySame(
+    existingMovementContext,
+    nextMovementContext,
+    isFallbackMovementContext,
+  );
+
+  const activitySame = caseLineValuesPlausiblySame(
+    existingActivityType,
+    nextActivityType,
+    isFallbackActivityType,
+  );
+
+  const bodySame = bodyRegionsPlausiblySame(existingBodyRegion, nextBodyRegion);
+
+  const strongMovementBreak =
+    hasStrongCaseContext(existingMovementContext) &&
+    hasStrongCaseContext(nextMovementContext) &&
+    !movementSame;
+
+  const strongActivityBreak =
+    hasStrongCaseActivity(existingActivityType) &&
+    hasStrongCaseActivity(nextActivityType) &&
+    !activitySame;
+
+  const strongBodyBreak =
+    Boolean(normalizeCaseKey(existingBodyRegion)) &&
+    Boolean(normalizeCaseKey(nextBodyRegion)) &&
+    !bodySame;
+
+  if (strongActivityBreak && strongMovementBreak) return true;
+  if (strongMovementBreak && strongBodyBreak) return true;
+  if (strongActivityBreak && strongBodyBreak) return true;
+
+  return false;
 }
 
 async function getConversationOpenCase(
@@ -687,7 +853,7 @@ async function getConversationOpenCase(
   activityType: string | null;
   status: string | null;
 } | null> {
-  const [conversationOpenCase] = await db
+  const recentConversationCases = await db
     .select({
       id: cases.id,
       userId: cases.userId,
@@ -701,13 +867,486 @@ async function getConversationOpenCase(
       and(eq(cases.userId, userId), eq(cases.conversationId, conversationId)),
     )
     .orderBy(desc(cases.updatedAt), desc(cases.id))
+    .limit(12);
+
+  const conversationOpenCase =
+    recentConversationCases.find((row) => isOpenCaseStatus(row.status)) ?? null;
+
+  if (!conversationOpenCase) return null;
+  return conversationOpenCase;
+}
+
+async function getLatestCaseSignalBodyRegion(
+  caseId: number,
+): Promise<string | null> {
+  const [latestSignal] = await db
+    .select({
+      bodyRegion: caseSignals.bodyRegion,
+    })
+    .from(caseSignals)
+    .where(eq(caseSignals.caseId, caseId))
+    .orderBy(desc(caseSignals.id))
     .limit(1);
 
-  if (!conversationOpenCase || !isOpenCaseStatus(conversationOpenCase.status)) {
-    return null;
+  return latestSignal?.bodyRegion ?? null;
+}
+
+// ==============================
+// EXTRACTION HELPERS
+// ==============================
+
+function normalizePreviewValue(
+  value: string | null | undefined,
+): string | null {
+  const trimmed = String(value ?? "").trim();
+  return trimmed ? trimmed : null;
+}
+
+function extractPreviewSnippet(
+  value: string | null | undefined,
+  max = 180,
+): string | null {
+  const text = normalizePreviewValue(value);
+  if (!text) return null;
+  if (text.length < 35) return null;
+
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  const meaningfulSentence =
+    sentences.find((sentence) => {
+      const normalized = sentence
+        .replace(/[*_`#>\-\[\]()]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!normalized || normalized.length < 35) return false;
+      if (/^[-–—\s]+$/.test(sentence)) return false;
+      if (/^[A-Z][A-Z\s]+:?$/.test(normalized)) return false;
+
+      const wordCount = normalized.split(" ").filter(Boolean).length;
+      return wordCount >= 6;
+    }) ?? text;
+
+  const snippet = normalizePreviewValue(clampText(meaningfulSentence, max));
+  if (!snippet || snippet.length < 35) return null;
+  return snippet;
+}
+
+function normalizeDashboardCandidate(value: string | null | undefined): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[*_`#>\-\[\]()'",.:;!?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isReviewStyleCaseLayerText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  const normalized = text.replace(/\s+/g, " ").trim();
+
+  const headerPatterns = [
+    /\borigin problem\b/i,
+    /\bbeginning of\b/i,
+    /\binvestigation began\b/i,
+    /\bthe investigation\b/i,
+    /\bthis case began\b/i,
+    /\bcase review\b/i,
+    /\bcurrent state\b/i,
+    /\bsnapshot\b/i,
+    /\bcheckpoint\b/i,
+    /\bretrospective\b/i,
+    /\bsummary\b/i,
+    /\breport\b/i,
+    /\boverview\b/i,
+  ];
+
+  const reportShapePatterns = [
+    /^[A-Z][A-Z\s\-]{8,}:?$/m,
+    /\b[A-Z][A-Z\s]{6,}\s+---/m,
+    /---/,
+    /\b(?:origin problem|current state|current mechanism|current test|last shift)\b.*\b(?:origin problem|current state|current mechanism|current test|last shift)\b/i,
+    /\b(?:the investigation began|this case began|case review|beginning of the investigation|beginning of investigation)\b/i,
+  ];
+
+  const retrospectivePatterns = [
+    /\bthis case\b.*\b(?:began|started|opened)\b/i,
+    /\bthe issue began\b/i,
+    /\bthe problem began\b/i,
+    /\bover the course of\b/i,
+    /\bso far in this case\b/i,
+    /\bup to this point\b/i,
+    /\bfrom the beginning\b/i,
+    /\bretrospective\b/i,
+  ];
+
+  return (
+    headerPatterns.some((pattern) => pattern.test(normalized)) ||
+    reportShapePatterns.some((pattern) => pattern.test(normalized)) ||
+    retrospectivePatterns.some((pattern) => pattern.test(normalized))
+  );
+}
+
+function isMechanismLikeText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+  if (isReviewStyleCaseLayerText(text)) return false;
+
+  const explicitMechanismPatterns = [
+    /\bbecause\b/i,
+    /\bdue to\b/i,
+    /\bdriven by\b/i,
+    /\bcaused by\b/i,
+    /\bcoming from\b/i,
+    /\bhappening because\b/i,
+    /\bpoints to\b/i,
+    /\bwhat'?s happening\b/i,
+    /\bthe issue is\b/i,
+    /\bthe problem is\b/i,
+  ];
+
+  const declarativeMechanismPatterns = [
+    /\bis breaking\b/i,
+    /\bis collapsing\b/i,
+    /\bis stalling\b/i,
+    /\bis opening too early\b/i,
+    /\bis shifting too early\b/i,
+    /\bis losing structure\b/i,
+    /\bis unstable\b/i,
+    /\bis dropping\b/i,
+    /\bis not holding\b/i,
+    /\bis over[-\s]?rotating\b/i,
+    /\bis under[-\s]?loading\b/i,
+    /\bis compensating\b/i,
+    /\bis taking over\b/i,
+    /\bis bearing the load\b/i,
+    /\bis driving the issue\b/i,
+    /\bbreaking before\b/i,
+    /\bopening before\b/i,
+    /\bshifting too early\b/i,
+    /\bstalling under\b/i,
+    /\bcollapsing under\b/i,
+    /\blosing structure once\b/i,
+    /\btrying to organize\b/i,
+  ];
+
+  const instructionPatterns = [
+    /^\s*focus on\b/i,
+    /^\s*try\b/i,
+    /^\s*make sure\b/i,
+    /^\s*keep\b/i,
+    /^\s*let\b/i,
+    /^\s*allow\b/i,
+    /^\s*shift\b/i,
+    /^\s*think about\b/i,
+    /^\s*the key is\b/i,
+    /^\s*this exercise\b/i,
+    /^\s*work on\b/i,
+  ];
+
+  const genericSuccessPatterns = [
+    /\bthis is working\b/i,
+    /\bworking well\b/i,
+    /\baligning well\b/i,
+    /\bthis is aligning\b/i,
+    /\bgood sign\b/i,
+    /\bthis should help\b/i,
+    /\bthat should help\b/i,
+    /\bkeep it up\b/i,
+    /\bglad to hear\b/i,
+  ];
+
+  if (instructionPatterns.some((pattern) => pattern.test(text))) return false;
+  if (genericSuccessPatterns.some((pattern) => pattern.test(text)))
+    return false;
+
+  return (
+    explicitMechanismPatterns.some((pattern) => pattern.test(text)) ||
+    declarativeMechanismPatterns.some((pattern) => pattern.test(text))
+  );
+}
+
+function isTestLikeText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+  if (isReviewStyleCaseLayerText(text)) return false;
+
+  const concreteActionStartPatterns = [
+    /^\s*focus on\b/i,
+    /^\s*try\b/i,
+    /^\s*make sure\b/i,
+    /^\s*keep\b/i,
+    /^\s*let\b/i,
+    /^\s*allow\b/i,
+    /^\s*shift\b/i,
+    /^\s*think about\b/i,
+    /^\s*load\b/i,
+    /^\s*relax\b/i,
+    /^\s*drive\b/i,
+    /^\s*rotate\b/i,
+    /^\s*brace\b/i,
+    /^\s*stack\b/i,
+    /^\s*press\b/i,
+    /^\s*pull\b/i,
+    /^\s*push\b/i,
+    /^\s*hinge\b/i,
+    /^\s*hold\b/i,
+    /^\s*stay\b/i,
+  ];
+
+  const diagnosisPatterns = [
+    /\bbecause\b/i,
+    /\bdue to\b/i,
+    /\bdriven by\b/i,
+    /\bcaused by\b/i,
+    /\bcoming from\b/i,
+    /\bhappening because\b/i,
+    /\bpoints to\b/i,
+    /\bwhat'?s happening\b/i,
+    /\bthe issue is\b/i,
+    /\bthe problem is\b/i,
+  ];
+
+  const vagueAdvicePatterns = [
+    /\bthe key is\b/i,
+    /\bthis should help\b/i,
+    /\bthat should help\b/i,
+    /\bstay aware of\b/i,
+    /\bbe aware of\b/i,
+    /\bconsistency\b/i,
+    /\bkeep working on\b/i,
+  ];
+
+  if (!concreteActionStartPatterns.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+  if (diagnosisPatterns.some((pattern) => pattern.test(text))) return false;
+  if (vagueAdvicePatterns.some((pattern) => pattern.test(text))) return false;
+
+  return /\b(?:hip|rib|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|hinge|foot|feet|ankle|knee|glute|serve|swing|contact|backswing|pressure|front leg|front side|transfer|release|structure)\b/i.test(
+    text,
+  );
+}
+
+function isGenericCoachingFillerText(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  const fillerPatterns = [
+    /^\s*the key is\b/i,
+    /^\s*this matters\b/i,
+    /^\s*that matters\b/i,
+    /^\s*it'?s important\b/i,
+    /^\s*it is important\b/i,
+    /^\s*that should help\b/i,
+    /^\s*this should help\b/i,
+    /^\s*stay aware of\b/i,
+    /^\s*be aware of\b/i,
+    /^\s*consistency\b/i,
+    /^\s*this exercise\b/i,
+    /\baligns with\b/i,
+    /\bwhat you need\b/i,
+    /\bthis is working\b/i,
+    /\bworking well\b/i,
+    /\baligning well\b/i,
+    /\bthis is aligning\b/i,
+    /\bgood sign\b/i,
+    /\bglad to hear\b/i,
+    /\bgreat to hear\b/i,
+    /\bhappy to hear\b/i,
+    /\bkeep it up\b/i,
+    /\blet me know\b/i,
+  ];
+
+  return fillerPatterns.some((pattern) => pattern.test(text));
+}
+
+function hasExplanatoryMechanismLanguage(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:because|due to|driven by|caused by|coming from|comes from|is coming from|happening because|the issue is|the problem is|what'?s happening is|what'?s going on is|this is happening because)\b/i.test(
+    text,
+  );
+}
+
+function hasMechanismBreakdownLanguage(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:breaking|collapsing|opening too early|shifting too early|losing structure|compensating|taking over|bearing the load|bearing load|stalling under load|stalling under|dropping too early|not holding|under[-\s]?loading|over[-\s]?rotating|driving the issue|opening before|breaking before|collapsing under)\b/i.test(
+    text,
+  );
+}
+
+function hasMechanismAnchor(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:hip|hips|trunk|ribcage|rib cage|pelvis|pelvic|front side|back side|shoulder|shoulders|scapula|scapular|arm|elbow|wrist|hand|back|spine|lumbar|thoracic|load|loading|rotation|rotate|transfer|brace|stack|stacked|contact|backswing|serve|swing|release|front leg|back leg|glute|glutes)\b/i.test(
+    text,
+  );
+}
+
+function isVagueMechanismStatement(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+
+  const exactVaguePatterns = [
+    /^this is (?:about )?timing[.!?]?$/i,
+    /^this is coordination[.!?]?$/i,
+    /^this is a movement issue[.!?]?$/i,
+    /^this is a sequencing issue[.!?]?$/i,
+    /^something is off in the sequence[.!?]?$/i,
+    /^your body is trying to adjust[.!?]?$/i,
+    /^this is movement[.!?]?$/i,
+    /^this is mechanics[.!?]?$/i,
+    /^this is alignment[.!?]?$/i,
+    /^this is a good sign[.!?]?$/i,
+    /^this should help[.!?]?$/i,
+  ];
+
+  if (exactVaguePatterns.some((pattern) => pattern.test(normalized))) {
+    return true;
   }
 
-  return conversationOpenCase;
+  return /\b(?:this is|it is|it'?s|that is|that'?s)\s+(?:about\s+)?(?:timing|coordination|movement|mechanics|alignment|sequence|sequencing)\b/i.test(
+    normalized,
+  );
+}
+
+function hasAdjustmentDirectiveStart(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /^(?:focus on|try|make sure|let|allow|shift|keep|think about|load|relax|drive|rotate|brace|stack|press|pull|push|hinge|hold|stay)\b/i.test(
+    text,
+  );
+}
+
+function hasConcreteAdjustmentAnchor(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:hip|hips|trunk|ribcage|rib cage|pelvis|pelvic|shoulder|shoulders|back|spine|front leg|front side|back leg|glute|glutes|contact|backswing|serve|swing|rotation|rotate|load|release|transfer|brace|stack|structure)\b/i.test(
+    text,
+  );
+}
+
+function hasDiagnosisLanguage(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:because|since|due to|caused by|driven by|the issue is|the problem is|what'?s happening is|which means|so that)\b/i.test(
+    text,
+  );
+}
+
+function isLowInformationAdjustmentText(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  return (
+    /\bstay aware of\b/i.test(text) ||
+    /\bbe aware of\b/i.test(text) ||
+    /\bkeep working on\b/i.test(text) ||
+    /\bconsistency\b/i.test(text) ||
+    /\bjust keep doing that\b/i.test(text) ||
+    /\bbe mindful of\b/i.test(text) ||
+    /\bthis should help\b/i.test(text) ||
+    /\bthat should help\b/i.test(text) ||
+    /\bclean things up\b/i.test(text) ||
+    /\bgood place to start\b/i.test(text) ||
+    /\bimprove the sequence\b/i.test(text) ||
+    /\bstay organized\b/i.test(text) ||
+    /\bmove better\b/i.test(text) ||
+    /\bcontrol it more\b/i.test(text) ||
+    /\bclean that up\b/i.test(text)
+  );
+}
+
+function isClearlyBundledAdjustmentSequence(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  const directiveMatches =
+    text.match(
+      /\b(?:focus on|try|make sure|let|allow|shift|keep|think about|load|relax|drive|rotate|brace|stack|press|pull|push|hinge|hold|stay|clear)\b/gi,
+    ) ?? [];
+
+  if (directiveMatches.length >= 4) return true;
+
+  if (
+    directiveMatches.length >= 3 &&
+    (/,/.test(text) || /\band\b|\bthen\b|\bwhile\b/i.test(text))
+  ) {
+    return true;
+  }
+
+  if (
+    /\bfirst\b.*\bthen\b/i.test(text) ||
+    /\bwhile keeping\b/i.test(text) ||
+    /,\s*(?:keep|load|rotate|brace|hold|stay|clear)\b/i.test(text)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isLowSignalShiftText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  return (
+    /\bi found (?:an?|some)\b/i.test(text) ||
+    /\bi watched\b/i.test(text) ||
+    /\bi saw\b.*\bonline\b/i.test(text) ||
+    /\bi found\b.*\bonline\b/i.test(text) ||
+    /\bi came across\b/i.test(text) ||
+    /\bon youtube\b/i.test(text) ||
+    /\bin a video\b/i.test(text) ||
+    /\bin an article\b/i.test(text) ||
+    /\bthis is working\b/i.test(text) ||
+    /\baligning well\b/i.test(text) ||
+    /\bgood sign\b/i.test(text) ||
+    /\bthe key is\b/i.test(text) ||
+    /\bthis should help\b/i.test(text) ||
+    /\bthat should help\b/i.test(text) ||
+    /\bglad to hear\b/i.test(text) ||
+    /\bkeep it up\b/i.test(text)
+  );
+}
+
+function isValidLastShiftSignalFallback(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+  if (isReviewStyleCaseLayerText(text)) return false;
+  if (isLowSignalShiftText(text)) return false;
+  if (!qualifiesForTimelineSignal(text)) return false;
+  return extractPreviewSnippet(text, 220) != null;
 }
 
 function extractFirstMatchingSentence(
@@ -733,13 +1372,13 @@ function extractFirstMatchingSentence(
       ).length;
 
       if (!normalized) return null;
-      if (normalized.length < 35) return null;
-      if (wordCount < 6) return null;
-      if (!/[.!?]$/.test(sentence)) return null;
-      if (/^[A-Z][A-Z\s]+:?$/.test(normalized)) return null;
-      if (isLowSignalShiftText(normalized)) return null;
-      if (isGenericCoachingFillerText(normalized)) return null;
-      if (isReviewStyleCaseLayerText(normalized)) return null;
+      if (normalized.length < 35) return false;
+      if (wordCount < 6) return false;
+      if (!/[.!?]$/.test(sentence)) return false;
+      if (/^[A-Z][A-Z\s]+:?$/.test(normalized)) return false;
+      if (isLowSignalShiftText(normalized)) return false;
+      if (isGenericCoachingFillerText(normalized)) return false;
+      if (isReviewStyleCaseLayerText(normalized)) return false;
       if (patternMatches === 0) return null;
 
       let score = patternMatches * 5;
@@ -933,348 +1572,6 @@ function extractBestAdjustmentSentence(text: string): string | null {
   return candidates[0]?.sentence ?? null;
 }
 
-function normalizePreviewValue(
-  value: string | null | undefined,
-): string | null {
-  const trimmed = String(value ?? "").trim();
-  return trimmed ? trimmed : null;
-}
-
-function extractPreviewSnippet(
-  value: string | null | undefined,
-  max = 180,
-): string | null {
-  const text = normalizePreviewValue(value);
-  if (!text) return null;
-  if (text.length < 35) return null;
-
-  const sentences = text
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
-
-  const meaningfulSentence =
-    sentences.find((sentence) => {
-      const normalized = sentence
-        .replace(/[*_`#>\-\[\]()]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      if (!normalized || normalized.length < 35) return false;
-      if (/^[-–—\s]+$/.test(sentence)) return false;
-      if (/^[A-Z][A-Z\s]+:?$/.test(normalized)) return false;
-
-      const wordCount = normalized.split(" ").filter(Boolean).length;
-      return wordCount >= 6;
-    }) ?? text;
-
-  const snippet = normalizePreviewValue(clampText(meaningfulSentence, max));
-  if (!snippet || snippet.length < 35) return null;
-  return snippet;
-}
-
-function normalizeDashboardCandidate(value: string | null | undefined): string {
-  return String(value ?? "")
-    .toLowerCase()
-    .replace(/[*_`#>\-\[\]()'",.:;!?]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isReviewStyleCaseLayerText(value: string | null | undefined): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-
-  const normalized = text.replace(/\s+/g, " ").trim();
-
-  const headerPatterns = [
-    /\borigin problem\b/i,
-    /\bbeginning of\b/i,
-    /\binvestigation began\b/i,
-    /\bthe investigation\b/i,
-    /\bthis case began\b/i,
-    /\bcase review\b/i,
-    /\bcurrent state\b/i,
-    /\bsnapshot\b/i,
-    /\bcheckpoint\b/i,
-    /\bretrospective\b/i,
-    /\bsummary\b/i,
-    /\breport\b/i,
-    /\boverview\b/i,
-  ];
-
-  const reportShapePatterns = [
-    /^[A-Z][A-Z\s\-]{8,}:?$/m,
-    /\b[A-Z][A-Z\s]{6,}\s+---/m,
-    /---/,
-    /\b(?:origin problem|current state|current mechanism|current test|last shift)\b.*\b(?:origin problem|current state|current mechanism|current test|last shift)\b/i,
-    /\b(?:the investigation began|this case began|case review|beginning of the investigation|beginning of investigation)\b/i,
-  ];
-
-  const retrospectivePatterns = [
-    /\bthis case\b.*\b(?:began|started|opened)\b/i,
-    /\bthe issue began\b/i,
-    /\bthe problem began\b/i,
-    /\bover the course of\b/i,
-    /\bso far in this case\b/i,
-    /\bup to this point\b/i,
-    /\bfrom the beginning\b/i,
-    /\bretrospective\b/i,
-  ];
-
-  return (
-    headerPatterns.some((pattern) => pattern.test(normalized)) ||
-    reportShapePatterns.some((pattern) => pattern.test(normalized)) ||
-    retrospectivePatterns.some((pattern) => pattern.test(normalized))
-  );
-}
-
-function isMechanismLikeText(value: string | null | undefined): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-  if (isReviewStyleCaseLayerText(text)) return false;
-
-  const explicitMechanismPatterns = [
-    /\bbecause\b/i,
-    /\bdue to\b/i,
-    /\bdriven by\b/i,
-    /\bcaused by\b/i,
-    /\bcoming from\b/i,
-    /\bhappening because\b/i,
-    /\bpoints to\b/i,
-    /\bwhat'?s happening\b/i,
-    /\bthe issue is\b/i,
-    /\bthe problem is\b/i,
-  ];
-
-  const declarativeMechanismPatterns = [
-    /\bis breaking\b/i,
-    /\bis collapsing\b/i,
-    /\bis stalling\b/i,
-    /\bis opening too early\b/i,
-    /\bis shifting too early\b/i,
-    /\bis losing structure\b/i,
-    /\bis unstable\b/i,
-    /\bis dropping\b/i,
-    /\bis not holding\b/i,
-    /\bis over[-\s]?rotating\b/i,
-    /\bis under[-\s]?loading\b/i,
-    /\bis compensating\b/i,
-    /\bis taking over\b/i,
-    /\bis bearing the load\b/i,
-    /\bis driving the issue\b/i,
-    /\bbreaking before\b/i,
-    /\bopening before\b/i,
-    /\bshifting too early\b/i,
-    /\bstalling under\b/i,
-    /\bcollapsing under\b/i,
-    /\blosing structure once\b/i,
-    /\btrying to organize\b/i,
-  ];
-
-  const instructionPatterns = [
-    /^\s*focus on\b/i,
-    /^\s*try\b/i,
-    /^\s*make sure\b/i,
-    /^\s*keep\b/i,
-    /^\s*let\b/i,
-    /^\s*allow\b/i,
-    /^\s*shift\b/i,
-    /^\s*think about\b/i,
-    /^\s*the key is\b/i,
-    /^\s*this exercise\b/i,
-    /^\s*work on\b/i,
-  ];
-
-  const genericSuccessPatterns = [
-    /\bthis is working\b/i,
-    /\bworking well\b/i,
-    /\baligning well\b/i,
-    /\bthis is aligning\b/i,
-    /\bgood sign\b/i,
-    /\bthis should help\b/i,
-    /\bthat should help\b/i,
-    /\bkeep it up\b/i,
-    /\bglad to hear\b/i,
-  ];
-
-  if (instructionPatterns.some((pattern) => pattern.test(text))) {
-    return false;
-  }
-
-  if (genericSuccessPatterns.some((pattern) => pattern.test(text))) {
-    return false;
-  }
-
-  return (
-    explicitMechanismPatterns.some((pattern) => pattern.test(text)) ||
-    declarativeMechanismPatterns.some((pattern) => pattern.test(text))
-  );
-}
-
-function isTestLikeText(value: string | null | undefined): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-  if (isReviewStyleCaseLayerText(text)) return false;
-
-  const concreteActionStartPatterns = [
-    /^\s*focus on\b/i,
-    /^\s*try\b/i,
-    /^\s*make sure\b/i,
-    /^\s*keep\b/i,
-    /^\s*let\b/i,
-    /^\s*allow\b/i,
-    /^\s*shift\b/i,
-    /^\s*think about\b/i,
-    /^\s*load\b/i,
-    /^\s*relax\b/i,
-    /^\s*drive\b/i,
-    /^\s*rotate\b/i,
-    /^\s*brace\b/i,
-    /^\s*stack\b/i,
-    /^\s*press\b/i,
-    /^\s*pull\b/i,
-    /^\s*push\b/i,
-    /^\s*hinge\b/i,
-    /^\s*hold\b/i,
-    /^\s*stay\b/i,
-  ];
-
-  const diagnosisPatterns = [
-    /\bbecause\b/i,
-    /\bdue to\b/i,
-    /\bdriven by\b/i,
-    /\bcaused by\b/i,
-    /\bcoming from\b/i,
-    /\bhappening because\b/i,
-    /\bpoints to\b/i,
-    /\bwhat'?s happening\b/i,
-    /\bthe issue is\b/i,
-    /\bthe problem is\b/i,
-  ];
-
-  const vagueAdvicePatterns = [
-    /\bthe key is\b/i,
-    /\bthis should help\b/i,
-    /\bthat should help\b/i,
-    /\bstay aware of\b/i,
-    /\bbe aware of\b/i,
-    /\bconsistency\b/i,
-    /\bkeep working on\b/i,
-  ];
-
-  if (!concreteActionStartPatterns.some((pattern) => pattern.test(text))) {
-    return false;
-  }
-
-  if (diagnosisPatterns.some((pattern) => pattern.test(text))) {
-    return false;
-  }
-
-  if (vagueAdvicePatterns.some((pattern) => pattern.test(text))) {
-    return false;
-  }
-
-  return /\b(?:hip|rib|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|hinge|foot|feet|ankle|knee|glute|serve|swing|contact|backswing|pressure|front leg|front side|transfer|release|structure)\b/i.test(
-    text,
-  );
-}
-
-function isGenericCoachingFillerText(
-  value: string | null | undefined,
-): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return true;
-
-  const fillerPatterns = [
-    /^\s*the key is\b/i,
-    /^\s*this matters\b/i,
-    /^\s*that matters\b/i,
-    /^\s*it'?s important\b/i,
-    /^\s*it is important\b/i,
-    /^\s*that should help\b/i,
-    /^\s*this should help\b/i,
-    /^\s*stay aware of\b/i,
-    /^\s*be aware of\b/i,
-    /^\s*consistency\b/i,
-    /^\s*this exercise\b/i,
-    /\baligns with\b/i,
-    /\bwhat you need\b/i,
-    /\bthis is working\b/i,
-    /\bworking well\b/i,
-    /\baligning well\b/i,
-    /\bthis is aligning\b/i,
-    /\bgood sign\b/i,
-    /\bglad to hear\b/i,
-    /\bgreat to hear\b/i,
-    /\bhappy to hear\b/i,
-    /\bkeep it up\b/i,
-    /\blet me know\b/i,
-  ];
-
-  return fillerPatterns.some((pattern) => pattern.test(text));
-}
-
-function hasExplanatoryMechanismLanguage(
-  value: string | null | undefined,
-): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-
-  return /\b(?:because|due to|driven by|caused by|coming from|comes from|is coming from|happening because|the issue is|the problem is|what'?s happening is|what'?s going on is|this is happening because)\b/i.test(
-    text,
-  );
-}
-
-function hasMechanismBreakdownLanguage(
-  value: string | null | undefined,
-): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-
-  return /\b(?:breaking|collapsing|opening too early|shifting too early|losing structure|compensating|taking over|bearing the load|bearing load|stalling under load|stalling under|dropping too early|not holding|under[-\s]?loading|over[-\s]?rotating|driving the issue|opening before|breaking before|collapsing under)\b/i.test(
-    text,
-  );
-}
-
-function hasMechanismAnchor(value: string | null | undefined): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-
-  return /\b(?:hip|hips|trunk|ribcage|rib cage|pelvis|pelvic|front side|back side|shoulder|shoulders|scapula|scapular|arm|elbow|wrist|hand|back|spine|lumbar|thoracic|load|loading|rotation|rotate|transfer|brace|stack|stacked|contact|backswing|serve|swing|release|front leg|back leg|glute|glutes)\b/i.test(
-    text,
-  );
-}
-
-function isVagueMechanismStatement(value: string | null | undefined): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return true;
-
-  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
-
-  const exactVaguePatterns = [
-    /^this is (?:about )?timing[.!?]?$/i,
-    /^this is coordination[.!?]?$/i,
-    /^this is a movement issue[.!?]?$/i,
-    /^this is a sequencing issue[.!?]?$/i,
-    /^something is off in the sequence[.!?]?$/i,
-    /^your body is trying to adjust[.!?]?$/i,
-    /^this is movement[.!?]?$/i,
-    /^this is mechanics[.!?]?$/i,
-    /^this is alignment[.!?]?$/i,
-    /^this is a good sign[.!?]?$/i,
-    /^this should help[.!?]?$/i,
-  ];
-
-  if (exactVaguePatterns.some((pattern) => pattern.test(normalized))) {
-    return true;
-  }
-
-  return /\b(?:this is|it is|it'?s|that is|that'?s)\s+(?:about\s+)?(?:timing|coordination|movement|mechanics|alignment|sequence|sequencing)\b/i.test(
-    normalized,
-  );
-}
-
 function normalizeHypothesisMeaning(value: string | null | undefined): string {
   return String(value ?? "")
     .toLowerCase()
@@ -1364,95 +1661,7 @@ function areMateriallyEquivalentHypotheses(
   );
 
   const sharedCount = smaller.filter((token) => largerSet.has(token)).length;
-
   return sharedCount >= Math.max(3, smaller.length - 1);
-}
-
-function hasAdjustmentDirectiveStart(
-  value: string | null | undefined,
-): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-
-  return /^(?:focus on|try|make sure|let|allow|shift|keep|think about|load|relax|drive|rotate|brace|stack|press|pull|push|hinge|hold|stay)\b/i.test(
-    text,
-  );
-}
-
-function hasConcreteAdjustmentAnchor(
-  value: string | null | undefined,
-): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-
-  return /\b(?:hip|hips|trunk|ribcage|rib cage|pelvis|pelvic|shoulder|shoulders|back|spine|front leg|front side|back leg|glute|glutes|contact|backswing|serve|swing|rotation|rotate|load|release|transfer|brace|stack|structure)\b/i.test(
-    text,
-  );
-}
-
-function hasDiagnosisLanguage(value: string | null | undefined): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-
-  return /\b(?:because|since|due to|caused by|driven by|the issue is|the problem is|what'?s happening is|which means|so that)\b/i.test(
-    text,
-  );
-}
-
-function isLowInformationAdjustmentText(
-  value: string | null | undefined,
-): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return true;
-
-  return (
-    /\bstay aware of\b/i.test(text) ||
-    /\bbe aware of\b/i.test(text) ||
-    /\bkeep working on\b/i.test(text) ||
-    /\bconsistency\b/i.test(text) ||
-    /\bjust keep doing that\b/i.test(text) ||
-    /\bbe mindful of\b/i.test(text) ||
-    /\bthis should help\b/i.test(text) ||
-    /\bthat should help\b/i.test(text) ||
-    /\bclean things up\b/i.test(text) ||
-    /\bgood place to start\b/i.test(text) ||
-    /\bimprove the sequence\b/i.test(text) ||
-    /\bstay organized\b/i.test(text) ||
-    /\bmove better\b/i.test(text) ||
-    /\bcontrol it more\b/i.test(text) ||
-    /\bclean that up\b/i.test(text)
-  );
-}
-
-function isClearlyBundledAdjustmentSequence(
-  value: string | null | undefined,
-): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-
-  const directiveMatches =
-    text.match(
-      /\b(?:focus on|try|make sure|let|allow|shift|keep|think about|load|relax|drive|rotate|brace|stack|press|pull|push|hinge|hold|stay|clear)\b/gi,
-    ) ?? [];
-
-  if (directiveMatches.length >= 4) return true;
-
-  if (
-    directiveMatches.length >= 3 &&
-    (/,/.test(text) || /\band\b|\bthen\b|\bwhile\b/i.test(text))
-  ) {
-    return true;
-  }
-
-  if (
-    /\bfirst\b.*\bthen\b/i.test(text) ||
-    /\bwhile keeping\b/i.test(text) ||
-    /,\s*(?:keep|load|rotate|brace|hold|stay|clear)\b/i.test(text)
-  ) {
-    return true;
-  }
-
-  return false;
 }
 
 function canonicalizeAdjustmentMeaning(
@@ -1670,27 +1879,17 @@ function isStrongHypothesisCandidate(
     /\balignment issue\b/i,
   ];
 
-  if (directivePatterns.some((pattern) => pattern.test(text))) {
-    return false;
-  }
-
+  if (directivePatterns.some((pattern) => pattern.test(text))) return false;
   if (vagueInterpretationPatterns.some((pattern) => pattern.test(text))) {
     return false;
   }
-
-  if (!hasMechanismAnchor(text)) {
-    return false;
-  }
+  if (!hasMechanismAnchor(text)) return false;
 
   const hasMechanismSignal =
     hasExplanatoryMechanismLanguage(text) ||
     hasMechanismBreakdownLanguage(text);
 
-  if (!hasMechanismSignal) {
-    return false;
-  }
-
-  return true;
+  return hasMechanismSignal;
 }
 
 function isStrongAdjustmentCandidate(
@@ -1734,51 +1933,15 @@ function isStrongAdjustmentCandidate(
     /\bso that\b/i,
   ];
 
-  if (vagueActionPatterns.some((pattern) => pattern.test(text))) {
-    return false;
-  }
-
-  if (rejectMixedPatterns.some((pattern) => pattern.test(text))) {
-    return false;
-  }
+  if (vagueActionPatterns.some((pattern) => pattern.test(text))) return false;
+  if (rejectMixedPatterns.some((pattern) => pattern.test(text))) return false;
 
   return true;
 }
 
-function isLowSignalShiftText(value: string | null | undefined): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return true;
-
-  return (
-    /\bi found (?:an?|some)\b/i.test(text) ||
-    /\bi watched\b/i.test(text) ||
-    /\bi saw\b.*\bonline\b/i.test(text) ||
-    /\bi found\b.*\bonline\b/i.test(text) ||
-    /\bi came across\b/i.test(text) ||
-    /\bon youtube\b/i.test(text) ||
-    /\bin a video\b/i.test(text) ||
-    /\bin an article\b/i.test(text) ||
-    /\bthis is working\b/i.test(text) ||
-    /\baligning well\b/i.test(text) ||
-    /\bgood sign\b/i.test(text) ||
-    /\bthe key is\b/i.test(text) ||
-    /\bthis should help\b/i.test(text) ||
-    /\bthat should help\b/i.test(text) ||
-    /\bglad to hear\b/i.test(text) ||
-    /\bkeep it up\b/i.test(text)
-  );
-}
-
-function isValidLastShiftSignalFallback(
-  value: string | null | undefined,
-): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-  if (isReviewStyleCaseLayerText(text)) return false;
-  if (isLowSignalShiftText(text)) return false;
-  if (!qualifiesForTimelineSignal(text)) return false;
-  return extractPreviewSnippet(text, 220) != null;
-}
+// ==============================
+// DASHBOARD HELPERS
+// ==============================
 
 function areEquivalentDashboardCandidates(
   left: string | null | undefined,
@@ -1912,6 +2075,10 @@ function buildActiveCaseTitle(
   return movement ?? activity ?? null;
 }
 
+// ==============================
+// QUALIFICATION / OUTCOMES
+// ==============================
+
 function qualifiesForTimelineSignal(text: string): boolean {
   const input = text.trim().toLowerCase();
   if (!input) return false;
@@ -1985,10 +2152,6 @@ function qualifiesForNewCaseOpen(text: string): boolean {
   );
 }
 
-// ==============================
-// OUTCOME DETECTION
-// ==============================
-
 function detectOutcomeResult(
   text: string,
 ): "Improved" | "Worse" | "Same" | null {
@@ -1996,10 +2159,8 @@ function detectOutcomeResult(
 
   const improved =
     /\b(helped|worked|better|improved|fixed|that did it|feels better|much better|way better|significantly better|a lot better|relieved|less pain|less tight|lighter|smoother)\b/i;
-
   const worse =
     /\b(worse|hurt more|hurts more|pain increased|more pain|aggravated|made it worse|tighter|more tight|more strain|more uncomfortable)\b/i;
-
   const same =
     /\b(no change|same|still the same|didn't help|didnt help|no difference|not different|unchanged)\b/i;
 
@@ -2032,7 +2193,7 @@ function detectUserClosureSignal(text: string): boolean {
 }
 
 // ==============================
-// STORED SESSION HISTORY BUILDER
+// STORED SESSION HISTORY / CONTEXT
 // ==============================
 
 async function getStoredSessionHistory(
@@ -2071,10 +2232,6 @@ async function getStoredSessionHistory(
     sessionBlocks.join("\n\n")
   );
 }
-
-// ==============================
-// ACTIVE HYPOTHESIS LOOKUP
-// ==============================
 
 async function getActiveHypothesisBlock(userId: string): Promise<string> {
   const unresolved = await db
@@ -2127,206 +2284,860 @@ ${summary}
 `;
 }
 
-// ==============================
-// RESPONSE VALIDATION HELPERS
-// ==============================
-
 function isValidResponse(text: string): boolean {
   if (!text) return false;
-
   if (!text.trim()) return false;
-
   return true;
 }
 
 async function runCompletion(
   openaiClient: OpenAI,
-  messages: ChatCompletionMessageParam[],
+  messagesInput: ChatCompletionMessageParam[],
 ): Promise<string> {
   const resp = await openaiClient.chat.completions.create({
     model: "gpt-4o",
     temperature: 0.4,
-    messages,
+    messages: messagesInput,
   });
 
   return resp.choices?.[0]?.message?.content ?? "";
+}
+
+type SignalClusterParts = {
+  bodyRegion: string | null;
+  signalType: string | null;
+  movementContext: string | null;
+  activityType: string | null;
+};
+
+type RuntimePatternEvidence = {
+  caseId: number;
+  recencyWeight: number;
+  signalKey: string | null;
+  signalText: string | null;
+  mechanismKey: string | null;
+  mechanismText: string | null;
+  adjustmentKey: string | null;
+  adjustmentText: string | null;
+  adjustmentCount: number;
+  isLatestAdjustment: boolean;
+  outcomeCount: number;
+  improvedCount: number;
+  sameOrWorseCount: number;
+  weightedImprovedCount: number;
+  weightedSameOrWorseCount: number;
+  latestOutcomeId: number;
+  latestOutcomePreview: string | null;
+  latestImprovedOutcomeId: number;
+  latestImprovedPreview: string | null;
+};
+
+type RuntimePatternBucket = {
+  key: string;
+  mechanismKey: string | null;
+  mechanismText: string | null;
+  mechanismRepresentativeRecency: number;
+  adjustmentKey: string | null;
+  adjustmentText: string | null;
+  adjustmentRepresentativeRecency: number;
+  signalKey: string | null;
+  signalText: string | null;
+  signalRepresentativeRecency: number;
+  caseIds: Set<number>;
+  signalCaseIds: Set<number>;
+  hypothesisCaseIds: Set<number>;
+  adjustmentCaseIds: Set<number>;
+  outcomeCaseIds: Set<number>;
+  improvedCaseIds: Set<number>;
+  sameOrWorseCaseIds: Set<number>;
+  recencyByCase: Map<number, number>;
+  evidenceCount: number;
+  outcomeCount: number;
+  improvedCount: number;
+  sameOrWorseCount: number;
+  weightedImprovedCount: number;
+  weightedSameOrWorseCount: number;
+  latestOutcomeId: number;
+  latestOutcomePreview: string | null;
+  latestImprovedOutcomeId: number;
+  latestImprovedPreview: string | null;
+};
+
+function normalizeSignalClusterPart(
+  value: string | null | undefined,
+  isWeak?: (value: string | null | undefined) => boolean,
+): string | null {
+  const normalized = normalizeOptionalLabel(value);
+  if (!normalized) return null;
+  if (isWeak?.(value)) return null;
+  return normalized;
+}
+
+function buildSignalClusterSignature(args: {
+  bodyRegion?: string | null;
+  signalType?: string | null;
+  movementContext?: string | null;
+  activityType?: string | null;
+}): string | null {
+  const bodyRegion = normalizeSignalClusterPart(args.bodyRegion);
+  const signalType = normalizeSignalClusterPart(args.signalType);
+  const movementContext = normalizeSignalClusterPart(
+    args.movementContext,
+    isFallbackMovementContext,
+  );
+  const activityType = normalizeSignalClusterPart(
+    args.activityType,
+    isFallbackActivityType,
+  );
+
+  const parts = [bodyRegion, signalType, movementContext, activityType];
+
+  if (parts.every((part) => !part)) {
+    return null;
+  }
+
+  return parts.map((part) => part ?? "").join(" | ");
+}
+
+function parseSignalClusterSignature(
+  value: string | null | undefined,
+): SignalClusterParts {
+  const parts = String(value ?? "")
+    .split("|")
+    .map((part) => part.trim());
+
+  return {
+    bodyRegion: parts[0] || null,
+    signalType: parts[1] || null,
+    movementContext: parts[2] || null,
+    activityType: parts[3] || null,
+  };
+}
+
+function stripTrailingSentencePunctuation(
+  value: string | null | undefined,
+): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/[.!?]+$/g, "")
+    .trim();
+}
+
+function buildOutcomeEvidencePreview(
+  result: string | null | undefined,
+  userFeedback: string | null | undefined,
+): string | null {
+  const feedbackPreview = extractPreviewSnippet(userFeedback, 220);
+  if (feedbackPreview) return feedbackPreview;
+
+  const resultText = normalizePreviewValue(result);
+  const feedbackText = normalizePreviewValue(userFeedback);
+
+  if (feedbackText && feedbackText.length >= 12) {
+    return clampText(feedbackText, 220);
+  }
+
+  if (resultText === "Improved") return "clear improvement";
+  if (resultText === "Same") return "no meaningful change";
+  if (resultText === "Worse") return "a worse response";
+
+  return null;
+}
+
+function getRuntimeRecencyWeight(
+  updatedAt: Date | null | undefined,
+  rank: number,
+): number {
+  const ageDays =
+    updatedAt != null
+      ? Math.max(0, (Date.now() - new Date(updatedAt).getTime()) / 86400000)
+      : null;
+
+  let base = 0.55;
+
+  if (ageDays != null) {
+    if (ageDays <= 7) base = 1;
+    else if (ageDays <= 30) base = 0.88;
+    else if (ageDays <= 90) base = 0.72;
+    else if (ageDays <= 180) base = 0.58;
+    else base = 0.42;
+  }
+
+  return Math.max(0.2, base - rank * 0.03);
+}
+
+function getOutcomeAssociationConfidence(args: {
+  adjustmentCount: number;
+  isLatestAdjustment: boolean;
+}): number {
+  if (args.adjustmentCount <= 0) return 0.65;
+  if (args.adjustmentCount === 1) return 1.15;
+  if (args.isLatestAdjustment) return 0.8;
+  return 0.45;
+}
+
+function buildRuntimePatternBucketId(evidence: RuntimePatternEvidence): string {
+  if (evidence.mechanismKey) {
+    return `m:${evidence.mechanismKey}`;
+  }
+
+  if (evidence.adjustmentKey) {
+    return `a:${evidence.adjustmentKey}`;
+  }
+
+  if (evidence.signalKey) {
+    return `s:${evidence.signalKey}`;
+  }
+
+  return `case:${evidence.caseId}`;
+}
+
+function getRuntimePatternBucketMatchScore(
+  bucket: RuntimePatternBucket,
+  evidence: RuntimePatternEvidence,
+): number {
+  if (bucket.key === buildRuntimePatternBucketId(evidence)) {
+    return 1000;
+  }
+
+  const mechanismMatches =
+    Boolean(bucket.mechanismKey) &&
+    Boolean(evidence.mechanismKey) &&
+    areMateriallyEquivalentHypotheses(
+      bucket.mechanismKey,
+      evidence.mechanismKey,
+    );
+
+  const adjustmentMatches =
+    Boolean(bucket.adjustmentKey) &&
+    Boolean(evidence.adjustmentKey) &&
+    areMateriallyEquivalentAdjustments(
+      bucket.adjustmentKey,
+      evidence.adjustmentKey,
+    );
+
+  const signalMatches =
+    Boolean(bucket.signalKey) &&
+    Boolean(evidence.signalKey) &&
+    normalizeCaseKey(bucket.signalKey) === normalizeCaseKey(evidence.signalKey);
+
+  const totalMatchWeight =
+    (mechanismMatches ? 3 : 0) +
+    (adjustmentMatches ? 2 : 0) +
+    (signalMatches ? 1 : 0);
+
+  if (totalMatchWeight === 0) return 0;
+
+  if (bucket.mechanismKey && evidence.mechanismKey && !mechanismMatches) {
+    return 0;
+  }
+
+  if (
+    !bucket.mechanismKey &&
+    bucket.adjustmentKey &&
+    evidence.adjustmentKey &&
+    !adjustmentMatches &&
+    !signalMatches
+  ) {
+    return 0;
+  }
+
+  return totalMatchWeight * 10 + bucket.caseIds.size * 2;
+}
+
+function getRuntimePatternCompletenessScore(
+  bucket: RuntimePatternBucket,
+): number {
+  const parts = [
+    bucket.signalCaseIds.size > 0,
+    bucket.hypothesisCaseIds.size > 0,
+    bucket.adjustmentCaseIds.size > 0,
+    bucket.outcomeCaseIds.size > 0,
+  ].filter(Boolean).length;
+
+  if (parts === 4) return 18;
+  if (parts === 3) return 11;
+  if (parts === 2) return 6;
+  if (parts === 1) return 2;
+  return 0;
+}
+
+function scoreRuntimePatternBucket(bucket: RuntimePatternBucket): number {
+  const distinctCases = bucket.caseIds.size;
+  const improvedCases = bucket.improvedCaseIds.size;
+
+  const crossCaseScore =
+    distinctCases * 26 +
+    (distinctCases >= 2 ? 14 + (distinctCases - 2) * 8 : 0);
+
+  const successScore =
+    improvedCases * 28 +
+    bucket.improvedCount * 10 +
+    bucket.weightedImprovedCount * 18;
+
+  const recencyScore =
+    Array.from(bucket.recencyByCase.values())
+      .sort((a, b) => b - a)
+      .slice(0, 3)
+      .reduce((sum, weight) => sum + weight, 0) * 12;
+
+  const completenessScore = getRuntimePatternCompletenessScore(bucket);
+
+  const structureSpreadScore =
+    bucket.signalCaseIds.size * 4 +
+    bucket.hypothesisCaseIds.size * 7 +
+    bucket.adjustmentCaseIds.size * 7 +
+    bucket.outcomeCaseIds.size * 3;
+
+  const failurePenalty =
+    bucket.sameOrWorseCount * 2 + bucket.weightedSameOrWorseCount * 10;
+
+  const highFailureRatioPenalty =
+    bucket.sameOrWorseCount > bucket.improvedCount * 2
+      ? 24 + bucket.sameOrWorseCount * 3
+      : 0;
+
+  const signalOnlyPenalty =
+    !bucket.mechanismKey && !bucket.adjustmentKey ? 26 : 0;
+
+  const thinSingleCasePenalty =
+    distinctCases === 1 && improvedCases === 0 ? 16 : 0;
+
+  return (
+    crossCaseScore +
+    successScore +
+    recencyScore +
+    completenessScore +
+    structureSpreadScore -
+    failurePenalty -
+    highFailureRatioPenalty -
+    signalOnlyPenalty -
+    thinSingleCasePenalty
+  );
 }
 
 async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
   const recentCases = await db
     .select({
       id: cases.id,
-      movementContext: cases.movementContext,
-      activityType: cases.activityType,
-      createdAt: cases.createdAt,
       updatedAt: cases.updatedAt,
-      status: cases.status,
     })
     .from(cases)
     .where(eq(cases.userId, userId))
     .orderBy(desc(cases.updatedAt), desc(cases.id))
-    .limit(6);
+    .limit(18);
 
   if (recentCases.length === 0) return "";
 
-  const candidates = await Promise.all(
-    recentCases.map(async (caseRow) => {
-      const signals = await db
-        .select({
-          id: caseSignals.id,
-          description: caseSignals.description,
-        })
-        .from(caseSignals)
-        .where(eq(caseSignals.caseId, caseRow.id))
-        .orderBy(desc(caseSignals.id))
-        .limit(3);
+  const evidenceRows = (
+    await Promise.all(
+      recentCases.map(async (caseRow, rank) => {
+        const signalRows = await db
+          .select({
+            id: caseSignals.id,
+            bodyRegion: caseSignals.bodyRegion,
+            signalType: caseSignals.signalType,
+            movementContext: caseSignals.movementContext,
+            activityType: caseSignals.activityType,
+          })
+          .from(caseSignals)
+          .where(eq(caseSignals.caseId, caseRow.id))
+          .orderBy(desc(caseSignals.id))
+          .limit(4);
 
-      const hypotheses = await db
-        .select({
-          id: caseHypotheses.id,
-          hypothesis: caseHypotheses.hypothesis,
-        })
-        .from(caseHypotheses)
-        .where(eq(caseHypotheses.caseId, caseRow.id))
-        .orderBy(desc(caseHypotheses.id))
-        .limit(2);
+        const hypothesisRows = await db
+          .select({
+            id: caseHypotheses.id,
+            hypothesis: caseHypotheses.hypothesis,
+          })
+          .from(caseHypotheses)
+          .where(eq(caseHypotheses.caseId, caseRow.id))
+          .orderBy(desc(caseHypotheses.id))
+          .limit(4);
 
-      const adjustments = await db
-        .select({
-          id: caseAdjustments.id,
-          cue: caseAdjustments.cue,
-          mechanicalFocus: caseAdjustments.mechanicalFocus,
-        })
-        .from(caseAdjustments)
-        .where(eq(caseAdjustments.caseId, caseRow.id))
-        .orderBy(desc(caseAdjustments.id))
-        .limit(2);
+        const adjustmentRows = await db
+          .select({
+            id: caseAdjustments.id,
+            cue: caseAdjustments.cue,
+            mechanicalFocus: caseAdjustments.mechanicalFocus,
+          })
+          .from(caseAdjustments)
+          .where(eq(caseAdjustments.caseId, caseRow.id))
+          .orderBy(desc(caseAdjustments.id))
+          .limit(4);
 
-      const outcomes = await db
-        .select({
-          id: caseOutcomes.id,
-          result: caseOutcomes.result,
-          userFeedback: caseOutcomes.userFeedback,
-        })
-        .from(caseOutcomes)
-        .where(eq(caseOutcomes.caseId, caseRow.id))
-        .orderBy(desc(caseOutcomes.id))
-        .limit(3);
+        const outcomeRows = await db
+          .select({
+            id: caseOutcomes.id,
+            result: caseOutcomes.result,
+            userFeedback: caseOutcomes.userFeedback,
+          })
+          .from(caseOutcomes)
+          .where(eq(caseOutcomes.caseId, caseRow.id))
+          .orderBy(desc(caseOutcomes.id))
+          .limit(4);
 
-      const signalCount = signals.length;
-      const hypothesisCount = hypotheses.length;
-      const adjustmentCount = adjustments.length;
-      const outcomeCount = outcomes.length;
+        const recencyWeight = getRuntimeRecencyWeight(caseRow.updatedAt, rank);
 
-      const improvedOutcomes = outcomes.filter((o) => {
-        const resultText = String(o.result ?? "").trim();
-        const feedbackText = String(o.userFeedback ?? "").trim();
-        return /improved|better|resolved|clearer|easier|smoother|less/i.test(
-          `${resultText} ${feedbackText}`,
-        );
-      }).length;
+        const signalCandidates = signalRows
+          .map((signalRow) => {
+            const signalKey = buildSignalClusterSignature({
+              bodyRegion: signalRow.bodyRegion,
+              signalType: signalRow.signalType,
+              movementContext: signalRow.movementContext,
+              activityType: signalRow.activityType,
+            });
 
-      const openCaseBoost =
-        caseRow.status == null ||
-        /open|active|current/i.test(String(caseRow.status))
-          ? 4
-          : 0;
+            return {
+              id: signalRow.id,
+              signalKey,
+              signalText: signalKey,
+            };
+          })
+          .filter(
+            (
+              candidate,
+            ): candidate is {
+              id: number;
+              signalKey: string;
+              signalText: string;
+            } => Boolean(candidate.signalKey),
+          );
 
-      const score =
-        signalCount * 1 +
-        hypothesisCount * 3 +
-        adjustmentCount * 3 +
-        outcomeCount * 6 +
-        improvedOutcomes * 4 +
-        openCaseBoost;
+        const primarySignal = signalCandidates[0] ?? null;
 
-      return {
-        caseId: caseRow.id,
-        movementContext: (caseRow.movementContext ?? "").trim(),
-        activityType: (caseRow.activityType ?? "").trim(),
-        score,
-        signals,
-        hypotheses,
-        adjustments,
-        outcomes,
-      };
-    }),
-  );
+        const strongHypotheses = hypothesisRows
+          .map((hypothesisRow) => ({
+            id: hypothesisRow.id,
+            mechanismText: normalizePreviewValue(hypothesisRow.hypothesis),
+          }))
+          .filter(
+            (
+              candidate,
+            ): candidate is {
+              id: number;
+              mechanismText: string;
+            } =>
+              Boolean(candidate.mechanismText) &&
+              isStrongHypothesisCandidate(candidate.mechanismText),
+          )
+          .map((candidate) => ({
+            id: candidate.id,
+            mechanismText: candidate.mechanismText,
+            mechanismKey: normalizeHypothesisMeaning(candidate.mechanismText),
+          }))
+          .filter((candidate) => Boolean(candidate.mechanismKey));
 
-  const ranked = candidates
-    .filter(
-      (c) =>
-        c.movementContext ||
-        c.activityType ||
-        c.signals.length > 0 ||
-        c.hypotheses.length > 0 ||
-        c.adjustments.length > 0 ||
-        c.outcomes.length > 0,
+        const strongAdjustments = adjustmentRows
+          .flatMap((adjustmentRow) => [
+            {
+              adjustmentId: adjustmentRow.id,
+              value: normalizePreviewValue(adjustmentRow.cue),
+            },
+            {
+              adjustmentId: adjustmentRow.id,
+              value: normalizePreviewValue(adjustmentRow.mechanicalFocus),
+            },
+          ])
+          .filter(
+            (
+              candidate,
+            ): candidate is {
+              adjustmentId: number;
+              value: string;
+            } =>
+              Boolean(candidate.value) &&
+              isStrongAdjustmentCandidate(candidate.value),
+          )
+          .reduce<
+            Array<{
+              adjustmentId: number;
+              adjustmentText: string;
+              adjustmentKey: string;
+            }>
+          >((acc, candidate) => {
+            const adjustmentKey = canonicalizeAdjustmentMeaning(
+              candidate.value,
+            );
+            if (!adjustmentKey) return acc;
+
+            const alreadyPresent = acc.some(
+              (existing) =>
+                existing.adjustmentId === candidate.adjustmentId ||
+                areMateriallyEquivalentAdjustments(
+                  existing.adjustmentKey,
+                  adjustmentKey,
+                ),
+            );
+
+            if (!alreadyPresent) {
+              acc.push({
+                adjustmentId: candidate.adjustmentId,
+                adjustmentText: candidate.value,
+                adjustmentKey,
+              });
+            }
+
+            return acc;
+          }, []);
+
+        const classifiedOutcomes = outcomeRows.map((outcomeRow) => {
+          const resolvedResult =
+            outcomeRow.result === "Improved" ||
+            outcomeRow.result === "Same" ||
+            outcomeRow.result === "Worse"
+              ? outcomeRow.result
+              : detectOutcomeResult(
+                  `${String(outcomeRow.result ?? "")} ${String(
+                    outcomeRow.userFeedback ?? "",
+                  )}`.trim(),
+                );
+
+          return {
+            id: outcomeRow.id,
+            result: resolvedResult,
+            preview: buildOutcomeEvidencePreview(
+              outcomeRow.result,
+              outcomeRow.userFeedback,
+            ),
+          };
+        });
+
+        const outcomeCount = classifiedOutcomes.length;
+        const improvedCount = classifiedOutcomes.filter(
+          (outcome) => outcome.result === "Improved",
+        ).length;
+        const sameOrWorseCount = classifiedOutcomes.filter(
+          (outcome) => outcome.result === "Same" || outcome.result === "Worse",
+        ).length;
+
+        const latestOutcome = classifiedOutcomes[0] ?? null;
+        const latestImprovedOutcome =
+          classifiedOutcomes.find((outcome) => outcome.result === "Improved") ??
+          null;
+
+        const adjustmentCount = strongAdjustments.length;
+        const caseEvidenceRows: RuntimePatternEvidence[] = [];
+
+        const createEvidenceRow = (args: {
+          mechanismKey: string | null;
+          mechanismText: string | null;
+          adjustmentKey: string | null;
+          adjustmentText: string | null;
+          isLatestAdjustment: boolean;
+        }): RuntimePatternEvidence | null => {
+          if (!primarySignal && !args.mechanismKey && !args.adjustmentKey) {
+            return null;
+          }
+
+          const outcomeConfidence = getOutcomeAssociationConfidence({
+            adjustmentCount,
+            isLatestAdjustment: args.isLatestAdjustment,
+          });
+
+          return {
+            caseId: caseRow.id,
+            recencyWeight,
+            signalKey: primarySignal?.signalKey ?? null,
+            signalText: primarySignal?.signalText ?? null,
+            mechanismKey: args.mechanismKey,
+            mechanismText: args.mechanismText,
+            adjustmentKey: args.adjustmentKey,
+            adjustmentText: args.adjustmentText,
+            adjustmentCount,
+            isLatestAdjustment: args.isLatestAdjustment,
+            outcomeCount,
+            improvedCount,
+            sameOrWorseCount,
+            weightedImprovedCount: improvedCount * outcomeConfidence,
+            weightedSameOrWorseCount: sameOrWorseCount * outcomeConfidence,
+            latestOutcomeId: latestOutcome?.id ?? 0,
+            latestOutcomePreview: latestOutcome?.preview ?? null,
+            latestImprovedOutcomeId: latestImprovedOutcome?.id ?? 0,
+            latestImprovedPreview: latestImprovedOutcome?.preview ?? null,
+          };
+        };
+
+        const pushEvidenceRow = (row: RuntimePatternEvidence | null) => {
+          if (row) caseEvidenceRows.push(row);
+        };
+
+        if (strongHypotheses.length > 0) {
+          const usedAdjustmentIds = new Set<number>();
+
+          strongHypotheses.forEach((hypothesis, index) => {
+            const pairedAdjustment =
+              strongAdjustments[index] ?? strongAdjustments[0] ?? null;
+
+            if (pairedAdjustment) {
+              usedAdjustmentIds.add(pairedAdjustment.adjustmentId);
+            }
+
+            pushEvidenceRow(
+              createEvidenceRow({
+                mechanismKey: hypothesis.mechanismKey,
+                mechanismText: hypothesis.mechanismText,
+                adjustmentKey: pairedAdjustment?.adjustmentKey ?? null,
+                adjustmentText: pairedAdjustment?.adjustmentText ?? null,
+                isLatestAdjustment:
+                  pairedAdjustment != null &&
+                  pairedAdjustment.adjustmentId ===
+                    strongAdjustments[0]?.adjustmentId,
+              }),
+            );
+          });
+
+          strongAdjustments.forEach((adjustment, index) => {
+            if (usedAdjustmentIds.has(adjustment.adjustmentId)) return;
+
+            pushEvidenceRow(
+              createEvidenceRow({
+                mechanismKey: null,
+                mechanismText: null,
+                adjustmentKey: adjustment.adjustmentKey,
+                adjustmentText: adjustment.adjustmentText,
+                isLatestAdjustment: index === 0,
+              }),
+            );
+          });
+        } else if (strongAdjustments.length > 0) {
+          strongAdjustments.forEach((adjustment, index) => {
+            pushEvidenceRow(
+              createEvidenceRow({
+                mechanismKey: null,
+                mechanismText: null,
+                adjustmentKey: adjustment.adjustmentKey,
+                adjustmentText: adjustment.adjustmentText,
+                isLatestAdjustment: index === 0,
+              }),
+            );
+          });
+        } else if (primarySignal) {
+          pushEvidenceRow(
+            createEvidenceRow({
+              mechanismKey: null,
+              mechanismText: null,
+              adjustmentKey: null,
+              adjustmentText: null,
+              isLatestAdjustment: false,
+            }),
+          );
+        }
+
+        return caseEvidenceRows;
+      }),
     )
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return b.caseId - a.caseId;
-    });
+  )
+    .flat()
+    .filter((row): row is RuntimePatternEvidence => Boolean(row));
 
-  if (ranked.length === 0) return "";
+  if (evidenceRows.length === 0) return "";
 
-  const dominant = ranked[0];
-  const runnerUp = ranked[1];
+  const patternBuckets: RuntimePatternBucket[] = [];
 
-  const dominantHypothesis = dominant.hypotheses[0]?.hypothesis?.trim() ?? "";
-  const runnerUpHypothesis = runnerUp?.hypotheses[0]?.hypothesis?.trim() ?? "";
+  for (const evidence of evidenceRows) {
+    const evidenceKey = buildRuntimePatternBucketId(evidence);
 
-  const strongConflict =
-    Boolean(runnerUp) &&
-    runnerUp.score >= Math.max(8, Math.floor(dominant.score * 0.9)) &&
-    dominantHypothesis &&
-    runnerUpHypothesis &&
-    dominantHypothesis.toLowerCase() !== runnerUpHypothesis.toLowerCase();
+    let targetBucket =
+      patternBuckets.find((bucket) => bucket.key === evidenceKey) ?? null;
 
-  const contextParts = [dominant.activityType, dominant.movementContext].filter(
+    if (!targetBucket) {
+      let bestMatchScore = 0;
+
+      for (const bucket of patternBuckets) {
+        const score = getRuntimePatternBucketMatchScore(bucket, evidence);
+        if (score > bestMatchScore) {
+          bestMatchScore = score;
+          targetBucket = bucket;
+        }
+      }
+    }
+
+    if (!targetBucket) {
+      targetBucket = {
+        key: evidenceKey,
+        mechanismKey: null,
+        mechanismText: null,
+        mechanismRepresentativeRecency: 0,
+        adjustmentKey: null,
+        adjustmentText: null,
+        adjustmentRepresentativeRecency: 0,
+        signalKey: null,
+        signalText: null,
+        signalRepresentativeRecency: 0,
+        caseIds: new Set<number>(),
+        signalCaseIds: new Set<number>(),
+        hypothesisCaseIds: new Set<number>(),
+        adjustmentCaseIds: new Set<number>(),
+        outcomeCaseIds: new Set<number>(),
+        improvedCaseIds: new Set<number>(),
+        sameOrWorseCaseIds: new Set<number>(),
+        recencyByCase: new Map<number, number>(),
+        evidenceCount: 0,
+        outcomeCount: 0,
+        improvedCount: 0,
+        sameOrWorseCount: 0,
+        weightedImprovedCount: 0,
+        weightedSameOrWorseCount: 0,
+        latestOutcomeId: 0,
+        latestOutcomePreview: null,
+        latestImprovedOutcomeId: 0,
+        latestImprovedPreview: null,
+      };
+
+      patternBuckets.push(targetBucket);
+    }
+
+    targetBucket.evidenceCount += 1;
+    targetBucket.caseIds.add(evidence.caseId);
+    targetBucket.recencyByCase.set(
+      evidence.caseId,
+      Math.max(
+        targetBucket.recencyByCase.get(evidence.caseId) ?? 0,
+        evidence.recencyWeight,
+      ),
+    );
+
+    if (evidence.signalKey) {
+      targetBucket.signalCaseIds.add(evidence.caseId);
+
+      if (
+        !targetBucket.signalKey ||
+        evidence.recencyWeight >= targetBucket.signalRepresentativeRecency
+      ) {
+        targetBucket.signalKey = evidence.signalKey;
+        targetBucket.signalText = evidence.signalText;
+        targetBucket.signalRepresentativeRecency = evidence.recencyWeight;
+      }
+    }
+
+    if (evidence.mechanismKey) {
+      targetBucket.hypothesisCaseIds.add(evidence.caseId);
+
+      if (
+        !targetBucket.mechanismKey ||
+        evidence.recencyWeight >= targetBucket.mechanismRepresentativeRecency
+      ) {
+        targetBucket.mechanismKey = evidence.mechanismKey;
+        targetBucket.mechanismText = evidence.mechanismText;
+        targetBucket.mechanismRepresentativeRecency = evidence.recencyWeight;
+      }
+    }
+
+    if (evidence.adjustmentKey) {
+      targetBucket.adjustmentCaseIds.add(evidence.caseId);
+
+      if (
+        !targetBucket.adjustmentKey ||
+        evidence.recencyWeight >= targetBucket.adjustmentRepresentativeRecency
+      ) {
+        targetBucket.adjustmentKey = evidence.adjustmentKey;
+        targetBucket.adjustmentText = evidence.adjustmentText;
+        targetBucket.adjustmentRepresentativeRecency = evidence.recencyWeight;
+      }
+    }
+
+    if (evidence.outcomeCount > 0) {
+      targetBucket.outcomeCaseIds.add(evidence.caseId);
+      targetBucket.outcomeCount += evidence.outcomeCount;
+    }
+
+    if (evidence.improvedCount > 0) {
+      targetBucket.improvedCaseIds.add(evidence.caseId);
+      targetBucket.improvedCount += evidence.improvedCount;
+      targetBucket.weightedImprovedCount += evidence.weightedImprovedCount;
+    }
+
+    if (evidence.sameOrWorseCount > 0) {
+      targetBucket.sameOrWorseCaseIds.add(evidence.caseId);
+      targetBucket.sameOrWorseCount += evidence.sameOrWorseCount;
+      targetBucket.weightedSameOrWorseCount +=
+        evidence.weightedSameOrWorseCount;
+    }
+
+    if (
+      evidence.latestOutcomeId > 0 &&
+      evidence.latestOutcomeId >= targetBucket.latestOutcomeId
+    ) {
+      targetBucket.latestOutcomeId = evidence.latestOutcomeId;
+      targetBucket.latestOutcomePreview = evidence.latestOutcomePreview;
+    }
+
+    if (
+      evidence.latestImprovedOutcomeId > 0 &&
+      evidence.latestImprovedOutcomeId >= targetBucket.latestImprovedOutcomeId
+    ) {
+      targetBucket.latestImprovedOutcomeId = evidence.latestImprovedOutcomeId;
+      targetBucket.latestImprovedPreview = evidence.latestImprovedPreview;
+    }
+  }
+
+  const dominantBucket = patternBuckets
+    .filter(
+      (bucket) =>
+        bucket.caseIds.size > 0 &&
+        (bucket.signalKey || bucket.mechanismKey || bucket.adjustmentKey),
+    )
+    .sort((left, right) => {
+      const scoreDelta =
+        scoreRuntimePatternBucket(right) - scoreRuntimePatternBucket(left);
+      if (scoreDelta !== 0) return scoreDelta;
+      return right.caseIds.size - left.caseIds.size;
+    })[0];
+
+  if (!dominantBucket) return "";
+
+  const signalParts = parseSignalClusterSignature(dominantBucket.signalKey);
+
+  const contextParts = [
+    signalParts.movementContext,
+    signalParts.activityType,
+  ].filter(Boolean);
+
+  const issueParts = [signalParts.bodyRegion, signalParts.signalType].filter(
     Boolean,
   );
-
-  const recurringIssue = dominant.signals[0]?.description?.trim() ?? "";
-
-  const helpfulAdjustment =
-    dominant.adjustments
-      .map((a) =>
-        [a.cue?.trim(), a.mechanicalFocus?.trim()].filter(Boolean).join(" — "),
-      )
-      .filter(Boolean)[0] ?? "";
-
-  const improvementEvidence =
-    dominant.outcomes
-      .map((o) =>
-        [String(o.result ?? "").trim(), String(o.userFeedback ?? "").trim()]
-          .filter(Boolean)
-          .join(": "),
-      )
-      .filter(Boolean)[0] ?? "";
-
-  const mechanismLine = dominantHypothesis ? `${dominantHypothesis}.` : "";
 
   const contextLine =
     contextParts.length > 0
       ? `This has been showing up around ${contextParts.join(" / ")}.`
       : "";
 
-  const issueLine = recurringIssue
-    ? `The recurring issue has been ${recurringIssue}.`
+  const issueLine =
+    issueParts.length > 0
+      ? `The recurring signal has been ${issueParts.join(" / ")}.`
+      : dominantBucket.signalText
+        ? `The recurring signal has been ${dominantBucket.signalText}.`
+        : "";
+
+  const mechanismLine = dominantBucket.mechanismText
+    ? `The dominant mechanism has been ${stripTrailingSentencePunctuation(
+        dominantBucket.mechanismText,
+      )}.`
     : "";
 
-  const adjustmentLine = helpfulAdjustment
-    ? `What has helped most so far is ${helpfulAdjustment}.`
+  const adjustmentLine = dominantBucket.adjustmentText
+    ? `What has helped most so far is ${stripTrailingSentencePunctuation(
+        dominantBucket.adjustmentText,
+      )}.`
     : "";
 
-  const outcomeLine = improvementEvidence
-    ? `That produced ${improvementEvidence}.`
-    : "";
+  const outcomeLine = dominantBucket.latestImprovedPreview
+    ? `That produced ${stripTrailingSentencePunctuation(
+        dominantBucket.latestImprovedPreview,
+      )}.`
+    : dominantBucket.improvedCaseIds.size > 0
+      ? `This line has produced improvement across ${dominantBucket.improvedCaseIds.size} case${
+          dominantBucket.improvedCaseIds.size === 1 ? "" : "s"
+        }.`
+      : dominantBucket.outcomeCaseIds.size > 0
+        ? `This keeps recurring, but the outcome evidence is still mixed.`
+        : "";
 
-  const continuationLine = strongConflict
-    ? `Stay with this line if the current message fits it, but shift only if the new evidence clearly points elsewhere.`
-    : `If the current message fits this same line, continue it instead of restarting. Only move away if it clearly no longer holds.`;
+  const continuationLine =
+    dominantBucket.caseIds.size >= 2
+      ? `If the current message fits this same recurring line, stay with it instead of restarting. Only move away if the new evidence clearly breaks it.`
+      : `If the current message fits this same line, continue it instead of restarting. Only move away if it clearly no longer holds.`;
 
   return [
     contextLine,
@@ -2340,8 +3151,105 @@ async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
     .join(" ");
 }
 
+async function buildCaseDrivenSummaryInput(args: {
+  caseId: number;
+}): Promise<string | null> {
+  const [latestSignal] = await db
+    .select({
+      description: caseSignals.description,
+    })
+    .from(caseSignals)
+    .where(eq(caseSignals.caseId, args.caseId))
+    .orderBy(desc(caseSignals.id))
+    .limit(1);
+
+  const [latestHypothesis] = await db
+    .select({
+      hypothesis: caseHypotheses.hypothesis,
+    })
+    .from(caseHypotheses)
+    .where(eq(caseHypotheses.caseId, args.caseId))
+    .orderBy(desc(caseHypotheses.id))
+    .limit(1);
+
+  const [latestAdjustment] = await db
+    .select({
+      cue: caseAdjustments.cue,
+      mechanicalFocus: caseAdjustments.mechanicalFocus,
+    })
+    .from(caseAdjustments)
+    .where(eq(caseAdjustments.caseId, args.caseId))
+    .orderBy(desc(caseAdjustments.id))
+    .limit(1);
+
+  const [latestOutcome] = await db
+    .select({
+      result: caseOutcomes.result,
+      userFeedback: caseOutcomes.userFeedback,
+    })
+    .from(caseOutcomes)
+    .where(eq(caseOutcomes.caseId, args.caseId))
+    .orderBy(desc(caseOutcomes.id))
+    .limit(1);
+
+  const signalText = String(latestSignal?.description ?? "").trim();
+  const mechanismText = String(latestHypothesis?.hypothesis ?? "").trim();
+  const testText =
+    String(latestAdjustment?.cue ?? "").trim() ||
+    String(latestAdjustment?.mechanicalFocus ?? "").trim();
+
+  const outcomeResultText = String(latestOutcome?.result ?? "").trim();
+  const outcomeFeedbackText = String(latestOutcome?.userFeedback ?? "").trim();
+  const normalizedOutcomeResult =
+    outcomeResultText === "Improved" ||
+    outcomeResultText === "Same" ||
+    outcomeResultText === "Worse"
+      ? outcomeResultText
+      : detectOutcomeResult(
+          `${outcomeResultText} ${outcomeFeedbackText}`.trim(),
+        );
+
+  let investigationState = "Open";
+  if (normalizedOutcomeResult === "Improved") {
+    investigationState = "Resolved";
+  } else if (
+    normalizedOutcomeResult === "Same" ||
+    normalizedOutcomeResult === "Worse"
+  ) {
+    investigationState = "Testing (no improvement)";
+  } else if (testText) {
+    investigationState = "Testing";
+  } else if (mechanismText) {
+    investigationState = "Narrowing";
+  }
+
+  const lines: string[] = [];
+
+  if (signalText) {
+    lines.push(`Signal: ${signalText}`);
+  }
+
+  if (mechanismText) {
+    lines.push(`Mechanism: ${mechanismText}`);
+  }
+
+  if (testText) {
+    lines.push(`Test: ${testText}`);
+  }
+
+  const outcomeParts = [outcomeResultText, outcomeFeedbackText].filter(Boolean);
+  if (outcomeParts.length > 0) {
+    lines.push(`Outcome: ${outcomeParts.join(" — ")}`);
+  }
+
+  lines.push(`State: ${investigationState}`);
+
+  if (lines.length === 0) return null;
+  return lines.join("\n");
+}
+
 // ==============================
-// ROUTE REGISTRATION
+// ROUTES
 // ==============================
 
 export async function registerRoutes(
@@ -2438,7 +3346,6 @@ export async function registerRoutes(
       });
 
       const updatedMemory = await getMemory(userId);
-
       res.json(buildPersistedSettings(name, updatedMemory));
     } catch (err) {
       console.error("Failed to save settings:", err);
@@ -2549,7 +3456,7 @@ export async function registerRoutes(
               },
             },
           );
-        } catch (err) {
+        } catch (_err) {
           audioStream = await elevenlabs.textToSpeech.convert(
             selectedVoice.voiceId,
             {
@@ -2627,7 +3534,6 @@ export async function registerRoutes(
 
         const isWeakMovement =
           movement === "" || movement === "general movement";
-
         const isWeakActivity = activity === "" || activity === "unspecified";
 
         return !(isWeakMovement && isWeakActivity);
@@ -2778,18 +3684,11 @@ export async function registerRoutes(
         220,
       );
 
-      const testSourceCandidates = [
-        ...recentAdjustments.flatMap((row) => [
-          {
-            id: row.id,
-            value: normalizePreviewValue(row.cue),
-          },
-          {
-            id: row.id,
-            value: normalizePreviewValue(row.mechanicalFocus),
-          },
-        ]),
-      ]
+      const testSourceCandidates = recentAdjustments
+        .flatMap((row) => [
+          { id: row.id, value: normalizePreviewValue(row.cue) },
+          { id: row.id, value: normalizePreviewValue(row.mechanicalFocus) },
+        ])
         .filter((candidate): candidate is { id: number; value: string } =>
           Boolean(candidate.value),
         )
@@ -2946,7 +3845,6 @@ export async function registerRoutes(
       try {
         const authUser = req.user as any;
         const userId = authUser?.claims?.sub;
-
         const conversationId = Number(req.params.conversationId);
 
         if (!Number.isFinite(conversationId)) {
@@ -2981,10 +3879,6 @@ export async function registerRoutes(
       }
     },
   );
-
-  // ==============================
-  // MAIN CHAT PIPELINE
-  // ==============================
 
   app.post(
     "/api/chat",
@@ -3126,7 +4020,7 @@ export async function registerRoutes(
 
         await db.insert(messages).values({
           conversationId: convoId,
-          userId: userId,
+          userId,
           role: "user",
           content: userText,
         });
@@ -3150,9 +4044,7 @@ export async function registerRoutes(
           movementContext: string | null;
           activityType: string | null;
           status: string | null;
-        } | null = null;
-
-        resolvedActiveCase = await getConversationOpenCase(userId, convoId);
+        } | null = await getConversationOpenCase(userId, convoId);
 
         try {
           const outcomeResult = detectOutcomeResult(userText);
@@ -3179,6 +4071,15 @@ export async function registerRoutes(
                 .orderBy(desc(caseOutcomes.id))
                 .limit(1);
 
+              const [latestAdjustmentForOutcome] = await db
+                .select({
+                  id: caseAdjustments.id,
+                })
+                .from(caseAdjustments)
+                .where(eq(caseAdjustments.caseId, activeCase.id))
+                .orderBy(desc(caseAdjustments.id))
+                .limit(1);
+
               const latestCreatedAtMs = latestOutcome?.createdAt
                 ? new Date(latestOutcome.createdAt).getTime()
                 : 0;
@@ -3192,6 +4093,7 @@ export async function registerRoutes(
               if (!isDuplicateRecentOutcome) {
                 await db.insert(caseOutcomes).values({
                   caseId: activeCase.id,
+                  adjustmentId: latestAdjustmentForOutcome?.id ?? null,
                   result: outcomeResult,
                   userFeedback: userText,
                 });
@@ -3226,29 +4128,22 @@ export async function registerRoutes(
             }
 
             if (resolvedActiveCase) {
-              await db.insert(caseSignals).values({
-                userId,
-                caseId: resolvedActiveCase.id,
-                description: clampText(userText, 800),
-                activityType: derivedCaseContext.activityType,
-                movementContext: derivedCaseContext.movementContext,
-                bodyRegion: derivedBodyRegion,
-                signalType: derivedSignalType,
-              });
-            } else if (qualifiesForNewCaseOpen(userText)) {
-              let newCase:
-                | {
-                    id: number;
-                    userId: string;
-                    conversationId: number | null;
-                    movementContext: string | null;
-                    activityType: string | null;
-                    status: string | null;
-                  }
-                | undefined;
+              const latestSignalBodyRegion =
+                await getLatestCaseSignalBodyRegion(resolvedActiveCase.id);
 
-              try {
-                [newCase] = await db
+              const shouldSplitToNewCase =
+                qualifiesForNewCaseOpen(userText) &&
+                shouldOpenNewCaseAgainstCurrentOpenCase({
+                  existingMovementContext: resolvedActiveCase.movementContext,
+                  existingActivityType: resolvedActiveCase.activityType,
+                  existingBodyRegion: latestSignalBodyRegion,
+                  nextMovementContext: derivedCaseContext.movementContext,
+                  nextActivityType: derivedCaseContext.activityType,
+                  nextBodyRegion: derivedBodyRegion,
+                });
+
+              if (shouldSplitToNewCase) {
+                const [newCase] = await db
                   .insert(cases)
                   .values({
                     userId,
@@ -3258,10 +4153,73 @@ export async function registerRoutes(
                     status: "open",
                   })
                   .returning();
-              } catch (err) {
-                console.error("Case creation failed:", err);
-                throw err;
+
+                resolvedActiveCase = newCase ?? null;
+
+                if (newCase) {
+                  try {
+                    await db.insert(caseSignals).values({
+                      userId,
+                      caseId: newCase.id,
+                      description: clampText(userText, 800),
+                      activityType: derivedCaseContext.activityType,
+                      movementContext: derivedCaseContext.movementContext,
+                      bodyRegion: derivedBodyRegion,
+                      signalType: derivedSignalType,
+                    });
+                  } catch (err) {
+                    console.error("Case signal write failed:", {
+                      userId,
+                      conversationId: convoId,
+                      caseId: newCase.id,
+                      derivedCaseContext,
+                      userText,
+                      ...formatUnknownError(err),
+                    });
+
+                    try {
+                      await db.delete(cases).where(eq(cases.id, newCase.id));
+                      resolvedActiveCase = await getConversationOpenCase(
+                        userId,
+                        convoId,
+                      );
+                    } catch (deleteErr) {
+                      console.error(
+                        "Case rollback failed after signal write failure:",
+                        {
+                          userId,
+                          conversationId: convoId,
+                          caseId: newCase.id,
+                          derivedCaseContext,
+                          userText,
+                          ...formatUnknownError(deleteErr),
+                        },
+                      );
+                    }
+                  }
+                }
+              } else {
+                await db.insert(caseSignals).values({
+                  userId,
+                  caseId: resolvedActiveCase.id,
+                  description: clampText(userText, 800),
+                  activityType: derivedCaseContext.activityType,
+                  movementContext: derivedCaseContext.movementContext,
+                  bodyRegion: derivedBodyRegion,
+                  signalType: derivedSignalType,
+                });
               }
+            } else if (qualifiesForNewCaseOpen(userText)) {
+              const [newCase] = await db
+                .insert(cases)
+                .values({
+                  userId,
+                  conversationId: convoId,
+                  movementContext: derivedCaseContext.movementContext,
+                  activityType: derivedCaseContext.activityType,
+                  status: "open",
+                })
+                .returning();
 
               if (newCase) {
                 resolvedActiveCase = newCase;
@@ -3288,6 +4246,7 @@ export async function registerRoutes(
 
                   try {
                     await db.delete(cases).where(eq(cases.id, newCase.id));
+                    resolvedActiveCase = null;
                   } catch (deleteErr) {
                     console.error(
                       "Case rollback failed after signal write failure:",
@@ -3696,7 +4655,6 @@ Produce the corrected response now.
         res.setHeader("Content-Type", "text/event-stream");
 
         const words = finalText.split(" ");
-
         for (const word of words) {
           res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
         }
@@ -3705,7 +4663,7 @@ Produce the corrected response now.
 
         await db.insert(messages).values({
           conversationId: convoId,
-          userId: userId,
+          userId,
           role: "assistant",
           content: finalText,
         });
@@ -3715,6 +4673,18 @@ Produce the corrected response now.
             resolvedActiveCase &&
             isOpenCaseStatus(resolvedActiveCase.status)
           ) {
+            let insertedHypothesisId: number | null = null;
+
+            const [latestStoredHypothesis] = await db
+              .select({
+                id: caseHypotheses.id,
+                hypothesis: caseHypotheses.hypothesis,
+              })
+              .from(caseHypotheses)
+              .where(eq(caseHypotheses.caseId, resolvedActiveCase.id))
+              .orderBy(desc(caseHypotheses.id))
+              .limit(1);
+
             const hypothesisSentence = extractBestHypothesisSentence(finalText);
 
             if (
@@ -3722,25 +4692,31 @@ Produce the corrected response now.
               !isReviewStyleCaseLayerText(hypothesisSentence) &&
               isStrongHypothesisCandidate(hypothesisSentence)
             ) {
-              const [latestStoredHypothesis] = await db
-                .select({
-                  hypothesis: caseHypotheses.hypothesis,
-                })
-                .from(caseHypotheses)
-                .where(eq(caseHypotheses.caseId, resolvedActiveCase.id))
-                .orderBy(desc(caseHypotheses.id))
-                .limit(1);
-
               if (
                 !areMateriallyEquivalentHypotheses(
                   hypothesisSentence,
                   latestStoredHypothesis?.hypothesis,
                 )
               ) {
-                await db.insert(caseHypotheses).values({
-                  caseId: resolvedActiveCase.id,
-                  hypothesis: hypothesisSentence,
-                });
+                const [latestSignalForHypothesis] = await db
+                  .select({ id: caseSignals.id })
+                  .from(caseSignals)
+                  .where(eq(caseSignals.caseId, resolvedActiveCase.id))
+                  .orderBy(desc(caseSignals.id))
+                  .limit(1);
+
+                const [insertedHypothesis] = await db
+                  .insert(caseHypotheses)
+                  .values({
+                    caseId: resolvedActiveCase.id,
+                    signalId: latestSignalForHypothesis?.id ?? null,
+                    hypothesis: hypothesisSentence,
+                  })
+                  .returning({ id: caseHypotheses.id });
+
+                insertedHypothesisId = insertedHypothesis?.id ?? null;
+              } else {
+                insertedHypothesisId = latestStoredHypothesis?.id ?? null;
               }
             }
 
@@ -3783,6 +4759,8 @@ Produce the corrected response now.
               if (!isDuplicateAdjustment) {
                 await db.insert(caseAdjustments).values({
                   caseId: resolvedActiveCase.id,
+                  hypothesisId:
+                    insertedHypothesisId ?? latestStoredHypothesis?.id ?? null,
                   cue: adjustmentSentence,
                   mechanicalFocus: adjustmentSentence,
                 });
@@ -3882,7 +4860,19 @@ Produce the corrected response now.
         }
 
         try {
-          const summary = await generateSessionSummary(userText, []);
+          let summaryInput = userText;
+
+          if (resolvedActiveCase) {
+            const caseDrivenSummaryInput = await buildCaseDrivenSummaryInput({
+              caseId: resolvedActiveCase.id,
+            });
+
+            if (caseDrivenSummaryInput) {
+              summaryInput = caseDrivenSummaryInput;
+            }
+          }
+
+          const summary = await generateSessionSummary(summaryInput, []);
 
           await db
             .update(conversations)
@@ -3902,10 +4892,6 @@ Produce the corrected response now.
     },
   );
 
-  // ==============================
-  // OUTCOME API
-  // ==============================
-
   app.post("/api/outcome", async (req: Request, res: Response) => {
     try {
       const { caseId, adjustmentId, result, userFeedback } = req.body ?? {};
@@ -3914,9 +4900,30 @@ Produce the corrected response now.
         return res.status(400).json({ error: "Missing required fields" });
       }
 
+      const numericCaseId = Number(caseId);
+      const numericAdjustmentId =
+        adjustmentId == null ? null : Number(adjustmentId);
+
+      let resolvedAdjustmentId: number | null = Number.isFinite(
+        numericAdjustmentId,
+      )
+        ? numericAdjustmentId
+        : null;
+
+      if (resolvedAdjustmentId == null) {
+        const [latestAdjustment] = await db
+          .select({ id: caseAdjustments.id })
+          .from(caseAdjustments)
+          .where(eq(caseAdjustments.caseId, numericCaseId))
+          .orderBy(desc(caseAdjustments.id))
+          .limit(1);
+
+        resolvedAdjustmentId = latestAdjustment?.id ?? null;
+      }
+
       await db.insert(caseOutcomes).values({
         caseId,
-        adjustmentId: adjustmentId ?? null,
+        adjustmentId: resolvedAdjustmentId,
         result,
         userFeedback: userFeedback ?? null,
       });

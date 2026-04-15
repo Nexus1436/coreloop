@@ -586,7 +586,7 @@ export default function Home() {
     try {
       await sendChat(
         conversationIdRef.current,
-        `Hi... I'm meeting you for the first time. Tell me who you are in a natural, conversational way. Do not sound clinical, instructional, or like a system explanation. Do not use numbered lists or step-by-step guidance. Make it clear that I do not need to explain things cleanly, and that I can ramble, be messy, and start with whatever feels most noticeable. Sound human, direct, and warm. Start with: "Hi... I'm Interloop."`,
+        `Hi... I'm meeting you for the first time. Tell me who you are in a natural, conversational way. Do not sound clinical, instructional, or like a system explanation. Do not use numbered lists or step-by-step guidance. Make it clear that I do not need to explain things cleanly, and that I can ramble, be messy, and start with whatever feels most noticeable. Sound human, direct, and warm. Start with: "Hi... I'm Coreloop."`,
         (id) => {
           conversationIdRef.current = id;
           setConversationId(id);
@@ -862,7 +862,7 @@ export default function Home() {
               </button>
 
               <button onClick={handleInterloopExplanation}>
-                Who is Interloop?
+                Who is Coreloop?
               </button>
 
               <button onClick={handlePlaybackControl}>{playbackLabel}</button>
