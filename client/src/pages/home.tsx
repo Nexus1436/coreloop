@@ -575,7 +575,10 @@ export default function Home() {
     setMode("B");
 
     const assistantId = nextId();
-    setMessages([{ id: assistantId, role: "assistant", text: "" }]);
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantId, role: "assistant", text: "" },
+    ]);
     setIsProcessing(true);
 
     let assistantText = "";
