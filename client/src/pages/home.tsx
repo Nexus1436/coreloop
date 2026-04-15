@@ -804,10 +804,17 @@ export default function Home() {
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                     <span
                       className="text-sm"
-                      style={{
-                        color: "#ffc83d",
-                        textShadow: "0 0 10px rgba(255,184,0,0.25)",
-                      }}
+                      style={
+                        isSpeaking
+                          ? {
+                              color: "#ffc83d",
+                              textShadow: "0 0 14px rgba(255,184,0,0.4)",
+                            }
+                          : {
+                              color: "#ffc83d",
+                              textShadow: "0 0 10px rgba(255,184,0,0.25)",
+                            }
+                      }
                     >
                       {isSpeaking
                         ? "Tap to stop"
@@ -874,7 +881,19 @@ export default function Home() {
                 Who is Coreloop?
               </button>
 
-              <button onClick={handlePlaybackControl}>{playbackLabel}</button>
+              <button
+                onClick={handlePlaybackControl}
+                style={
+                  isPlaybackActive
+                    ? {
+                        color: "#ffc83d",
+                        textShadow: "0 0 10px rgba(255,184,0,0.28)",
+                      }
+                    : undefined
+                }
+              >
+                {playbackLabel}
+              </button>
             </div>
           </>
         ) : mode === "B" ? (

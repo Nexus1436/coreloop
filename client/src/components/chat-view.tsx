@@ -175,7 +175,19 @@ export function ChatView({
             rows={1}
           />
 
-          <button onClick={onPlaybackControl}>{playbackLabel}</button>
+          <button
+            onClick={onPlaybackControl}
+            style={
+              playbackLabel === "Stop"
+                ? {
+                    color: "#ffc83d",
+                    textShadow: "0 0 10px rgba(255,184,0,0.28)",
+                  }
+                : undefined
+            }
+          >
+            {playbackLabel}
+          </button>
         </div>
 
         {onBack && (
