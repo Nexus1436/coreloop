@@ -739,6 +739,7 @@ function extractFirstMatchingSentence(
       if (/^[A-Z][A-Z\s]+:?$/.test(normalized)) return null;
       if (isLowSignalShiftText(normalized)) return null;
       if (isGenericCoachingFillerText(normalized)) return null;
+      if (isReviewStyleCaseLayerText(normalized)) return null;
       if (patternMatches === 0) return null;
 
       let score = patternMatches * 5;
@@ -839,6 +840,7 @@ function extractBestHypothesisSentence(text: string): string | null {
       if (wordCount < 7) return null;
       if (!/[.!?]$/.test(sentence)) return null;
       if (patternMatches === 0) return null;
+      if (isReviewStyleCaseLayerText(normalized)) return null;
       if (!isStrongHypothesisCandidate(normalized)) return null;
 
       let score = patternMatches * 6;
@@ -908,6 +910,7 @@ function extractBestAdjustmentSentence(text: string): string | null {
       if (wordCount < 4) return null;
       if (!/[.!?]$/.test(sentence)) return null;
       if (patternMatches === 0) return null;
+      if (isReviewStyleCaseLayerText(normalized)) return null;
       if (!isStrongAdjustmentCandidate(normalized)) return null;
 
       let score = patternMatches * 6;
@@ -978,9 +981,58 @@ function normalizeDashboardCandidate(value: string | null | undefined): string {
     .trim();
 }
 
+function isReviewStyleCaseLayerText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  const normalized = text.replace(/\s+/g, " ").trim();
+
+  const headerPatterns = [
+    /\borigin problem\b/i,
+    /\bbeginning of\b/i,
+    /\binvestigation began\b/i,
+    /\bthe investigation\b/i,
+    /\bthis case began\b/i,
+    /\bcase review\b/i,
+    /\bcurrent state\b/i,
+    /\bsnapshot\b/i,
+    /\bcheckpoint\b/i,
+    /\bretrospective\b/i,
+    /\bsummary\b/i,
+    /\breport\b/i,
+    /\boverview\b/i,
+  ];
+
+  const reportShapePatterns = [
+    /^[A-Z][A-Z\s\-]{8,}:?$/m,
+    /\b[A-Z][A-Z\s]{6,}\s+---/m,
+    /---/,
+    /\b(?:origin problem|current state|current mechanism|current test|last shift)\b.*\b(?:origin problem|current state|current mechanism|current test|last shift)\b/i,
+    /\b(?:the investigation began|this case began|case review|beginning of the investigation|beginning of investigation)\b/i,
+  ];
+
+  const retrospectivePatterns = [
+    /\bthis case\b.*\b(?:began|started|opened)\b/i,
+    /\bthe issue began\b/i,
+    /\bthe problem began\b/i,
+    /\bover the course of\b/i,
+    /\bso far in this case\b/i,
+    /\bup to this point\b/i,
+    /\bfrom the beginning\b/i,
+    /\bretrospective\b/i,
+  ];
+
+  return (
+    headerPatterns.some((pattern) => pattern.test(normalized)) ||
+    reportShapePatterns.some((pattern) => pattern.test(normalized)) ||
+    retrospectivePatterns.some((pattern) => pattern.test(normalized))
+  );
+}
+
 function isMechanismLikeText(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
+  if (isReviewStyleCaseLayerText(text)) return false;
 
   const explicitMechanismPatterns = [
     /\bbecause\b/i,
@@ -1063,6 +1115,7 @@ function isMechanismLikeText(value: string | null | undefined): boolean {
 function isTestLikeText(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
+  if (isReviewStyleCaseLayerText(text)) return false;
 
   const concreteActionStartPatterns = [
     /^\s*focus on\b/i,
@@ -1585,6 +1638,7 @@ function isStrongHypothesisCandidate(
   if (!text) return false;
   if (text.length < 45) return false;
   if (text.length > 260) return false;
+  if (isReviewStyleCaseLayerText(text)) return false;
   if (isGenericCoachingFillerText(text)) return false;
   if (isTestLikeText(text)) return false;
   if (isVagueMechanismStatement(text)) return false;
@@ -1646,6 +1700,7 @@ function isStrongAdjustmentCandidate(
   if (!text) return false;
   if (text.length < 20) return false;
   if (text.length > 180) return false;
+  if (isReviewStyleCaseLayerText(text)) return false;
   if (isGenericCoachingFillerText(text)) return false;
   if (isLowInformationAdjustmentText(text)) return false;
   if (!isTestLikeText(text)) return false;
@@ -2574,67 +2629,67 @@ export async function registerRoutes(
         recentCases[0] ??
         null;
 
-      let latestAdjustment:
-        | {
-            mechanicalFocus: string | null;
-            cue: string | null;
-          }
-        | undefined;
-      let latestHypothesis:
-        | {
-            hypothesis: string | null;
-          }
-        | undefined;
-      let latestOutcome:
-        | {
-            result: string | null;
-            userFeedback: string | null;
-          }
-        | undefined;
-      let latestSignal:
-        | {
-            description: string | null;
-          }
-        | undefined;
+      let recentAdjustments: Array<{
+        id: number;
+        mechanicalFocus: string | null;
+        cue: string | null;
+      }> = [];
+      let recentHypotheses: Array<{
+        id: number;
+        hypothesis: string | null;
+      }> = [];
+      let recentOutcomes: Array<{
+        id: number;
+        result: string | null;
+        userFeedback: string | null;
+      }> = [];
+      let recentSignals: Array<{
+        id: number;
+        description: string | null;
+      }> = [];
 
       if (selectedCase) {
-        [latestAdjustment] = await db
+        recentAdjustments = await db
           .select({
+            id: caseAdjustments.id,
             mechanicalFocus: caseAdjustments.mechanicalFocus,
             cue: caseAdjustments.cue,
           })
           .from(caseAdjustments)
           .where(eq(caseAdjustments.caseId, selectedCase.id))
           .orderBy(desc(caseAdjustments.id))
-          .limit(1);
+          .limit(5);
 
-        [latestHypothesis] = await db
+        recentHypotheses = await db
           .select({
+            id: caseHypotheses.id,
             hypothesis: caseHypotheses.hypothesis,
           })
           .from(caseHypotheses)
           .where(eq(caseHypotheses.caseId, selectedCase.id))
           .orderBy(desc(caseHypotheses.id))
-          .limit(1);
+          .limit(5);
 
-        [latestOutcome] = await db
+        recentOutcomes = await db
           .select({
+            id: caseOutcomes.id,
             result: caseOutcomes.result,
             userFeedback: caseOutcomes.userFeedback,
           })
           .from(caseOutcomes)
           .where(eq(caseOutcomes.caseId, selectedCase.id))
           .orderBy(desc(caseOutcomes.id))
-          .limit(1);
+          .limit(5);
 
-        [latestSignal] = await db
+        recentSignals = await db
           .select({
+            id: caseSignals.id,
             description: caseSignals.description,
           })
           .from(caseSignals)
           .where(eq(caseSignals.caseId, selectedCase.id))
           .orderBy(desc(caseSignals.id))
-          .limit(1);
+          .limit(5);
       }
 
       let latestCaseReview:
@@ -2683,79 +2738,161 @@ export async function registerRoutes(
         selectedCase?.movementContext,
         selectedCase?.activityType,
       );
-      const latestOutcomeResult = String(latestOutcome?.result ?? "").trim();
-      const investigationState = !selectedCase
-        ? null
-        : latestOutcomeResult === "Improved"
-          ? "Resolved"
-          : latestOutcomeResult === "Same" || latestOutcomeResult === "Worse"
-            ? "Testing (no improvement)"
-            : latestAdjustment
-              ? "Testing"
-              : latestHypothesis
-                ? "Narrowing"
-                : "Open";
+
       const mechanismSourceCandidates = [
-        normalizePreviewValue(latestHypothesis?.hypothesis),
-        normalizePreviewValue(latestAdjustment?.mechanicalFocus),
-      ];
+        ...recentHypotheses.map((row) => ({
+          id: row.id,
+          value: normalizePreviewValue(row.hypothesis),
+        })),
+        ...recentAdjustments.map((row) => ({
+          id: row.id,
+          value: normalizePreviewValue(row.mechanicalFocus),
+        })),
+      ]
+        .filter((candidate): candidate is { id: number; value: string } =>
+          Boolean(candidate.value),
+        )
+        .sort((a, b) => b.id - a.id);
+
       const selectedMechanismSource =
-        mechanismSourceCandidates.find((candidate) =>
-          isMechanismLikeText(candidate),
-        ) ?? null;
+        mechanismSourceCandidates.find(
+          (candidate) =>
+            !isReviewStyleCaseLayerText(candidate.value) &&
+            isMechanismLikeText(candidate.value) &&
+            extractPreviewSnippet(candidate.value, 220) != null,
+        )?.value ?? null;
+
       const currentMechanism = extractPreviewSnippet(
         selectedMechanismSource,
         220,
       );
 
       const testSourceCandidates = [
-        normalizePreviewValue(latestAdjustment?.cue),
-        normalizePreviewValue(latestAdjustment?.mechanicalFocus),
-      ].filter((candidate): candidate is string => Boolean(candidate));
+        ...recentAdjustments.flatMap((row) => [
+          {
+            id: row.id,
+            value: normalizePreviewValue(row.cue),
+          },
+          {
+            id: row.id,
+            value: normalizePreviewValue(row.mechanicalFocus),
+          },
+        ]),
+      ]
+        .filter((candidate): candidate is { id: number; value: string } =>
+          Boolean(candidate.value),
+        )
+        .sort((a, b) => b.id - a.id);
+
       const selectedTestSource =
         testSourceCandidates.find(
           (candidate) =>
-            isTestLikeText(candidate) &&
+            !isReviewStyleCaseLayerText(candidate.value) &&
+            isTestLikeText(candidate.value) &&
             !areEquivalentDashboardCandidates(
-              candidate,
+              candidate.value,
               selectedMechanismSource,
-            ),
-        ) ?? null;
+            ) &&
+            extractPreviewSnippet(candidate.value, 220) != null,
+        )?.value ?? null;
+
       const currentTest = extractPreviewSnippet(selectedTestSource, 220);
 
+      const validOutcomeCandidate =
+        recentOutcomes
+          .map((row) => {
+            const resultText = normalizePreviewValue(row.result);
+            const feedbackText = normalizePreviewValue(row.userFeedback);
+            const resolvedResult =
+              resultText === "Improved" ||
+              resultText === "Same" ||
+              resultText === "Worse"
+                ? resultText
+                : detectOutcomeResult(
+                    `${String(row.result ?? "")} ${String(
+                      row.userFeedback ?? "",
+                    )}`.trim(),
+                  );
+
+            const previewSource = feedbackText ?? resultText;
+
+            return {
+              id: row.id,
+              result: resolvedResult,
+              feedbackText,
+              previewSource,
+            };
+          })
+          .sort((a, b) => b.id - a.id)
+          .find(
+            (candidate) =>
+              candidate.result != null &&
+              !isReviewStyleCaseLayerText(candidate.feedbackText) &&
+              (candidate.previewSource == null ||
+                extractPreviewSnippet(candidate.previewSource, 220) != null),
+          ) ?? null;
+
+      const investigationState = !selectedCase
+        ? null
+        : validOutcomeCandidate?.result === "Improved"
+          ? "Resolved"
+          : validOutcomeCandidate?.result === "Same" ||
+              validOutcomeCandidate?.result === "Worse"
+            ? "Testing (no improvement)"
+            : currentTest
+              ? "Testing"
+              : currentMechanism
+                ? "Narrowing"
+                : "Open";
+
       const shiftSourceCandidates = [
-        {
-          value: normalizePreviewValue(latestAdjustment?.cue),
+        ...recentAdjustments.map((row) => ({
+          id: row.id,
+          value: normalizePreviewValue(row.cue),
           allowLowSignalFallback: false,
-        },
-        {
-          value: normalizePreviewValue(latestHypothesis?.hypothesis),
+        })),
+        ...recentHypotheses.map((row) => ({
+          id: row.id,
+          value: normalizePreviewValue(row.hypothesis),
           allowLowSignalFallback: false,
-        },
-        {
-          value: normalizePreviewValue(latestOutcome?.userFeedback),
+        })),
+        ...recentOutcomes.map((row) => ({
+          id: row.id,
+          value: normalizePreviewValue(row.userFeedback),
           allowLowSignalFallback: false,
-        },
-        {
-          value: normalizePreviewValue(latestSignal?.description),
+        })),
+        ...recentSignals.map((row) => ({
+          id: row.id,
+          value: normalizePreviewValue(row.description),
           allowLowSignalFallback: true,
-        },
-      ].filter(
-        (
-          candidate,
-        ): candidate is {
-          value: string;
-          allowLowSignalFallback: boolean;
-        } => Boolean(candidate.value),
-      );
+        })),
+      ]
+        .filter(
+          (
+            candidate,
+          ): candidate is {
+            id: number;
+            value: string;
+            allowLowSignalFallback: boolean;
+          } => Boolean(candidate.value),
+        )
+        .sort((a, b) => b.id - a.id);
+
       const selectedShiftSource =
         shiftSourceCandidates.find(
-          (candidate) => !isLowSignalShiftText(candidate.value),
+          (candidate) =>
+            !isReviewStyleCaseLayerText(candidate.value) &&
+            !isLowSignalShiftText(candidate.value) &&
+            extractPreviewSnippet(candidate.value, 220) != null,
         )?.value ??
         shiftSourceCandidates.find(
-          (candidate) => candidate.allowLowSignalFallback,
+          (candidate) =>
+            candidate.allowLowSignalFallback &&
+            !isReviewStyleCaseLayerText(candidate.value) &&
+            extractPreviewSnippet(candidate.value, 220) != null,
         )?.value ??
         null;
+
       const lastShift = extractPreviewSnippet(selectedShiftSource, 220);
       const lastCaseReviewSnippet = extractPreviewSnippet(
         latestCaseReview?.reviewText,
@@ -3572,6 +3709,7 @@ Produce the corrected response now.
 
             if (
               hypothesisSentence &&
+              !isReviewStyleCaseLayerText(hypothesisSentence) &&
               isStrongHypothesisCandidate(hypothesisSentence)
             ) {
               const [latestStoredHypothesis] = await db
@@ -3600,6 +3738,7 @@ Produce the corrected response now.
 
             if (
               adjustmentSentence &&
+              !isReviewStyleCaseLayerText(adjustmentSentence) &&
               isStrongAdjustmentCandidate(adjustmentSentence) &&
               !isStrongHypothesisCandidate(adjustmentSentence) &&
               !areEquivalentDashboardCandidates(
