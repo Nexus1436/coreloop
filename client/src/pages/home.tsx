@@ -824,7 +824,8 @@ export default function Home() {
             >
               <button
                 onClick={() => setMode("C")}
-                className="text-gray-400 text-sm font-medium"
+                className="text-sm font-medium transition-colors"
+                style={{ color: "#ffbf47" }}
               >
                 Your Investigation
               </button>
@@ -878,7 +879,8 @@ export default function Home() {
             >
               <button
                 onClick={() => setMode("C")}
-                className="text-gray-400 text-sm font-medium"
+                className="text-sm font-medium transition-colors"
+                style={{ color: "#ffbf47" }}
               >
                 Your Investigation
               </button>
@@ -966,12 +968,25 @@ export default function Home() {
                           void runCaseReview();
                         }, 50);
                       }}
-                      className="w-full text-center py-5 transition-opacity hover:opacity-80 cursor-pointer"
+                      className="w-full text-center py-5 transition-opacity hover:opacity-90 cursor-pointer rounded-2xl border"
+                      style={{
+                        borderColor: "#ffb000",
+                        background:
+                          "linear-gradient(180deg, rgba(255,190,32,0.18) 0%, rgba(255,140,0,0.08) 100%)",
+                        boxShadow:
+                          "0 0 0 1px rgba(255,176,0,0.18), 0 0 28px rgba(255,176,0,0.22), inset 0 0 24px rgba(255,190,32,0.06)",
+                      }}
                     >
-                      <div className="text-lg font-medium text-white">
+                      <div
+                        className="text-lg font-medium"
+                        style={{
+                          color: "#ffc83d",
+                          textShadow: "0 0 12px rgba(255,184,0,0.28)",
+                        }}
+                      >
                         Get New Case Review
                       </div>
-                      <div className="mt-2 text-sm text-gray-500">
+                      <div className="mt-2 text-sm text-gray-400">
                         Break down the current mechanism and identify the next
                         move.
                       </div>
