@@ -43,7 +43,7 @@ function LandingPage() {
             marginBottom: "12px",
           }}
         >
-          Interloop
+          Coreloop
         </h1>
         <p
           style={{
@@ -70,8 +70,8 @@ function LandingPage() {
             transition: "all 0.2s ease",
           }}
           onMouseEnter={(e) => {
-            (e.target as HTMLButtonElement).style.borderColor = "#fff";
-            (e.target as HTMLButtonElement).style.color = "#fff";
+            (e.target as HTMLButtonElement).style.borderColor = "#ffc83d";
+            (e.target as HTMLButtonElement).style.color = "#ffc83d";
           }}
           onMouseLeave={(e) => {
             (e.target as HTMLButtonElement).style.borderColor = "#555";
