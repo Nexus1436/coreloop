@@ -752,6 +752,8 @@ export default function Home() {
     },
   ].filter((row) => Boolean(row.value));
 
+  const secondaryMangoStyle = { color: "rgba(255,179,71,0.85)" };
+
   if (isOnboardingOpen) {
     return (
       <InterloopSettings
@@ -825,7 +827,7 @@ export default function Home() {
               <button
                 onClick={() => setMode("C")}
                 className="text-sm font-medium transition-colors"
-                style={{ color: "#ffbf47" }}
+                style={secondaryMangoStyle}
               >
                 Your Investigation
               </button>
@@ -880,7 +882,7 @@ export default function Home() {
               <button
                 onClick={() => setMode("C")}
                 className="text-sm font-medium transition-colors"
-                style={{ color: "#ffbf47" }}
+                style={secondaryMangoStyle}
               >
                 Your Investigation
               </button>
@@ -923,7 +925,8 @@ export default function Home() {
                 playUITone(720);
                 setMode("A");
               }}
-              className="absolute left-4 top-4 text-sm text-gray-400"
+              className="absolute left-4 top-4 text-sm font-medium"
+              style={secondaryMangoStyle}
             >
               Back
             </button>
