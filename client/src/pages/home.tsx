@@ -819,10 +819,10 @@ export default function Home() {
                       {isSpeaking
                         ? "Tap to stop"
                         : isRecording
-                          ? "Press again to send"
+                          ? "Tap again to send"
                           : isProcessing
                             ? "Thinking..."
-                            : "Press here to talk"}
+                            : "Tap to talk"}
                     </span>
                   </div>
                 </div>
