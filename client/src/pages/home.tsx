@@ -875,13 +875,27 @@ export default function Home() {
                             }
                       }
                     >
-                      {isSpeaking
-                        ? "Tap to stop"
-                        : isRecording
-                          ? "Tap again to send"
-                          : isProcessing
-                            ? "Thinking..."
-                            : "Tap to talk"}
+                      {isSpeaking ? (
+                        "Tap to stop"
+                      ) : isProcessing ? (
+                        "Thinking..."
+                      ) : isRecording ? (
+                        <div style={{ textAlign: "center" }}>
+                          <div>Listening…</div>
+                          <div style={{ fontSize: "0.85em", opacity: 0.8 }}>
+                            Tap to send
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ textAlign: "center" }}>
+                          <div>Tap to…</div>
+                          <div style={{ fontSize: "0.9em", opacity: 0.9 }}>
+                            {hasExchanged
+                              ? "Continue your investigation"
+                              : "Start your investigation"}
+                          </div>
+                        </div>
+                      )}
                     </span>
                   </div>
                 </div>
