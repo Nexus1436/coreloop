@@ -377,18 +377,30 @@ export default function Home() {
         currentTest: data?.currentTest ?? null,
         lastShift: data?.lastShift ?? null,
         lastCaseReviewSnippet: data?.lastCaseReviewSnippet ?? null,
-        caseReviewsList: data?.caseReviewsList ?? [],
+        caseReviewsList: Array.isArray(data?.caseReviewsList)
+          ? data.caseReviewsList
+          : [],
       });
     } catch (err) {
       console.warn("Failed to load dashboard data:", err);
-      setDashboardData(defaultDashboardData);
+      setDashboardData((previous) => previous);
     }
   }, []);
+
+  const openInvestigation = useCallback(() => {
+    setMode("C");
+    void loadDashboardData();
+  }, [loadDashboardData]);
 
   useEffect(() => {
     if (isOnboardingOpen) return;
     void loadDashboardData();
   }, [isOnboardingOpen, loadDashboardData]);
+
+  useEffect(() => {
+    if (mode !== "C") return;
+    void loadDashboardData();
+  }, [mode, loadDashboardData]);
 
   useEffect(() => {
     if (playback.state === "ended" || playback.state === "idle") {
@@ -911,7 +923,7 @@ export default function Home() {
               }}
             >
               <button
-                onClick={() => setMode("C")}
+                onClick={openInvestigation}
                 className="text-sm font-medium transition-colors"
                 style={secondaryMangoStyle}
               >
@@ -978,7 +990,7 @@ export default function Home() {
               }}
             >
               <button
-                onClick={() => setMode("C")}
+                onClick={openInvestigation}
                 className="text-sm font-medium transition-colors"
                 style={secondaryMangoStyle}
               >

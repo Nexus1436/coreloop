@@ -2054,6 +2054,18 @@ export async function registerRoutes(
           .limit(1);
       }
 
+      const caseReviewsList = await db
+        .select({
+          id: caseReviews.id,
+          caseId: caseReviews.caseId,
+          reviewText: caseReviews.reviewText,
+          createdAt: caseReviews.createdAt,
+        })
+        .from(caseReviews)
+        .where(eq(caseReviews.userId, userId))
+        .orderBy(desc(caseReviews.createdAt), desc(caseReviews.id))
+        .limit(5);
+
       const activeCaseTitle = buildActiveCaseTitle(
         selectedCase?.movementContext,
         selectedCase?.activityType,
@@ -2159,6 +2171,7 @@ export async function registerRoutes(
         currentTest,
         lastShift,
         lastCaseReviewSnippet,
+        caseReviewsList,
       });
     } catch (err) {
       console.error("Failed to load dashboard preview:", err);
