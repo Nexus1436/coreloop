@@ -1,7 +1,12 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  type FormEvent,
+} from "react";
 
 import { CentralForm } from "@/components/central-form";
-import { ChatView } from "@/components/chat-view";
 import {
   InterloopSettings,
   type InterloopSettingsValues,
@@ -77,10 +82,6 @@ function mergeStream(existing: string, incoming: string) {
   }
 
   return existing + incoming;
-}
-
-function pickAcknowledgmentClipNumber() {
-  return Math.floor(Math.random() * 6) + 1;
 }
 
 async function sendChat(
@@ -174,13 +175,15 @@ function normalizeLoadedMessages(payload: unknown): ChatMessage[] {
 }
 
 export default function Home() {
-  const [mode, setMode] = useState<"A" | "B" | "C">("A");
+  const [mode, setMode] = useState<"A" | "C">("A");
 
   const [conversationId, setConversationId] = useState<number | null>(null);
   const conversationIdRef = useRef<number | null>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasExchanged, setHasExchanged] = useState(false);
+
+  const [typedText, setTypedText] = useState("");
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -202,6 +205,8 @@ export default function Home() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const acknowledgmentTimeoutRef = useRef<number | null>(null);
   const speakSessionRef = useRef(0);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const typingInputRef = useRef<HTMLInputElement | null>(null);
   const lastPlayableMessageRef = useRef<{ id: string; text: string } | null>(
     null,
   );
@@ -210,6 +215,10 @@ export default function Home() {
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
+
+  useEffect(() => {
+    messageEndRef.current?.scrollIntoView({ block: "end" });
+  }, [messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -500,16 +509,6 @@ export default function Home() {
     }
   }, []);
 
-  const playAcknowledgmentAudio = useCallback(() => {
-    const clipNumber = pickAcknowledgmentClipNumber();
-    const path = `/ack/default/ack_${clipNumber}.mp3`;
-    const audio = new Audio(path);
-
-    void audio.play().catch((err) => {
-      console.warn("Acknowledgment audio failed:", err);
-    });
-  }, []);
-
   const stopSpeech = useCallback(() => {
     speakSessionRef.current += 1;
     stopRequestedRef.current = true;
@@ -639,7 +638,7 @@ export default function Home() {
       return;
     }
 
-    setMode("B");
+    setMode("A");
 
     const assistantId = nextId();
     setMessages((prev) => [
@@ -677,6 +676,74 @@ export default function Home() {
       setIsProcessing(false);
     }
   }, [isProcessing, isRecording, isSpeaking, speakText]);
+
+  const handleTypedSubmit = useCallback(
+    async (event?: FormEvent<HTMLFormElement>) => {
+      event?.preventDefault();
+
+      const text = typedText.trim();
+
+      if (!text || isProcessing || isRecording || isSpeaking) {
+        return;
+      }
+
+      playUITone(720);
+      setTypedText("");
+
+      const userId = nextId();
+      const assistantId = nextId();
+
+      setMessages((prev) => [
+        ...prev,
+        { id: userId, role: "user", text },
+        { id: assistantId, role: "assistant", text: "" },
+      ]);
+
+      setIsProcessing(true);
+
+      let assistantText = "";
+
+      try {
+        await sendChat(
+          conversationIdRef.current,
+          text,
+          (id) => {
+            conversationIdRef.current = id;
+            setConversationId(id);
+            localStorage.setItem("conversationId", String(id));
+          },
+          (chunk) => {
+            assistantText = mergeStream(assistantText, chunk);
+
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, text: assistantText } : m,
+              ),
+            );
+          },
+        );
+
+        setHasExchanged(true);
+
+        if (assistantText.trim()) {
+          await speakText(assistantId, assistantText, "auto");
+        }
+
+        void loadDashboardData();
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [
+      isProcessing,
+      isRecording,
+      isSpeaking,
+      loadDashboardData,
+      playUITone,
+      speakText,
+      typedText,
+    ],
+  );
 
   const handleTap = useCallback(async () => {
     if (isSpeaking) {
@@ -741,6 +808,7 @@ export default function Home() {
 
     setHasExchanged(true);
     setIsProcessing(false);
+    void loadDashboardData();
 
     if (assistantText.trim()) {
       await speakText(assistantId, assistantText, "auto");
@@ -749,7 +817,7 @@ export default function Home() {
     isRecording,
     isProcessing,
     isSpeaking,
-    playAcknowledgmentAudio,
+    loadDashboardData,
     playUITone,
     recorder,
     speakText,
@@ -784,7 +852,8 @@ export default function Home() {
       reviewText: string;
       createdAt: string;
     }) => {
-      setMode("B");
+      playUITone(720);
+      setMode("A");
 
       setMessages([
         {
@@ -794,7 +863,7 @@ export default function Home() {
         },
       ]);
     },
-    [],
+    [playUITone],
   );
 
   const currentInvestigationState =
@@ -820,6 +889,7 @@ export default function Home() {
   ].filter((row) => Boolean(row.value));
 
   const secondaryMangoStyle = { color: "rgba(255,179,71,0.85)" };
+  const softMangoControlStyle = { color: "rgba(255,200,61,0.72)" };
 
   if (isHydratingSettings) {
     return null;
@@ -842,82 +912,7 @@ export default function Home() {
         {mode === "A" ? (
           <>
             <div
-              className="absolute inset-0 flex flex-col justify-between px-4"
-              style={{
-                paddingTop: "max(env(safe-area-inset-top) + 2.5rem, 3rem)",
-                paddingBottom:
-                  "max(env(safe-area-inset-bottom) + 3.5rem, 4rem)",
-              }}
-            >
-              <div />
-
-              <div className="flex items-center justify-center">
-                <div
-                  className="relative mx-auto"
-                  style={{
-                    width: "min(560px, 84vw)",
-                    height: "min(560px, 84vw)",
-                    maxWidth: "100%",
-                  }}
-                  onClick={handleTap}
-                >
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="relative w-full h-full">
-                      <CentralForm
-                        isActive={isRecording || isProcessing || isSpeaking}
-                        isDimmed={false}
-                        isSpeaking={isSpeaking}
-                        getAmplitude={playback.getAmplitude}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <span
-                      className="text-sm"
-                      style={
-                        isSpeaking
-                          ? {
-                              color: "#ffc83d",
-                              textShadow: "0 0 14px rgba(255,184,0,0.4)",
-                            }
-                          : {
-                              color: "#ffc83d",
-                              textShadow: "0 0 10px rgba(255,184,0,0.25)",
-                            }
-                      }
-                    >
-                      {isSpeaking ? (
-                        "Tap to stop"
-                      ) : isProcessing ? (
-                        "Thinking..."
-                      ) : isRecording ? (
-                        <div style={{ textAlign: "center" }}>
-                          <div>Listening…</div>
-                          <div style={{ fontSize: "0.85em", opacity: 0.8 }}>
-                            Tap to send
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ textAlign: "center" }}>
-                          <div>Tap to…</div>
-                          <div style={{ fontSize: "0.9em", opacity: 0.9 }}>
-                            {hasExchanged
-                              ? "Continue your investigation"
-                              : "Start your investigation"}
-                          </div>
-                        </div>
-                      )}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div />
-            </div>
-
-            <div
-              className="absolute left-4 z-10"
+              className="absolute left-4 z-20"
               style={{
                 top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
               }}
@@ -932,14 +927,15 @@ export default function Home() {
             </div>
 
             <div
-              className="absolute right-4 z-10"
+              className="absolute right-4 z-20"
               style={{
                 top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
               }}
             >
               <button
                 onClick={() => setIsSettingsOpen(true)}
-                className="text-gray-400 text-sm font-medium"
+                className="text-sm font-medium transition-colors"
+                style={softMangoControlStyle}
                 aria-label="Open your setup"
               >
                 Your Setup
@@ -947,86 +943,290 @@ export default function Home() {
             </div>
 
             <div
-              className="absolute left-0 right-0 flex justify-between px-4 sm:px-8 text-gray-400 text-sm"
+              className="absolute left-0 right-0 overflow-y-auto px-5 sm:px-8"
               style={{
-                bottom: "max(env(safe-area-inset-bottom) + 1rem, 1.75rem)",
-                paddingBottom: "0.5rem",
+                top: "max(env(safe-area-inset-top) + 3.25rem, 4rem)",
+                bottom: "43vh",
+                WebkitMaskImage:
+                  "linear-gradient(to bottom, transparent 0%, black 9%, black 90%, transparent 100%)",
+                maskImage:
+                  "linear-gradient(to bottom, transparent 0%, black 9%, black 90%, transparent 100%)",
               }}
             >
-              <button
-                onClick={() => {
-                  playUITone(720);
-                  setMode("B");
+              <div className="mx-auto flex min-h-full w-full max-w-[700px] flex-col justify-end gap-6 py-8">
+                {messages.length === 0 ? (
+                  <div className="pb-4 text-center">
+                    <div
+                      className="text-sm"
+                      style={{
+                        color: "rgba(255,200,61,0.8)",
+                        textShadow: "0 0 12px rgba(255,184,0,0.18)",
+                      }}
+                    >
+                      Start wherever the signal is loudest.
+                    </div>
+                    <div className="mt-2 text-sm leading-relaxed text-gray-500">
+                      Voice stays primary. Typing is here when it is easier.
+                    </div>
+                  </div>
+                ) : (
+                  messages.map((message) => {
+                    const isUser = message.role === "user";
+
+                    return (
+                      <div
+                        key={message.id}
+                        className={`flex items-start ${
+                          isUser ? "justify-end gap-2.5" : "justify-start gap-3"
+                        }`}
+                      >
+                        {!isUser && (
+                          <div className="relative mt-1.5 h-9 w-9 shrink-0 rounded-full">
+                            <div
+                              className="absolute inset-[-5px] rounded-full"
+                              style={{
+                                background:
+                                  "radial-gradient(circle, rgba(255,200,61,0.12) 0%, rgba(255,176,0,0.07) 42%, transparent 72%)",
+                                boxShadow: "0 0 16px rgba(255,184,0,0.14)",
+                              }}
+                            />
+                            <div
+                              className="absolute inset-0 rounded-full border"
+                              style={{
+                                borderColor: "rgba(255,200,61,0.42)",
+                                background:
+                                  "linear-gradient(145deg, rgba(255,200,61,0.11), rgba(255,176,0,0.03) 42%, rgba(10,10,10,0.98))",
+                                boxShadow:
+                                  "inset 0 0 10px rgba(255,200,61,0.1), 0 0 0 1px rgba(255,176,0,0.055)",
+                              }}
+                            />
+                            <div
+                              className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                              style={{
+                                background: "rgba(255,200,61,0.82)",
+                                boxShadow: "0 0 8px rgba(255,184,0,0.38)",
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        <div
+                          className={`relative whitespace-pre-wrap ${
+                            isUser
+                              ? "order-first max-w-[58%] rounded-[8px] rounded-tr-[3px] px-4 py-3 text-right text-[13px] leading-relaxed"
+                              : "max-w-[82%] rounded-[10px] rounded-tl-[3px] px-5 py-4 text-[15px] leading-7 sm:text-base"
+                          }`}
+                          style={
+                            isUser
+                              ? {
+                                  color: "rgba(255,200,61,0.74)",
+                                  background:
+                                    "linear-gradient(180deg, rgba(255,176,0,0.06), rgba(255,176,0,0.022))",
+                                  border: "1px solid rgba(255,176,0,0.105)",
+                                  boxShadow:
+                                    "0 10px 22px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.02)",
+                                }
+                              : {
+                                  color: "rgba(229,231,235,0.89)",
+                                  background:
+                                    "linear-gradient(180deg, rgba(18,18,18,0.98), rgba(8,8,8,0.96))",
+                                  border: "1px solid rgba(255,176,0,0.15)",
+                                  borderLeft: "2px solid rgba(255,200,61,0.44)",
+                                  boxShadow:
+                                    "0 18px 40px rgba(0,0,0,0.34), 0 0 20px rgba(255,176,0,0.04), inset 0 1px 0 rgba(255,255,255,0.035)",
+                                }
+                          }
+                        >
+                          {!isUser && (
+                            <div
+                              className="pointer-events-none absolute inset-x-4 top-0 h-px"
+                              style={{
+                                background:
+                                  "linear-gradient(90deg, rgba(255,200,61,0.32), rgba(255,200,61,0.045), transparent)",
+                              }}
+                            />
+                          )}
+                          {message.text}
+                        </div>
+
+                        {isUser && (
+                          <div className="relative mt-1 h-8 w-8 shrink-0 overflow-hidden rounded-full">
+                            <div
+                              className="absolute inset-0 rounded-full border"
+                              style={{
+                                borderColor: "rgba(255,176,0,0.32)",
+                                background:
+                                  "linear-gradient(145deg, rgba(255,176,0,0.12), rgba(22,22,22,0.95))",
+                                boxShadow:
+                                  "0 0 13px rgba(255,176,0,0.08), inset 0 0 8px rgba(255,176,0,0.06)",
+                              }}
+                            />
+                            <div
+                              className="absolute inset-[5px] rounded-full"
+                              style={{
+                                background:
+                                  "linear-gradient(145deg, rgba(255,200,61,0.18), rgba(255,176,0,0.035), rgba(8,8,8,0.96))",
+                                boxShadow:
+                                  "inset 0 0 8px rgba(255,200,61,0.08)",
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={messageEndRef} />
+              </div>
+            </div>
+
+            <div
+              className="absolute left-0 right-0 flex items-center justify-center px-4"
+              style={{
+                top: "60%",
+                transform: "translateY(-50%)",
+              }}
+            >
+              <div
+                className="relative mx-auto"
+                style={{
+                  width: "min(400px, 62vw)",
+                  height: "min(400px, 62vw)",
+                  maxWidth: "100%",
                 }}
+                onClick={handleTap}
               >
-                Prefer typing?
-              </button>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="relative w-full h-full">
+                    <CentralForm
+                      isActive={isRecording || isProcessing || isSpeaking}
+                      isDimmed={false}
+                      isSpeaking={isSpeaking}
+                      getAmplitude={playback.getAmplitude}
+                    />
+                  </div>
+                </div>
 
-              <button onClick={handleInterloopExplanation}>
-                Who is Coreloop?
-              </button>
-
-              <button
-                onClick={handlePlaybackControl}
-                style={
-                  isPlaybackActive
-                    ? {
-                        color: "#ffc83d",
-                        textShadow: "0 0 10px rgba(255,184,0,0.28)",
-                      }
-                    : undefined
-                }
-              >
-                {playbackLabel}
-              </button>
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <span
+                    className="text-sm"
+                    style={
+                      isSpeaking
+                        ? {
+                            color: "#ffc83d",
+                            textShadow: "0 0 14px rgba(255,184,0,0.4)",
+                          }
+                        : {
+                            color: "#ffc83d",
+                            textShadow: "0 0 10px rgba(255,184,0,0.25)",
+                          }
+                    }
+                  >
+                    {isSpeaking ? (
+                      "Tap to stop"
+                    ) : isProcessing ? (
+                      "Thinking..."
+                    ) : isRecording ? (
+                      <div style={{ textAlign: "center" }}>
+                        <div>Listening…</div>
+                        <div style={{ fontSize: "0.85em", opacity: 0.8 }}>
+                          Tap to send
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ textAlign: "center" }}>
+                        <div>Tap to…</div>
+                        <div style={{ fontSize: "0.9em", opacity: 0.9 }}>
+                          {hasExchanged
+                            ? "Continue your investigation"
+                            : "Start your investigation"}
+                        </div>
+                      </div>
+                    )}
+                  </span>
+                </div>
+              </div>
             </div>
-          </>
-        ) : mode === "B" ? (
-          <>
+
             <div
-              className="absolute left-4 z-10"
+              className="absolute left-0 right-0 px-4 sm:px-8"
               style={{
-                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
+                bottom: "max(env(safe-area-inset-bottom) + 1rem, 1.25rem)",
               }}
             >
-              <button
-                onClick={openInvestigation}
-                className="text-sm font-medium transition-colors"
-                style={secondaryMangoStyle}
-              >
-                Your Investigation
-              </button>
-            </div>
+              <div className="mx-auto w-full max-w-2xl">
+                <form
+                  onSubmit={handleTypedSubmit}
+                  className="flex items-center gap-2 border-b"
+                  style={{
+                    borderColor: "rgba(255,176,0,0.28)",
+                  }}
+                >
+                  <input
+                    ref={typingInputRef}
+                    value={typedText}
+                    onChange={(event) => setTypedText(event.target.value)}
+                    disabled={isProcessing || isRecording || isSpeaking}
+                    placeholder="Type if voice is not right for this..."
+                    className="min-w-0 flex-1 bg-transparent py-3 text-sm text-gray-200 outline-none placeholder:text-gray-600 disabled:opacity-50"
+                  />
 
-            <div
-              className="absolute right-4 z-10"
-              style={{
-                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
-              }}
-            >
-              <button
-                onClick={() => setIsSettingsOpen(true)}
-                className="text-gray-400 text-sm font-medium"
-              >
-                Your Setup
-              </button>
-            </div>
+                  <button
+                    type="submit"
+                    disabled={
+                      !typedText.trim() ||
+                      isProcessing ||
+                      isRecording ||
+                      isSpeaking
+                    }
+                    className="shrink-0 py-3 pl-3 text-sm font-medium transition-opacity disabled:opacity-30"
+                    style={{
+                      color: "#ffc83d",
+                      textShadow: "0 0 10px rgba(255,184,0,0.22)",
+                    }}
+                  >
+                    Send
+                  </button>
+                </form>
 
-            <ChatView
-              messages={messages}
-              setMessages={setMessages}
-              onBack={() => setMode("A")}
-              playUITone={(f = 720, d = 90) => playUITone(f, d)}
-              onConversationIdChange={(id) => {
-                conversationIdRef.current = id;
-                setConversationId(id);
-                localStorage.setItem("conversationId", String(id));
-              }}
-              onPlaybackControl={handlePlaybackControl}
-              playbackLabel={playbackLabel}
-              onSpeakText={speakText}
-              onCaseReview={() => {}}
-            />
+                <div
+                  className="mt-4 flex justify-between text-sm"
+                  style={softMangoControlStyle}
+                >
+                  <button
+                    onClick={() => {
+                      playUITone(720);
+                      typingInputRef.current?.focus();
+                    }}
+                    className="transition-opacity hover:opacity-90"
+                  >
+                    Prefer typing?
+                  </button>
+
+                  <button
+                    onClick={handleInterloopExplanation}
+                    className="transition-opacity hover:opacity-90"
+                  >
+                    Who is Coreloop?
+                  </button>
+
+                  <button
+                    onClick={handlePlaybackControl}
+                    className="transition-opacity hover:opacity-90"
+                    style={
+                      isPlaybackActive
+                        ? {
+                            color: "#ffc83d",
+                            textShadow: "0 0 10px rgba(255,184,0,0.28)",
+                          }
+                        : undefined
+                    }
+                  >
+                    {playbackLabel}
+                  </button>
+                </div>
+              </div>
+            </div>
           </>
         ) : (
           <div className="h-screen w-full bg-black flex flex-col items-center justify-center text-white px-6">
@@ -1076,7 +1276,7 @@ export default function Home() {
                     <button
                       onClick={() => {
                         playUITone(720);
-                        setMode("B");
+                        setMode("A");
                         window.setTimeout(() => {
                           void runCaseReview();
                         }, 50);
