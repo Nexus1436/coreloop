@@ -6,12 +6,33 @@ import {
   timestamp,
   jsonb,
   index,
+  varchar,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 
-import { users } from "./models/auth";
+/* =====================================================
+   USERS
+===================================================== */
+
+export const users = pgTable("users", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  email: varchar("email").unique(),
+  firstName: varchar("first_name"),
+  lastName: varchar("last_name"),
+  profileImageUrl: varchar("profile_image_url"),
+  gymId: integer("gym_id"),
+  passwordHash: varchar("password_hash"),
+  authProvider: varchar("auth_provider").notNull().default("coreloop"),
+  externalId: varchar("external_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at")
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
 
 /* =====================================================
    CONVERSATIONS
@@ -407,9 +428,3 @@ export type UserMemory = typeof userMemory.$inferSelect;
 export type InsertUserMemory = z.infer<typeof insertUserMemorySchema>;
 
 export type SessionSignal = typeof sessionSignals.$inferSelect;
-
-/* =====================================================
-   AUTH EXPORT
-===================================================== */
-
-export * from "./models/auth";

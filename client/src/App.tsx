@@ -19,7 +19,58 @@ function Router() {
    LANDING PAGE — shown to unauthenticated users
 ===================================================== */
 
-function LandingPage() {
+function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const submitAuth = async (mode: "login" | "signup") => {
+    if (isSubmitting) return;
+
+    setAuthError("");
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch(
+        mode === "login" ? "/api/auth/login" : "/api/auth/signup",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email,
+            password,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        setAuthError(errorBody?.message ?? "Authentication failed");
+        return;
+      }
+
+      const userResponse = await fetch("/api/auth/user", {
+        credentials: "include",
+      });
+
+      if (!userResponse.ok) {
+        const errorBody = await userResponse.json().catch(() => null);
+        setAuthError(errorBody?.message ?? "Unable to verify session");
+        return;
+      }
+
+      onAuthenticated();
+    } catch (_error) {
+      setAuthError("Authentication failed");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -31,6 +82,7 @@ function LandingPage() {
         alignItems: "center",
         justifyContent: "center",
         gap: "32px",
+        padding: "24px",
       }}
     >
       <div style={{ textAlign: "center" }}>
@@ -56,20 +108,83 @@ function LandingPage() {
         </p>
       </div>
 
-      <a href="/api/login" style={{ textDecoration: "none" }}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          submitAuth("login");
+        }}
+        style={{
+          width: "100%",
+          maxWidth: "340px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+        }}
+      >
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Email"
+          autoComplete="email"
+          style={{
+            backgroundColor: "transparent",
+            border: "1px solid #333",
+            color: "#eee",
+            padding: "12px 14px",
+            fontSize: "0.95rem",
+            borderRadius: "2px",
+            outline: "none",
+          }}
+        />
+
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          autoComplete="current-password"
+          style={{
+            backgroundColor: "transparent",
+            border: "1px solid #333",
+            color: "#eee",
+            padding: "12px 14px",
+            fontSize: "0.95rem",
+            borderRadius: "2px",
+            outline: "none",
+          }}
+        />
+
+        {authError && (
+          <div
+            style={{
+              color: "#ff7a7a",
+              fontSize: "0.85rem",
+              lineHeight: 1.4,
+              textAlign: "center",
+            }}
+          >
+            {authError}
+          </div>
+        )}
+
         <button
+          type="submit"
+          disabled={isSubmitting}
           style={{
             backgroundColor: "transparent",
             border: "1px solid #555",
             color: "#ccc",
-            padding: "12px 36px",
+            padding: "12px 24px",
             fontSize: "0.9rem",
             letterSpacing: "0.1em",
-            cursor: "pointer",
+            cursor: isSubmitting ? "default" : "pointer",
             borderRadius: "2px",
+            opacity: isSubmitting ? 0.6 : 1,
             transition: "all 0.2s ease",
           }}
           onMouseEnter={(e) => {
+            if (isSubmitting) return;
             (e.target as HTMLButtonElement).style.borderColor = "#ffc83d";
             (e.target as HTMLButtonElement).style.color = "#ffc83d";
           }}
@@ -78,9 +193,28 @@ function LandingPage() {
             (e.target as HTMLButtonElement).style.color = "#ccc";
           }}
         >
-          Login / Create Account
+          Log In
         </button>
-      </a>
+
+        <button
+          type="button"
+          disabled={isSubmitting}
+          onClick={() => submitAuth("signup")}
+          style={{
+            backgroundColor: "transparent",
+            border: "1px solid #333",
+            color: "#999",
+            padding: "12px 24px",
+            fontSize: "0.85rem",
+            letterSpacing: "0.08em",
+            cursor: isSubmitting ? "default" : "pointer",
+            borderRadius: "2px",
+            opacity: isSubmitting ? 0.6 : 1,
+          }}
+        >
+          Create Account
+        </button>
+      </form>
     </div>
   );
 }
@@ -120,7 +254,7 @@ function App() {
   if (isLoggedIn === false) {
     return (
       <QueryClientProvider client={queryClient}>
-        <LandingPage />
+        <LandingPage onAuthenticated={() => setIsLoggedIn(true)} />
         <Toaster />
       </QueryClientProvider>
     );
