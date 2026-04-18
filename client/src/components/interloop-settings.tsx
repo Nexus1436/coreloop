@@ -26,6 +26,29 @@ interface InterloopSettingsProps {
   onClose: () => void;
 }
 
+const VOICE_OPTIONS = [
+  {
+    key: "male_coach",
+    label: "Ethan",
+    image: "/voices/male_coach.png",
+  },
+  {
+    key: "male_pt",
+    label: "Marcus",
+    image: "/voices/male_pt.png",
+  },
+  {
+    key: "female_pilates",
+    label: "Sofia",
+    image: "/voices/female_pilates.png",
+  },
+  {
+    key: "female_yoga",
+    label: "Aria",
+    image: "/voices/female_yoga.png",
+  },
+] as const;
+
 export function InterloopSettings({
   mode,
   initialValues,
@@ -57,20 +80,27 @@ export function InterloopSettings({
     });
   };
 
+  const inputClassName =
+    "rounded-xl border border-[#4a3420] bg-[#050403] px-3 py-3 text-[#fff7eb] outline-none shadow-[0_0_0_1px_rgba(255,178,87,0.03),0_0_22px_rgba(255,154,61,0.04)] transition placeholder:text-[#6d6258] focus:border-[#f7a43b] focus:shadow-[0_0_0_1px_rgba(247,164,59,0.25),0_0_24px_rgba(247,164,59,0.14)]";
+
+  const labelClassName = "text-sm font-medium text-[#d4ad7a]";
+
   return (
-    <div className="fixed inset-0 z-50 bg-black text-white overflow-y-auto">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#030201] text-[#fff7eb]">
       <div
-        className="w-full px-6 pt-6 pb-24"
+        className="w-full px-5 pt-6 pb-24 sm:px-6"
         style={{
           paddingTop: "max(env(safe-area-inset-top) + 1.5rem, 2rem)",
           paddingBottom: "max(env(safe-area-inset-bottom) + 5rem, 6rem)",
         }}
       >
-        <div className="w-full max-w-xl mx-auto rounded-2xl border border-[#1f1f1f] bg-[#0b0b0b] p-6 sm:p-8">
+        <div className="mx-auto w-full max-w-xl rounded-2xl border border-[#7a4a22]/60 bg-[#080604] p-6 shadow-[0_0_0_1px_rgba(255,178,87,0.06),0_0_44px_rgba(255,145,38,0.18),inset_0_1px_0_rgba(255,213,158,0.08)] sm:p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-medium">Your Setup</h1>
-              <p className="mt-2 text-sm text-gray-400">
+              <h1 className="text-2xl font-medium tracking-[0.01em] text-[#ffc46f] drop-shadow-[0_0_18px_rgba(255,169,67,0.28)]">
+                Your Setup
+              </h1>
+              <p className="mt-2 text-sm text-[#9f8a70]">
                 {isOnboarding
                   ? "Complete these fields before entering the app."
                   : "Update your setup."}
@@ -80,7 +110,7 @@ export function InterloopSettings({
             {!isOnboarding && (
               <button
                 onClick={onClose}
-                className="text-sm text-gray-400 hover:text-white"
+                className="rounded-full border border-[#4a3420] px-4 py-2 text-sm text-[#d4ad7a] transition hover:border-[#f7a43b]/70 hover:text-[#ffc46f] hover:shadow-[0_0_18px_rgba(247,164,59,0.12)]"
               >
                 Close
               </button>
@@ -89,58 +119,56 @@ export function InterloopSettings({
 
           <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-2">
-              <span className="text-sm text-gray-300">Name</span>
+              <span className={labelClassName}>Name</span>
               <input
                 value={form.name}
                 onChange={(e) => updateField("name", e.target.value)}
-                className="rounded-lg border border-[#2a2a2a] bg-black px-3 py-3 text-white outline-none"
+                className={inputClassName}
               />
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm text-gray-300">Age</span>
+              <span className={labelClassName}>Age</span>
               <input
                 value={form.age}
                 onChange={(e) => updateField("age", e.target.value)}
-                className="rounded-lg border border-[#2a2a2a] bg-black px-3 py-3 text-white outline-none"
+                className={inputClassName}
               />
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm text-gray-300">Height</span>
+              <span className={labelClassName}>Height</span>
               <input
                 value={form.height}
                 onChange={(e) => updateField("height", e.target.value)}
-                className="rounded-lg border border-[#2a2a2a] bg-black px-3 py-3 text-white outline-none"
+                className={inputClassName}
               />
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm text-gray-300">Weight</span>
+              <span className={labelClassName}>Weight</span>
               <input
                 value={form.weight}
                 onChange={(e) => updateField("weight", e.target.value)}
-                className="rounded-lg border border-[#2a2a2a] bg-black px-3 py-3 text-white outline-none"
+                className={inputClassName}
               />
             </label>
 
             <label className="flex flex-col gap-2 sm:col-span-2">
-              <span className="text-sm text-gray-300">
-                Primary activity / sport
-              </span>
+              <span className={labelClassName}>Primary activity / sport</span>
               <input
                 value={form.primaryActivity}
                 onChange={(e) => updateField("primaryActivity", e.target.value)}
-                className="rounded-lg border border-[#2a2a2a] bg-black px-3 py-3 text-white outline-none"
+                className={inputClassName}
               />
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm text-gray-300">Dominant hand</span>
+              <span className={labelClassName}>Dominant hand</span>
               <select
                 value={form.dominantHand}
                 onChange={(e) => updateField("dominantHand", e.target.value)}
-                className="rounded-lg border border-[#2a2a2a] bg-black px-3 py-3 text-white outline-none"
+                className={inputClassName}
               >
                 <option value="">Select</option>
                 <option value="right">Right</option>
@@ -150,11 +178,11 @@ export function InterloopSettings({
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm text-gray-300">Activity level</span>
+              <span className={labelClassName}>Activity level</span>
               <select
                 value={form.activityLevel}
                 onChange={(e) => updateField("activityLevel", e.target.value)}
-                className="rounded-lg border border-[#2a2a2a] bg-black px-3 py-3 text-white outline-none"
+                className={inputClassName}
               >
                 <option value="">Select</option>
                 <option value="low">Low</option>
@@ -165,13 +193,13 @@ export function InterloopSettings({
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm text-gray-300">Competition level</span>
+              <span className={labelClassName}>Competition level</span>
               <select
                 value={form.competitionLevel}
                 onChange={(e) =>
                   updateField("competitionLevel", e.target.value)
                 }
-                className="rounded-lg border border-[#2a2a2a] bg-black px-3 py-3 text-white outline-none"
+                className={inputClassName}
               >
                 <option value="">Select</option>
                 <option value="recreational">Recreational</option>
@@ -183,28 +211,67 @@ export function InterloopSettings({
               </select>
             </label>
 
-            <label className="flex flex-col gap-2">
-              <span className="text-sm text-gray-300">Voice</span>
-              <select
-                value={form.voice}
-                onChange={(e) =>
-                  updateField("voice", e.target.value as InterloopVoiceOption)
-                }
-                className="rounded-lg border border-[#2a2a2a] bg-black px-3 py-3 text-white outline-none"
-              >
-                <option value="female_yoga">female_yoga</option>
-                <option value="female_pilates">female_pilates</option>
-                <option value="male_coach">male_coach</option>
-                <option value="male_pt">male_pt</option>
-              </select>
-            </label>
+            <section className="mt-2 flex flex-col gap-4 sm:col-span-2">
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-[#ffc46f]">
+                  Voice Identity
+                </h2>
+              </div>
+
+              <div className="grid grid-cols-2 gap-x-5 gap-y-5">
+                {VOICE_OPTIONS.map((option) => {
+                  const selected = form.voice === option.key;
+
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => updateField("voice", option.key)}
+                      className={[
+                        "group flex min-h-[154px] flex-col items-center justify-start rounded-2xl px-3 py-3 text-center outline-none transition duration-200",
+                        selected ? "scale-[1.035]" : "hover:scale-[1.01]",
+                      ].join(" ")}
+                      aria-pressed={selected}
+                    >
+                      <span
+                        className={[
+                          "flex h-[110px] w-[110px] items-center justify-center rounded-full border p-1.5 transition duration-200 sm:h-32 sm:w-32",
+                          selected
+                            ? "border-2 border-[#ffc46f] shadow-[0_0_0_2px_rgba(255,196,111,0.32),0_0_42px_rgba(255,157,54,0.48),inset_0_0_18px_rgba(255,196,111,0.16)]"
+                            : "border border-[#6b4525]/80 shadow-[0_0_16px_rgba(255,157,54,0.08)] group-hover:border-[#b87837] group-hover:shadow-[0_0_24px_rgba(255,157,54,0.14)]",
+                        ].join(" ")}
+                      >
+                        <span className="block h-full w-full overflow-hidden rounded-full bg-[#120b05]">
+                          <img
+                            src={option.image}
+                            alt={option.label}
+                            className="h-full w-full object-cover"
+                          />
+                        </span>
+                      </span>
+
+                      <span
+                        className={[
+                          "mt-3 text-sm transition duration-200",
+                          selected
+                            ? "font-bold text-[#ffe0a3] drop-shadow-[0_0_14px_rgba(255,190,102,0.38)]"
+                            : "font-semibold text-[#c19a68] group-hover:text-[#ffd18a]",
+                        ].join(" ")}
+                      >
+                        {option.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           </div>
 
           <div className="mt-10 flex items-center justify-end gap-3">
             {!isOnboarding && (
               <button
                 onClick={onClose}
-                className="rounded-lg border border-[#2a2a2a] px-4 py-2 text-sm text-gray-300"
+                className="rounded-full border border-[#4a3420] px-5 py-2.5 text-sm font-medium text-[#d4ad7a] transition hover:border-[#f7a43b]/70 hover:text-[#ffc46f] hover:shadow-[0_0_18px_rgba(247,164,59,0.12)]"
               >
                 Cancel
               </button>
@@ -212,7 +279,7 @@ export function InterloopSettings({
 
             <button
               onClick={handleSave}
-              className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black"
+              className="rounded-full border border-[#ffc46f]/60 bg-[#f7a43b] px-5 py-2.5 text-sm font-semibold text-[#160b02] shadow-[0_0_24px_rgba(247,164,59,0.28),inset_0_1px_0_rgba(255,255,255,0.28)] transition hover:bg-[#ffb85b] hover:shadow-[0_0_30px_rgba(247,164,59,0.38),inset_0_1px_0_rgba(255,255,255,0.34)]"
             >
               Save
             </button>
