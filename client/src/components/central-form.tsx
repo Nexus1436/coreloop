@@ -124,8 +124,8 @@ export function CentralForm({
           <motion.div
             className="absolute bg-[rgba(58,58,58,1)] rounded-full"
             style={{
-              width: "42%",
-              height: "42%",
+              width: "52%",
+              height: "52%",
               scale: audioBoost,
               transformOrigin: "center center",
             }}
@@ -140,7 +140,7 @@ export function CentralForm({
               opacity: isSpeaking
                 ? [0.75, 0.25, 0.25, 0.75]
                 : [0.55, 0.05, 0.05, 0.55],
-              filter: ["blur(45px)", "blur(25px)", "blur(25px)", "blur(45px)"],
+              filter: ["blur(52px)", "blur(28px)", "blur(28px)", "blur(52px)"],
               borderRadius: [
                 "45% 55% 40% 60% / 60% 40% 55% 45%",
                 "60% 40% 30% 70% / 50% 60% 30% 40%",
@@ -160,15 +160,15 @@ export function CentralForm({
           <motion.div
             className="absolute bg-[rgba(58,58,58,1)] rounded-full"
             style={{
-              width: "42%",
-              height: "42%",
+              width: "52%",
+              height: "52%",
               scale: audioBoost,
               transformOrigin: "center center",
             }}
             initial={{
               scale: 1.0,
               opacity: 0.5,
-              filter: "blur(40px)",
+              filter: "blur(45px)",
               borderRadius: "50%",
             }}
             animate={{
@@ -176,7 +176,7 @@ export function CentralForm({
               opacity: isSpeaking
                 ? [0.65, 0.08, 0.08, 0.65]
                 : [0.45, 0.02, 0.02, 0.45],
-              filter: ["blur(50px)", "blur(30px)", "blur(30px)", "blur(50px)"],
+              filter: ["blur(55px)", "blur(34px)", "blur(34px)", "blur(55px)"],
               borderRadius: [
                 "55% 45% 60% 40% / 40% 60% 45% 55%",
                 "40% 60% 70% 30% / 60% 30% 70% 40%",
@@ -197,15 +197,15 @@ export function CentralForm({
           <motion.div
             className="absolute bg-[rgba(58,58,58,1)] rounded-full"
             style={{
-              width: "42%",
-              height: "42%",
+              width: "52%",
+              height: "52%",
               scale: audioBoost,
               transformOrigin: "center center",
             }}
             initial={{
               scale: 1.0,
               opacity: 0.5,
-              filter: "blur(40px)",
+              filter: "blur(45px)",
               borderRadius: "50%",
             }}
             animate={{
@@ -213,7 +213,7 @@ export function CentralForm({
               opacity: isSpeaking
                 ? [0.65, 0.08, 0.08, 0.65]
                 : [0.45, 0.02, 0.02, 0.45],
-              filter: ["blur(50px)", "blur(30px)", "blur(30px)", "blur(50px)"],
+              filter: ["blur(55px)", "blur(34px)", "blur(34px)", "blur(55px)"],
               borderRadius: [
                 "55% 45% 60% 40% / 40% 60% 45% 55%",
                 "40% 60% 70% 30% / 60% 30% 70% 40%",
@@ -233,14 +233,14 @@ export function CentralForm({
         </div>
       </div>
 
-      <div className="relative z-10 w-[42%] h-[42%] max-w-80 max-h-80 flex items-center justify-center">
+      <div className="relative z-10 w-[52%] h-[52%] flex items-center justify-center">
         <div className="flex items-center justify-center w-full h-full">
           <img
             src="/logo.png"
             alt="Interloop Logo"
             className="w-full h-full object-cover object-center"
             style={{
-              opacity: 0.88,
+              opacity: 0.94,
               filter: "url(#pressed-charcoal)",
             }}
           />

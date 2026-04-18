@@ -276,14 +276,32 @@ function App() {
         <a href="/api/logout" style={{ textDecoration: "none" }}>
           <button
             style={{
-              backgroundColor: "transparent",
-              border: "1px solid #888",
-              color: "#ddd",
+              background:
+                "linear-gradient(180deg, rgba(255,176,0,0.045), rgba(8,8,8,0.96))",
+              border: "1px solid rgba(255,176,0,0.28)",
+              color: "#ffc83d",
               padding: "6px 16px",
               fontSize: "0.8rem",
               letterSpacing: "0.08em",
               cursor: "pointer",
               borderRadius: "2px",
+              transition: "all 0.2s ease",
+            }}
+            onMouseEnter={(e) => {
+              (e.target as HTMLButtonElement).style.color = "#ffd666";
+              (e.target as HTMLButtonElement).style.borderColor =
+                "rgba(255,184,0,0.48)";
+              (e.target as HTMLButtonElement).style.textShadow =
+                "0 0 10px rgba(255,184,0,0.25)";
+              (e.target as HTMLButtonElement).style.boxShadow =
+                "0 0 14px rgba(255,176,0,0.12)";
+            }}
+            onMouseLeave={(e) => {
+              (e.target as HTMLButtonElement).style.color = "#ffc83d";
+              (e.target as HTMLButtonElement).style.borderColor =
+                "rgba(255,176,0,0.28)";
+              (e.target as HTMLButtonElement).style.textShadow = "none";
+              (e.target as HTMLButtonElement).style.boxShadow = "none";
             }}
           >
             Logout

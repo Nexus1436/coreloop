@@ -208,10 +208,25 @@ export default function Home() {
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const typingInputRef = useRef<HTMLInputElement | null>(null);
+  const hasAutoScrolledInitialRef = useRef(false);
+  const previousModeRef = useRef<"A" | "C">("A");
   const lastPlayableMessageRef = useRef<{ id: string; text: string } | null>(
     null,
   );
   const lastAutoPlayedMessageIdRef = useRef<string | null>(null);
+
+  const scrollMessagesToBottom = useCallback(
+    (behavior: ScrollBehavior = "auto") => {
+      const scrollEl = messageScrollRef.current;
+      if (!scrollEl) return;
+
+      scrollEl.scrollTo({
+        top: scrollEl.scrollHeight,
+        behavior,
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
@@ -219,7 +234,20 @@ export default function Home() {
 
   useEffect(() => {
     const scrollEl = messageScrollRef.current;
-    if (!scrollEl) return;
+    if (!scrollEl || messages.length === 0) return;
+
+    if (!hasAutoScrolledInitialRef.current) {
+      window.requestAnimationFrame(() => {
+        scrollMessagesToBottom("auto");
+
+        window.requestAnimationFrame(() => {
+          scrollMessagesToBottom("auto");
+          hasAutoScrolledInitialRef.current = true;
+        });
+      });
+
+      return;
+    }
 
     const distanceFromBottom =
       scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
@@ -228,7 +256,18 @@ export default function Home() {
     if (shouldAutoScroll) {
       messageEndRef.current?.scrollIntoView({ block: "end" });
     }
-  }, [messages]);
+  }, [messages, scrollMessagesToBottom]);
+
+  useEffect(() => {
+    const previousMode = previousModeRef.current;
+    previousModeRef.current = mode;
+
+    if (previousMode !== "A" && mode === "A" && messages.length > 0) {
+      window.requestAnimationFrame(() => {
+        scrollMessagesToBottom("auto");
+      });
+    }
+  }, [mode, messages.length, scrollMessagesToBottom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -327,6 +366,7 @@ export default function Home() {
           setMessages([]);
           setHasExchanged(false);
           localStorage.removeItem("conversationId");
+          hasAutoScrolledInitialRef.current = false;
           return;
         }
 
@@ -340,6 +380,7 @@ export default function Home() {
           setMessages([]);
           setHasExchanged(false);
           localStorage.removeItem("conversationId");
+          hasAutoScrolledInitialRef.current = false;
           return;
         }
 
@@ -354,6 +395,7 @@ export default function Home() {
 
         if (cancelled) return;
 
+        hasAutoScrolledInitialRef.current = false;
         conversationIdRef.current = latestId;
         setConversationId(latestId);
         setMessages(normalizedMessages);
@@ -369,6 +411,7 @@ export default function Home() {
         setMessages([]);
         setHasExchanged(false);
         localStorage.removeItem("conversationId");
+        hasAutoScrolledInitialRef.current = false;
       }
     };
 
@@ -657,29 +700,30 @@ export default function Home() {
     ]);
     setIsProcessing(true);
 
-    let assistantText = "";
-
     try {
-      await sendChat(
-        conversationIdRef.current,
-        `Hi... I'm meeting you for the first time. Tell me who you are in a natural, conversational way. Do not sound clinical, instructional, or like a system explanation. Do not use numbered lists or step-by-step guidance. Make it clear that I do not need to explain things cleanly, and that I can ramble, be messy, and start with whatever feels most noticeable. Sound human, direct, and warm. Start with: "Hi... I'm Coreloop."`,
-        (id) => {
-          conversationIdRef.current = id;
-          setConversationId(id);
-          localStorage.setItem("conversationId", String(id));
+      const resp = await fetch("/api/coreloop-intro", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-        (chunk) => {
-          assistantText = mergeStream(assistantText, chunk);
+        credentials: "include",
+        body: JSON.stringify({
+          conversationId: conversationIdRef.current ?? undefined,
+        }),
+      });
 
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, text: assistantText } : m,
-            ),
-          );
-        },
+      if (!resp.ok) throw new Error("Coreloop intro failed");
+
+      const data = await resp.json();
+      const assistantText = String(data?.text ?? "").trim();
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, text: assistantText } : m,
+        ),
       );
 
-      if (assistantText.trim()) {
+      if (assistantText) {
         await speakText(assistantId, assistantText, "auto");
       }
     } finally {
@@ -864,6 +908,7 @@ export default function Home() {
     }) => {
       playUITone(720);
       setMode("A");
+      hasAutoScrolledInitialRef.current = false;
 
       setMessages([
         {
@@ -906,6 +951,10 @@ export default function Home() {
     color: "rgba(255,200,61,0.78)",
     textShadow: "0 0 8px rgba(255,184,0,0.1)",
   };
+  const brightMangoLabelStyle = {
+    color: "rgba(255,200,61,0.72)",
+    textShadow: "0 0 10px rgba(255,184,0,0.12)",
+  };
 
   if (isHydratingSettings) {
     return null;
@@ -932,8 +981,8 @@ export default function Home() {
               style={{
                 top: "38%",
                 background:
-                  "radial-gradient(ellipse at center, rgba(255,184,0,0.16) 0%, rgba(255,176,0,0.08) 26%, rgba(255,176,0,0.035) 48%, transparent 72%)",
-                filter: "blur(28px)",
+                  "radial-gradient(ellipse at center, rgba(255,184,0,0.15) 0%, rgba(255,176,0,0.075) 27%, rgba(255,176,0,0.032) 50%, transparent 74%)",
+                filter: "blur(30px)",
               }}
             />
 
@@ -942,13 +991,13 @@ export default function Home() {
               style={{
                 top: "50%",
                 background:
-                  "radial-gradient(ellipse at center, rgba(255,200,61,0.12) 0%, rgba(255,176,0,0.05) 42%, transparent 72%)",
-                filter: "blur(18px)",
+                  "radial-gradient(ellipse at center, rgba(255,200,61,0.11) 0%, rgba(255,176,0,0.047) 44%, transparent 74%)",
+                filter: "blur(19px)",
               }}
             />
 
             <div
-              className="absolute left-4 z-20"
+              className="absolute left-4 z-20 flex items-center gap-5"
               style={{
                 top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
               }}
@@ -985,9 +1034,9 @@ export default function Home() {
                 top: "max(env(safe-area-inset-top) + 3.25rem, 4rem)",
                 bottom: "50vh",
                 WebkitMaskImage:
-                  "linear-gradient(to bottom, transparent 0%, black 9%, black 88%, transparent 100%)",
+                  "linear-gradient(to bottom, transparent 0%, black 9%, black 84%, rgba(0,0,0,0.72) 92%, transparent 100%)",
                 maskImage:
-                  "linear-gradient(to bottom, transparent 0%, black 9%, black 88%, transparent 100%)",
+                  "linear-gradient(to bottom, transparent 0%, black 9%, black 84%, rgba(0,0,0,0.72) 92%, transparent 100%)",
               }}
             >
               <div className="mx-auto w-full max-w-[700px] py-8">
@@ -1151,16 +1200,16 @@ export default function Home() {
 
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <span
-                    className="text-sm"
+                    className="text-[15px] font-medium"
                     style={
                       isSpeaking
                         ? {
-                            color: "#ffc83d",
-                            textShadow: "0 0 14px rgba(255,184,0,0.4)",
+                            color: "#ffd15a",
+                            textShadow: "0 0 16px rgba(255,184,0,0.46)",
                           }
                         : {
-                            color: "#ffc83d",
-                            textShadow: "0 0 10px rgba(255,184,0,0.25)",
+                            color: "#ffd15a",
+                            textShadow: "0 0 12px rgba(255,184,0,0.32)",
                           }
                     }
                   >
@@ -1271,119 +1320,158 @@ export default function Home() {
             </div>
           </>
         ) : (
-          <div className="h-screen w-full bg-black flex flex-col items-center justify-center text-white px-6">
-            <button
-              onClick={() => {
-                playUITone(720);
-                setMode("A");
+          <div className="h-screen w-full bg-black relative overflow-hidden text-white px-6">
+            <div
+              className="pointer-events-none absolute left-1/2 top-[20%] h-[42vh] w-[86vw] max-w-3xl -translate-x-1/2 rounded-full"
+              style={{
+                background:
+                  "radial-gradient(ellipse at center, rgba(255,184,0,0.085) 0%, rgba(255,176,0,0.042) 42%, transparent 74%)",
+                filter: "blur(30px)",
               }}
-              className="absolute left-4 top-4 text-sm font-medium transition-opacity hover:opacity-90"
-              style={secondaryMangoStyle}
+            />
+
+            <div
+              className="absolute left-4 z-20"
+              style={{
+                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
+              }}
             >
-              Back
-            </button>
+              <button
+                onClick={() => {
+                  playUITone(720);
+                  setMode("A");
+                }}
+                className="text-sm font-medium transition-opacity hover:opacity-90"
+                style={secondaryMangoStyle}
+              >
+                Back
+              </button>
+            </div>
 
-            <div className="w-full max-w-xl mx-auto flex flex-col items-center text-center">
-              <h1 className="text-3xl font-semibold tracking-tight text-white">
-                Your Investigation
-              </h1>
+            <div className="relative z-10 flex h-full w-full flex-col items-center justify-center">
+              <div className="w-full max-w-xl mx-auto flex flex-col items-center text-center">
+                <h1
+                  className="text-3xl font-semibold tracking-tight"
+                  style={{
+                    color: "#ffc83d",
+                    textShadow: "0 0 14px rgba(255,184,0,0.22)",
+                  }}
+                >
+                  Your Investigation
+                </h1>
 
-              <p className="mt-4 text-sm text-gray-500">
-                Run focused reviews on your current case.
-              </p>
+                <p className="mt-4 text-sm text-gray-500">
+                  Run focused reviews on your current case.
+                </p>
 
-              <div className="w-full mt-10 text-left">
-                <div className="flex flex-col gap-5">
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.14em] text-gray-600">
-                      Current State
-                    </div>
-                    <div className="mt-1 text-sm leading-relaxed text-gray-300">
-                      {currentInvestigationState}
-                    </div>
-                  </div>
-
-                  {currentStateRows.map((row) => (
-                    <div key={row.label} className="w-full">
-                      <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
-                        {row.label}
+                <div className="w-full mt-10 text-left">
+                  <div className="flex flex-col gap-5">
+                    <div>
+                      <div
+                        className="text-xs uppercase tracking-[0.14em]"
+                        style={brightMangoLabelStyle}
+                      >
+                        Current State
                       </div>
                       <div className="mt-1 text-sm leading-relaxed text-gray-300">
-                        {row.value}
+                        {currentInvestigationState}
                       </div>
                     </div>
-                  ))}
 
-                  <div className="w-full mt-6">
-                    <button
-                      onClick={() => {
-                        playUITone(720);
-                        setMode("A");
-                        window.setTimeout(() => {
-                          void runCaseReview();
-                        }, 50);
-                      }}
-                      className="w-full text-center py-5 transition-opacity hover:opacity-90 cursor-pointer rounded-2xl border"
-                      style={{
-                        borderColor: "#ffb000",
-                        background:
-                          "linear-gradient(180deg, rgba(255,190,32,0.18) 0%, rgba(255,140,0,0.08) 100%)",
-                        boxShadow:
-                          "0 0 0 1px rgba(255,176,0,0.18), 0 0 28px rgba(255,176,0,0.22), inset 0 0 24px rgba(255,190,32,0.06)",
-                      }}
-                    >
-                      <div
-                        className="text-lg font-medium"
+                    {currentStateRows.map((row) => (
+                      <div key={row.label} className="w-full">
+                        <div
+                          className="text-xs uppercase tracking-[0.12em]"
+                          style={brightMangoLabelStyle}
+                        >
+                          {row.label}
+                        </div>
+                        <div className="mt-1 text-sm leading-relaxed text-gray-300">
+                          {row.value}
+                        </div>
+                      </div>
+                    ))}
+
+                    <div className="w-full mt-6">
+                      <button
+                        onClick={() => {
+                          playUITone(720);
+                          setMode("A");
+                          window.setTimeout(() => {
+                            void runCaseReview();
+                          }, 50);
+                        }}
+                        className="w-full text-center py-5 transition-opacity hover:opacity-90 cursor-pointer rounded-2xl border"
                         style={{
-                          color: "#ffc83d",
-                          textShadow: "0 0 12px rgba(255,184,0,0.28)",
+                          borderColor: "rgba(255,176,0,0.86)",
+                          background:
+                            "linear-gradient(180deg, rgba(255,190,32,0.16) 0%, rgba(255,140,0,0.07) 100%)",
+                          boxShadow:
+                            "0 0 0 1px rgba(255,176,0,0.15), 0 0 26px rgba(255,176,0,0.18), inset 0 0 22px rgba(255,190,32,0.05)",
                         }}
                       >
-                        Get New Case Review
-                      </div>
-                      <div className="mt-2 text-sm text-gray-400">
-                        Break down the current mechanism and identify the next
-                        move.
-                      </div>
-                    </button>
-                  </div>
-
-                  {dashboardData.caseReviewsList?.length > 0 && (
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.12em] text-gray-600">
-                        Case Reviews
-                      </div>
-
-                      <div className="mt-2 flex flex-col gap-4">
-                        {dashboardData.caseReviewsList.map((review) => {
-                          const preview = review.reviewText?.slice(0, 140);
-
-                          const date = new Date(
-                            review.createdAt,
-                          ).toLocaleDateString(undefined, {
-                            month: "short",
-                            day: "numeric",
-                          });
-
-                          return (
-                            <button
-                              key={review.id}
-                              onClick={() => handleOpenCaseReview(review)}
-                              className="text-left hover:opacity-80 transition"
-                            >
-                              <div className="text-sm text-white">
-                                Case Review — {date}
-                              </div>
-
-                              <div className="text-sm text-gray-400 mt-1">
-                                {preview}
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
+                        <div
+                          className="text-lg font-medium"
+                          style={{
+                            color: "#ffc83d",
+                            textShadow: "0 0 12px rgba(255,184,0,0.26)",
+                          }}
+                        >
+                          Get New Case Review
+                        </div>
+                        <div className="mt-2 text-sm text-gray-400">
+                          Break down the current mechanism and identify the next
+                          move.
+                        </div>
+                      </button>
                     </div>
-                  )}
+
+                    {dashboardData.caseReviewsList?.length > 0 && (
+                      <div>
+                        <div
+                          className="text-xs uppercase tracking-[0.12em]"
+                          style={brightMangoLabelStyle}
+                        >
+                          Case Reviews
+                        </div>
+
+                        <div className="mt-2 flex flex-col gap-4">
+                          {dashboardData.caseReviewsList.map((review) => {
+                            const preview = review.reviewText?.slice(0, 140);
+
+                            const date = new Date(
+                              review.createdAt,
+                            ).toLocaleDateString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                            });
+
+                            return (
+                              <button
+                                key={review.id}
+                                onClick={() => handleOpenCaseReview(review)}
+                                className="text-left hover:opacity-80 transition"
+                              >
+                                <div
+                                  className="text-sm font-medium"
+                                  style={{
+                                    color: "rgba(255,200,61,0.86)",
+                                    textShadow: "0 0 9px rgba(255,184,0,0.12)",
+                                  }}
+                                >
+                                  Case Review — {date}
+                                </div>
+
+                                <div className="text-sm text-gray-400 mt-1">
+                                  {preview}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

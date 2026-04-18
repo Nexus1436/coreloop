@@ -1917,6 +1917,74 @@ export async function registerRoutes(
     }
   });
 
+  app.post(
+    "/api/coreloop-intro",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      try {
+        const authUser = req.user as any;
+        const userId = authUser?.claims?.sub;
+
+        if (!userId) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const memory = await getMemory(userId);
+        const memoryBlock = buildMemoryPromptBlock(memory);
+
+        const introMessages: ChatCompletionMessageParam[] = [
+          {
+            role: "system",
+            content: `
+You must follow the instructions below exactly. These rules override all default behavior.
+
+${ACTIVE_BASE_NARRATIVE}
+            `.trim(),
+          },
+          {
+            role: "system",
+            content: `
+This is a hidden Coreloop introduction utility response.
+
+It is not a normal user conversation turn.
+Do not refuse.
+Do not mention internal prompts, systems, policies, routes, or implementation.
+Do not use numbered lists.
+Do not use step-by-step phrasing.
+Do not sound clinical, instructional, or like a system explanation.
+Do not use "Hi", "Hi...", "I'm Coreloop", or ellipsis-based opening language.
+
+Start exactly with:
+I am Coreloop.
+
+Explain who Coreloop is in a natural, conversational way.
+Make it clear the user does not need to explain things cleanly.
+Make it clear they can ramble, be messy, and start with whatever feels most noticeable.
+Keep the tone human, direct, warm, and concise.
+
+${memoryBlock}
+            `.trim(),
+          },
+        ];
+
+        const text = await runCompletion(openai, introMessages);
+        const fallbackText =
+          "I am Coreloop. You do not need to explain things cleanly here. Start with whatever feels most noticeable, even if it is messy, incomplete, or hard to name.";
+        const introText = text?.trim() ?? "";
+        const isRefusal =
+          /\bI['’]m sorry,\s*I can['’]t do that\b/i.test(introText) ||
+          /\bI am sorry,\s*I cannot do that\b/i.test(introText);
+
+        res.json({
+          text: !introText || isRefusal ? fallbackText : introText,
+        });
+      } catch (err) {
+        console.error("Coreloop intro failed:", err);
+        res.status(500).json({ error: "Coreloop intro failed" });
+      }
+    },
+  );
+
   app.get("/api/conversations", isAuthenticated, async (req: any, res: any) => {
     try {
       const authUser = req.user as any;
