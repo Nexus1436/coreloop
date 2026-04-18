@@ -205,6 +205,7 @@ export default function Home() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const acknowledgmentTimeoutRef = useRef<number | null>(null);
   const speakSessionRef = useRef(0);
+  const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const typingInputRef = useRef<HTMLInputElement | null>(null);
   const lastPlayableMessageRef = useRef<{ id: string; text: string } | null>(
@@ -217,7 +218,16 @@ export default function Home() {
   }, [conversationId]);
 
   useEffect(() => {
-    messageEndRef.current?.scrollIntoView({ block: "end" });
+    const scrollEl = messageScrollRef.current;
+    if (!scrollEl) return;
+
+    const distanceFromBottom =
+      scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    const shouldAutoScroll = distanceFromBottom < 140;
+
+    if (shouldAutoScroll) {
+      messageEndRef.current?.scrollIntoView({ block: "end" });
+    }
   }, [messages]);
 
   useEffect(() => {
@@ -888,8 +898,14 @@ export default function Home() {
     },
   ].filter((row) => Boolean(row.value));
 
-  const secondaryMangoStyle = { color: "rgba(255,179,71,0.85)" };
-  const softMangoControlStyle = { color: "rgba(255,200,61,0.72)" };
+  const secondaryMangoStyle = {
+    color: "rgba(255,200,61,0.92)",
+    textShadow: "0 0 10px rgba(255,184,0,0.16)",
+  };
+  const softMangoControlStyle = {
+    color: "rgba(255,200,61,0.78)",
+    textShadow: "0 0 8px rgba(255,184,0,0.1)",
+  };
 
   if (isHydratingSettings) {
     return null;
@@ -912,6 +928,26 @@ export default function Home() {
         {mode === "A" ? (
           <>
             <div
+              className="pointer-events-none absolute left-1/2 z-0 h-[46vh] w-[92vw] max-w-4xl -translate-x-1/2 rounded-full"
+              style={{
+                top: "38%",
+                background:
+                  "radial-gradient(ellipse at center, rgba(255,184,0,0.16) 0%, rgba(255,176,0,0.08) 26%, rgba(255,176,0,0.035) 48%, transparent 72%)",
+                filter: "blur(28px)",
+              }}
+            />
+
+            <div
+              className="pointer-events-none absolute left-1/2 z-0 h-[34vh] w-[64vw] max-w-2xl -translate-x-1/2 rounded-full"
+              style={{
+                top: "50%",
+                background:
+                  "radial-gradient(ellipse at center, rgba(255,200,61,0.12) 0%, rgba(255,176,0,0.05) 42%, transparent 72%)",
+                filter: "blur(18px)",
+              }}
+            />
+
+            <div
               className="absolute left-4 z-20"
               style={{
                 top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
@@ -919,7 +955,7 @@ export default function Home() {
             >
               <button
                 onClick={openInvestigation}
-                className="text-sm font-medium transition-colors"
+                className="text-sm font-medium transition-opacity hover:opacity-90"
                 style={secondaryMangoStyle}
               >
                 Your Investigation
@@ -934,7 +970,7 @@ export default function Home() {
             >
               <button
                 onClick={() => setIsSettingsOpen(true)}
-                className="text-sm font-medium transition-colors"
+                className="text-sm font-medium transition-opacity hover:opacity-90"
                 style={softMangoControlStyle}
                 aria-label="Open your setup"
               >
@@ -943,145 +979,151 @@ export default function Home() {
             </div>
 
             <div
-              className="absolute left-0 right-0 overflow-y-auto px-5 sm:px-8"
+              ref={messageScrollRef}
+              className="absolute left-0 right-0 z-10 overflow-y-auto overflow-x-hidden px-5 sm:px-8"
               style={{
                 top: "max(env(safe-area-inset-top) + 3.25rem, 4rem)",
-                bottom: "43vh",
+                bottom: "50vh",
                 WebkitMaskImage:
-                  "linear-gradient(to bottom, transparent 0%, black 9%, black 90%, transparent 100%)",
+                  "linear-gradient(to bottom, transparent 0%, black 9%, black 88%, transparent 100%)",
                 maskImage:
-                  "linear-gradient(to bottom, transparent 0%, black 9%, black 90%, transparent 100%)",
+                  "linear-gradient(to bottom, transparent 0%, black 9%, black 88%, transparent 100%)",
               }}
             >
-              <div className="mx-auto flex min-h-full w-full max-w-[700px] flex-col justify-end gap-6 py-8">
-                {messages.length === 0 ? (
-                  <div className="pb-4 text-center">
-                    <div
-                      className="text-sm"
-                      style={{
-                        color: "rgba(255,200,61,0.8)",
-                        textShadow: "0 0 12px rgba(255,184,0,0.18)",
-                      }}
-                    >
-                      Start wherever the signal is loudest.
-                    </div>
-                    <div className="mt-2 text-sm leading-relaxed text-gray-500">
-                      Voice stays primary. Typing is here when it is easier.
-                    </div>
-                  </div>
-                ) : (
-                  messages.map((message) => {
-                    const isUser = message.role === "user";
-
-                    return (
+              <div className="mx-auto w-full max-w-[700px] py-8">
+                <div className="flex w-full flex-col gap-6">
+                  {messages.length === 0 ? (
+                    <div className="pb-4 text-center">
                       <div
-                        key={message.id}
-                        className={`flex items-start ${
-                          isUser ? "justify-end gap-2.5" : "justify-start gap-3"
-                        }`}
+                        className="text-sm"
+                        style={{
+                          color: "rgba(255,200,61,0.84)",
+                          textShadow: "0 0 12px rgba(255,184,0,0.18)",
+                        }}
                       >
-                        {!isUser && (
-                          <div className="relative mt-1.5 h-9 w-9 shrink-0 rounded-full">
-                            <div
-                              className="absolute inset-[-5px] rounded-full"
-                              style={{
-                                background:
-                                  "radial-gradient(circle, rgba(255,200,61,0.12) 0%, rgba(255,176,0,0.07) 42%, transparent 72%)",
-                                boxShadow: "0 0 16px rgba(255,184,0,0.14)",
-                              }}
-                            />
-                            <div
-                              className="absolute inset-0 rounded-full border"
-                              style={{
-                                borderColor: "rgba(255,200,61,0.42)",
-                                background:
-                                  "linear-gradient(145deg, rgba(255,200,61,0.11), rgba(255,176,0,0.03) 42%, rgba(10,10,10,0.98))",
-                                boxShadow:
-                                  "inset 0 0 10px rgba(255,200,61,0.1), 0 0 0 1px rgba(255,176,0,0.055)",
-                              }}
-                            />
-                            <div
-                              className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
-                              style={{
-                                background: "rgba(255,200,61,0.82)",
-                                boxShadow: "0 0 8px rgba(255,184,0,0.38)",
-                              }}
-                            />
-                          </div>
-                        )}
+                        Start wherever the signal is loudest.
+                      </div>
+                      <div className="mt-2 text-sm leading-relaxed text-gray-500">
+                        Voice stays primary. Typing is here when it is easier.
+                      </div>
+                    </div>
+                  ) : (
+                    messages.map((message) => {
+                      const isUser = message.role === "user";
 
+                      return (
                         <div
-                          className={`relative whitespace-pre-wrap ${
+                          key={message.id}
+                          className={`flex items-start ${
                             isUser
-                              ? "order-first max-w-[58%] rounded-[8px] rounded-tr-[3px] px-4 py-3 text-right text-[13px] leading-relaxed"
-                              : "max-w-[82%] rounded-[10px] rounded-tl-[3px] px-5 py-4 text-[15px] leading-7 sm:text-base"
+                              ? "justify-end gap-2.5"
+                              : "justify-start gap-3"
                           }`}
-                          style={
-                            isUser
-                              ? {
-                                  color: "rgba(255,200,61,0.74)",
-                                  background:
-                                    "linear-gradient(180deg, rgba(255,176,0,0.06), rgba(255,176,0,0.022))",
-                                  border: "1px solid rgba(255,176,0,0.105)",
-                                  boxShadow:
-                                    "0 10px 22px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.02)",
-                                }
-                              : {
-                                  color: "rgba(229,231,235,0.89)",
-                                  background:
-                                    "linear-gradient(180deg, rgba(18,18,18,0.98), rgba(8,8,8,0.96))",
-                                  border: "1px solid rgba(255,176,0,0.15)",
-                                  borderLeft: "2px solid rgba(255,200,61,0.44)",
-                                  boxShadow:
-                                    "0 18px 40px rgba(0,0,0,0.34), 0 0 20px rgba(255,176,0,0.04), inset 0 1px 0 rgba(255,255,255,0.035)",
-                                }
-                          }
                         >
                           {!isUser && (
-                            <div
-                              className="pointer-events-none absolute inset-x-4 top-0 h-px"
-                              style={{
-                                background:
-                                  "linear-gradient(90deg, rgba(255,200,61,0.32), rgba(255,200,61,0.045), transparent)",
-                              }}
-                            />
+                            <div className="relative mt-1.5 h-9 w-9 shrink-0 rounded-full">
+                              <div
+                                className="absolute inset-[-5px] rounded-full"
+                                style={{
+                                  background:
+                                    "radial-gradient(circle, rgba(255,200,61,0.12) 0%, rgba(255,176,0,0.07) 42%, transparent 72%)",
+                                  boxShadow: "0 0 16px rgba(255,184,0,0.14)",
+                                }}
+                              />
+                              <div
+                                className="absolute inset-0 rounded-full border"
+                                style={{
+                                  borderColor: "rgba(255,200,61,0.42)",
+                                  background:
+                                    "linear-gradient(145deg, rgba(255,200,61,0.11), rgba(255,176,0,0.03) 42%, rgba(10,10,10,0.98))",
+                                  boxShadow:
+                                    "inset 0 0 10px rgba(255,200,61,0.1), 0 0 0 1px rgba(255,176,0,0.055)",
+                                }}
+                              />
+                              <div
+                                className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                                style={{
+                                  background: "rgba(255,200,61,0.82)",
+                                  boxShadow: "0 0 8px rgba(255,184,0,0.38)",
+                                }}
+                              />
+                            </div>
                           )}
-                          {message.text}
-                        </div>
 
-                        {isUser && (
-                          <div className="relative mt-1 h-8 w-8 shrink-0 overflow-hidden rounded-full">
-                            <div
-                              className="absolute inset-0 rounded-full border"
-                              style={{
-                                borderColor: "rgba(255,176,0,0.32)",
-                                background:
-                                  "linear-gradient(145deg, rgba(255,176,0,0.12), rgba(22,22,22,0.95))",
-                                boxShadow:
-                                  "0 0 13px rgba(255,176,0,0.08), inset 0 0 8px rgba(255,176,0,0.06)",
-                              }}
-                            />
-                            <div
-                              className="absolute inset-[5px] rounded-full"
-                              style={{
-                                background:
-                                  "linear-gradient(145deg, rgba(255,200,61,0.18), rgba(255,176,0,0.035), rgba(8,8,8,0.96))",
-                                boxShadow:
-                                  "inset 0 0 8px rgba(255,200,61,0.08)",
-                              }}
-                            />
+                          <div
+                            className={`relative whitespace-pre-wrap ${
+                              isUser
+                                ? "order-first max-w-[58%] rounded-[8px] rounded-tr-[3px] px-4 py-3 text-right text-[13px] leading-relaxed"
+                                : "max-w-[82%] rounded-[10px] rounded-tl-[3px] px-5 py-4 text-[15px] leading-7 sm:text-base"
+                            }`}
+                            style={
+                              isUser
+                                ? {
+                                    color: "rgba(255,200,61,0.74)",
+                                    background:
+                                      "linear-gradient(180deg, rgba(255,176,0,0.06), rgba(255,176,0,0.022))",
+                                    border: "1px solid rgba(255,176,0,0.105)",
+                                    boxShadow:
+                                      "0 10px 22px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.02)",
+                                  }
+                                : {
+                                    color: "rgba(229,231,235,0.89)",
+                                    background:
+                                      "linear-gradient(180deg, rgba(18,18,18,0.98), rgba(8,8,8,0.96))",
+                                    border: "1px solid rgba(255,176,0,0.15)",
+                                    borderLeft:
+                                      "2px solid rgba(255,200,61,0.44)",
+                                    boxShadow:
+                                      "0 18px 40px rgba(0,0,0,0.34), 0 0 20px rgba(255,176,0,0.04), inset 0 1px 0 rgba(255,255,255,0.035)",
+                                  }
+                            }
+                          >
+                            {!isUser && (
+                              <div
+                                className="pointer-events-none absolute inset-x-4 top-0 h-px"
+                                style={{
+                                  background:
+                                    "linear-gradient(90deg, rgba(255,200,61,0.32), rgba(255,200,61,0.045), transparent)",
+                                }}
+                              />
+                            )}
+                            {message.text}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-                <div ref={messageEndRef} />
+
+                          {isUser && (
+                            <div className="relative mt-1 h-8 w-8 shrink-0 overflow-hidden rounded-full">
+                              <div
+                                className="absolute inset-0 rounded-full border"
+                                style={{
+                                  borderColor: "rgba(255,176,0,0.32)",
+                                  background:
+                                    "linear-gradient(145deg, rgba(255,176,0,0.12), rgba(22,22,22,0.95))",
+                                  boxShadow:
+                                    "0 0 13px rgba(255,176,0,0.08), inset 0 0 8px rgba(255,176,0,0.06)",
+                                }}
+                              />
+                              <div
+                                className="absolute inset-[5px] rounded-full"
+                                style={{
+                                  background:
+                                    "linear-gradient(145deg, rgba(255,200,61,0.18), rgba(255,176,0,0.035), rgba(8,8,8,0.96))",
+                                  boxShadow:
+                                    "inset 0 0 8px rgba(255,200,61,0.08)",
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={messageEndRef} />
+                </div>
               </div>
             </div>
 
             <div
-              className="absolute left-0 right-0 flex items-center justify-center px-4"
+              className="absolute left-0 right-0 z-10 flex items-center justify-center px-4"
               style={{
                 top: "60%",
                 transform: "translateY(-50%)",
@@ -1149,7 +1191,7 @@ export default function Home() {
             </div>
 
             <div
-              className="absolute left-0 right-0 px-4 sm:px-8"
+              className="absolute left-0 right-0 z-20 px-4 sm:px-8"
               style={{
                 bottom: "max(env(safe-area-inset-bottom) + 1rem, 1.25rem)",
               }}
@@ -1159,7 +1201,7 @@ export default function Home() {
                   onSubmit={handleTypedSubmit}
                   className="flex items-center gap-2 border-b"
                   style={{
-                    borderColor: "rgba(255,176,0,0.28)",
+                    borderColor: "rgba(255,176,0,0.34)",
                   }}
                 >
                   <input
@@ -1168,7 +1210,7 @@ export default function Home() {
                     onChange={(event) => setTypedText(event.target.value)}
                     disabled={isProcessing || isRecording || isSpeaking}
                     placeholder="Type if voice is not right for this..."
-                    className="min-w-0 flex-1 bg-transparent py-3 text-sm text-gray-200 outline-none placeholder:text-gray-600 disabled:opacity-50"
+                    className="min-w-0 flex-1 bg-transparent py-3 text-sm text-gray-200 outline-none placeholder:text-[rgba(255,200,61,0.48)] disabled:opacity-50"
                   />
 
                   <button
@@ -1179,7 +1221,7 @@ export default function Home() {
                       isRecording ||
                       isSpeaking
                     }
-                    className="shrink-0 py-3 pl-3 text-sm font-medium transition-opacity disabled:opacity-30"
+                    className="shrink-0 py-3 pl-3 text-sm font-medium transition-opacity disabled:opacity-35"
                     style={{
                       color: "#ffc83d",
                       textShadow: "0 0 10px rgba(255,184,0,0.22)",
@@ -1198,21 +1240,21 @@ export default function Home() {
                       playUITone(720);
                       typingInputRef.current?.focus();
                     }}
-                    className="transition-opacity hover:opacity-90"
+                    className="transition-opacity hover:opacity-95"
                   >
                     Prefer typing?
                   </button>
 
                   <button
                     onClick={handleInterloopExplanation}
-                    className="transition-opacity hover:opacity-90"
+                    className="transition-opacity hover:opacity-95"
                   >
                     Who is Coreloop?
                   </button>
 
                   <button
                     onClick={handlePlaybackControl}
-                    className="transition-opacity hover:opacity-90"
+                    className="transition-opacity hover:opacity-95"
                     style={
                       isPlaybackActive
                         ? {
@@ -1235,7 +1277,7 @@ export default function Home() {
                 playUITone(720);
                 setMode("A");
               }}
-              className="absolute left-4 top-4 text-sm font-medium"
+              className="absolute left-4 top-4 text-sm font-medium transition-opacity hover:opacity-90"
               style={secondaryMangoStyle}
             >
               Back
