@@ -1196,8 +1196,8 @@ export default function Home() {
               <div
                 className="relative mx-auto"
                 style={{
-                  width: "min(400px, 62vw)",
-                  height: "min(400px, 62vw)",
+                  width: "min(400px, 85vw)",
+                  height: "min(400px, 85vw)",
                   maxWidth: "100%",
                 }}
                 onClick={handleTap}
