@@ -1008,40 +1008,35 @@ export default function Home() {
             />
 
             <div
-              className="absolute left-4 z-20 flex items-center gap-5"
+              className="absolute left-0 right-0 z-20 px-4 sm:px-8"
               style={{
                 top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
               }}
             >
-              <button
-                onClick={() => {
-                  playUITone(720);
-                  openInvestigation();
-                }}
-                className="text-sm font-medium transition-opacity hover:opacity-90"
-                style={secondaryMangoStyle}
-              >
-                Your Investigation
-              </button>
-            </div>
+              <div className="mx-auto w-full max-w-2xl flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    playUITone(720);
+                    openInvestigation();
+                  }}
+                  className="text-sm font-medium transition-opacity hover:opacity-90"
+                  style={secondaryMangoStyle}
+                >
+                  Your Investigation
+                </button>
 
-            <div
-              className="absolute right-4 z-20"
-              style={{
-                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
-              }}
-            >
-              <button
-                onClick={() => {
-                  playUITone(720);
-                  setIsSettingsOpen(true);
-                }}
-                className="text-sm font-medium transition-opacity hover:opacity-90"
-                style={softMangoControlStyle}
-                aria-label="Open your setup"
-              >
-                Your Setup
-              </button>
+                <button
+                  onClick={() => {
+                    playUITone(720);
+                    setIsSettingsOpen(true);
+                  }}
+                  className="text-sm font-medium transition-opacity hover:opacity-90"
+                  style={softMangoControlStyle}
+                  aria-label="Open your setup"
+                >
+                  Your Setup
+                </button>
+              </div>
             </div>
 
             <div
@@ -1049,7 +1044,7 @@ export default function Home() {
               className="absolute left-0 right-0 z-10 overflow-y-auto overflow-x-hidden px-5 sm:px-8"
               style={{
                 top: "max(env(safe-area-inset-top) + 3.25rem, 4rem)",
-                bottom: "50vh",
+                bottom: "55vh",
                 WebkitMaskImage:
                   "linear-gradient(to bottom, transparent 0%, black 9%, black 84%, rgba(0,0,0,0.72) 92%, transparent 100%)",
                 maskImage:
@@ -1196,8 +1191,8 @@ export default function Home() {
               <div
                 className="relative mx-auto"
                 style={{
-                  width: "min(400px, 85vw)",
-                  height: "min(400px, 85vw)",
+                  width: "min(520px, 85vw)",
+                  height: "min(520px, 85vw)",
                   maxWidth: "100%",
                 }}
                 onClick={handleTap}
@@ -1215,7 +1210,7 @@ export default function Home() {
 
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <span
-                    className="text-[15px] font-medium"
+                    className="text-[18px] font-medium"
                     style={
                       isSpeaking
                         ? {
@@ -1241,11 +1236,12 @@ export default function Home() {
                         style={{
                           textAlign: "center",
                           width: "260px",
-                          lineHeight: "1.3",
+                          lineHeight: "1.25",
                           display: "flex",
                           flexDirection: "column",
                           alignItems: "center",
                           justifyContent: "center",
+                          transform: "translateY(-12%)",
                         }}
                       >
                         <div>Listening…</div>
@@ -1258,15 +1254,16 @@ export default function Home() {
                         style={{
                           textAlign: "center",
                           width: "260px",
-                          lineHeight: "1.3",
+                          lineHeight: "1.25",
                           display: "flex",
                           flexDirection: "column",
                           alignItems: "center",
                           justifyContent: "center",
+                          transform: "translateY(-12%)",
                         }}
                       >
                         <div>Tap to…</div>
-                        <div style={{ fontSize: "0.9em", opacity: 0.9 }}>
+                        <div style={{ fontSize: "0.9em", opacity: 0.85 }}>
                           {hasExchanged
                             ? "Continue your investigation"
                             : "Start your investigation"}
