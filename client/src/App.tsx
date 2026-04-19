@@ -22,6 +22,7 @@ function Router() {
 function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [authError, setAuthError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -109,6 +110,7 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
       </div>
 
       <form
+        autoComplete="on"
         onSubmit={(e) => {
           e.preventDefault();
           submitAuth("login");
@@ -126,7 +128,7 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="Email"
-          autoComplete="email"
+          autoComplete="username"
           style={{
             backgroundColor: "transparent",
             border: "1px solid #333",
@@ -143,7 +145,9 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Password"
-          autoComplete="current-password"
+          autoComplete={
+            authMode === "login" ? "current-password" : "new-password"
+          }
           style={{
             backgroundColor: "transparent",
             border: "1px solid #333",
@@ -171,6 +175,7 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
         <button
           type="submit"
           disabled={isSubmitting}
+          onClick={() => setAuthMode("login")}
           style={{
             backgroundColor: "transparent",
             border: "1px solid #555",
@@ -199,7 +204,10 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
         <button
           type="button"
           disabled={isSubmitting}
-          onClick={() => submitAuth("signup")}
+          onClick={() => {
+            setAuthMode("signup");
+            submitAuth("signup");
+          }}
           style={{
             backgroundColor: "transparent",
             border: "1px solid #333",
