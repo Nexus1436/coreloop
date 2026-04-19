@@ -16,7 +16,7 @@ import OpenAI from "openai";
 import { ElevenLabsClient } from "elevenlabs";
 import { toFile } from "openai/uploads";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { eq, asc, desc, and, ne, isNull } from "drizzle-orm";
+import { eq, asc, desc, and, ne, isNull, sql } from "drizzle-orm";
 
 import { db } from "./db";
 
@@ -1720,6 +1720,21 @@ export async function registerRoutes(
 
       await ensureUserRecord(userId, authUser);
 
+      const existingMemory = await getMemory(userId);
+      const existingMemoryWithPreferences =
+        existingMemory as typeof existingMemory & {
+          preferences?: {
+            voice?: unknown;
+          };
+        };
+      const existingVoice =
+        typeof existingMemoryWithPreferences.preferences?.voice === "string" &&
+        existingMemoryWithPreferences.preferences.voice in
+          INTERLOOP_SETTINGS_VOICE_IDS
+          ? (existingMemoryWithPreferences.preferences
+              .voice as PersistedInterloopVoice)
+          : null;
+
       const body = req.body ?? {};
 
       const name = normalizeStoredFirstName(body.name);
@@ -1746,6 +1761,19 @@ export async function registerRoutes(
           email: authUser?.claims?.email ?? null,
         })
         .where(eq(users.id, userId));
+
+      if (existingVoice !== voice) {
+        try {
+          await db.execute(
+            sql`
+              INSERT INTO voice_change_events (user_id, from_voice, to_voice)
+              VALUES (${userId}, ${existingVoice}, ${voice})
+            `,
+          );
+        } catch (err) {
+          console.error("Failed to log voice change event:", err);
+        }
+      }
 
       await updateMemory(userId, (memory) => {
         memory.identity.name = name;

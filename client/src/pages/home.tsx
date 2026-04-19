@@ -1014,7 +1014,10 @@ export default function Home() {
               }}
             >
               <button
-                onClick={openInvestigation}
+                onClick={() => {
+                  playUITone(720);
+                  openInvestigation();
+                }}
                 className="text-sm font-medium transition-opacity hover:opacity-90"
                 style={secondaryMangoStyle}
               >
@@ -1029,7 +1032,10 @@ export default function Home() {
               }}
             >
               <button
-                onClick={() => setIsSettingsOpen(true)}
+                onClick={() => {
+                  playUITone(720);
+                  setIsSettingsOpen(true);
+                }}
                 className="text-sm font-medium transition-opacity hover:opacity-90"
                 style={softMangoControlStyle}
                 aria-label="Open your setup"
@@ -1213,10 +1219,14 @@ export default function Home() {
                     style={
                       isSpeaking
                         ? {
+                            maxWidth: "75%",
+                            textAlign: "center",
                             color: "#ffd15a",
                             textShadow: "0 0 16px rgba(255,184,0,0.46)",
                           }
                         : {
+                            maxWidth: "75%",
+                            textAlign: "center",
                             color: "#ffd15a",
                             textShadow: "0 0 12px rgba(255,184,0,0.32)",
                           }
@@ -1227,14 +1237,34 @@ export default function Home() {
                     ) : isProcessing ? (
                       "Thinking..."
                     ) : isRecording ? (
-                      <div style={{ textAlign: "center" }}>
+                      <div
+                        style={{
+                          textAlign: "center",
+                          width: "260px",
+                          lineHeight: "1.3",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
                         <div>Listening…</div>
                         <div style={{ fontSize: "0.85em", opacity: 0.8 }}>
                           Tap to send
                         </div>
                       </div>
                     ) : (
-                      <div style={{ textAlign: "center" }}>
+                      <div
+                        style={{
+                          textAlign: "center",
+                          width: "260px",
+                          lineHeight: "1.3",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
                         <div>Tap to…</div>
                         <div style={{ fontSize: "0.9em", opacity: 0.9 }}>
                           {hasExchanged
