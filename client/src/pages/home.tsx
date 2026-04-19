@@ -41,10 +41,10 @@ type DashboardData = {
 const INTERLOOP_SETTINGS_KEY = "interloopSettings";
 
 const VOICE_AVATAR_MAP = {
-  male_coach: "/voices/male_coach.png",
-  male_pt: "/voices/male_pt.png",
-  female_pilates: "/voices/female_pilates.png",
-  female_yoga: "/voices/female_yoga.png",
+  male_coach: "/voice-avatars/male_coach.png",
+  male_pt: "/voice-avatars/male_pt.png",
+  female_pilates: "/voice-avatars/female_pilates.png",
+  female_yoga: "/voice-avatars/female_yoga.png",
 } as const;
 
 const defaultSettings: InterloopSettingsValues = {

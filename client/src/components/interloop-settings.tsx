@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type InterloopVoiceOption =
   | "female_yoga"
@@ -30,22 +30,26 @@ const VOICE_OPTIONS = [
   {
     key: "male_coach",
     label: "Ethan",
-    image: "/voices/male_coach.png",
+    image: "/voice-avatars/male_coach.png",
+    preview: "/voice-previews/ethan_preview.mp3",
   },
   {
     key: "male_pt",
     label: "Marcus",
-    image: "/voices/male_pt.png",
+    image: "/voice-avatars/male_pt.png",
+    preview: "/voice-previews/marcus_preview.mp3",
   },
   {
     key: "female_pilates",
     label: "Sofia",
-    image: "/voices/female_pilates.png",
+    image: "/voice-avatars/female_pilates.png",
+    preview: "/voice-previews/sofia_preview.mp3",
   },
   {
     key: "female_yoga",
     label: "Aria",
-    image: "/voices/female_yoga.png",
+    image: "/voice-avatars/female_yoga.png",
+    preview: "/voice-previews/aria_preview.mp3",
   },
 ] as const;
 
@@ -56,10 +60,20 @@ export function InterloopSettings({
   onClose,
 }: InterloopSettingsProps) {
   const [form, setForm] = useState<InterloopSettingsValues>(initialValues);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     setForm(initialValues);
   }, [initialValues]);
+
+  useEffect(() => {
+    return () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.currentTime = 0;
+      }
+    };
+  }, []);
 
   const isOnboarding = mode === "onboarding";
 
@@ -71,6 +85,27 @@ export function InterloopSettings({
       ...prev,
       [key]: value,
     }));
+  };
+
+  const playVoicePreview = (preview: string) => {
+    console.log("Playing:", preview);
+
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.currentTime = 0;
+    }
+
+    const audio = new Audio(preview);
+    previewAudioRef.current = audio;
+
+    audio.play().catch((err) => {
+      console.error("Voice preview failed:", err);
+    });
+  };
+
+  const handleVoiceSelect = (voice: InterloopVoiceOption, preview: string) => {
+    updateField("voice", voice);
+    playVoicePreview(preview);
   };
 
   const handleSave = () => {
@@ -226,7 +261,9 @@ export function InterloopSettings({
                     <button
                       key={option.key}
                       type="button"
-                      onClick={() => updateField("voice", option.key)}
+                      onClick={() =>
+                        handleVoiceSelect(option.key, option.preview)
+                      }
                       className={[
                         "group flex min-h-[154px] flex-col items-center justify-start rounded-2xl px-3 py-3 text-center outline-none transition duration-200",
                         selected ? "scale-[1.035]" : "hover:scale-[1.01]",
