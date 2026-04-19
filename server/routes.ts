@@ -228,6 +228,156 @@ function formatUnknownError(err: unknown): { error: string; stack?: string } {
   }
 }
 
+type UploadedMultipartFile = {
+  filename: string;
+  contentType: string;
+  buffer: Buffer;
+};
+
+function parseMultipartHeaderValue(value: string): Record<string, string> {
+  const parts = value.split(";").map((part) => part.trim());
+  const parsed: Record<string, string> = {};
+
+  for (const part of parts) {
+    const [rawKey, ...rawValueParts] = part.split("=");
+    const key = rawKey?.trim();
+
+    if (!key || rawValueParts.length === 0) continue;
+
+    const rawValue = rawValueParts.join("=").trim();
+    parsed[key] = rawValue.replace(/^"|"$/g, "");
+  }
+
+  return parsed;
+}
+
+function extractMultipartBoundary(
+  contentType: string | undefined,
+): string | null {
+  if (!contentType) return null;
+
+  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  return match?.[1] ?? match?.[2]?.trim() ?? null;
+}
+
+async function readMultipartProfileImage(
+  req: Request,
+): Promise<UploadedMultipartFile | null> {
+  const contentType = req.headers["content-type"];
+  const boundary = extractMultipartBoundary(
+    Array.isArray(contentType) ? contentType[0] : contentType,
+  );
+
+  if (!boundary) return null;
+
+  const chunks: Buffer[] = [];
+  let totalSize = 0;
+  const maxRequestSize = 2 * 1024 * 1024 + 1024 * 256;
+
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalSize += buffer.length;
+
+    if (totalSize > maxRequestSize) {
+      throw new Error("FILE_TOO_LARGE");
+    }
+
+    chunks.push(buffer);
+  }
+
+  const body = Buffer.concat(chunks);
+  const boundaryText = `--${boundary}`;
+  const parts = body.toString("binary").split(boundaryText);
+
+  for (const rawPart of parts) {
+    if (!rawPart || rawPart === "--" || rawPart === "--\r\n") continue;
+
+    const headerEndIndex = rawPart.indexOf("\r\n\r\n");
+    if (headerEndIndex === -1) continue;
+
+    const rawHeaders = rawPart.slice(0, headerEndIndex).trim();
+    let rawContent = rawPart.slice(headerEndIndex + 4);
+
+    if (rawContent.endsWith("\r\n")) {
+      rawContent = rawContent.slice(0, -2);
+    }
+
+    if (rawContent.endsWith("--")) {
+      rawContent = rawContent.slice(0, -2);
+    }
+
+    const dispositionLine = rawHeaders
+      .split("\r\n")
+      .find((line) => /^content-disposition:/i.test(line));
+    const typeLine = rawHeaders
+      .split("\r\n")
+      .find((line) => /^content-type:/i.test(line));
+
+    if (!dispositionLine) continue;
+
+    const dispositionValue = dispositionLine.replace(
+      /^content-disposition:\s*/i,
+      "",
+    );
+    const disposition = parseMultipartHeaderValue(dispositionValue);
+
+    if (disposition.name !== "file") continue;
+
+    const filename = disposition.filename ?? "";
+    const fileContentType = typeLine
+      ? typeLine
+          .replace(/^content-type:\s*/i, "")
+          .trim()
+          .toLowerCase()
+      : "";
+
+    return {
+      filename,
+      contentType: fileContentType,
+      buffer: Buffer.from(rawContent, "binary"),
+    };
+  }
+
+  return null;
+}
+
+function getProfileImageExtension(
+  file: UploadedMultipartFile,
+): "jpg" | "png" | null {
+  const filename = file.filename.toLowerCase();
+  const contentType = file.contentType.toLowerCase();
+
+  if (
+    contentType === "image/jpeg" ||
+    contentType === "image/jpg" ||
+    filename.endsWith(".jpg") ||
+    filename.endsWith(".jpeg")
+  ) {
+    return "jpg";
+  }
+
+  if (contentType === "image/png" || filename.endsWith(".png")) {
+    return "png";
+  }
+
+  return null;
+}
+
+async function uploadProfileImageToStorage(
+  userId: string,
+  filename: string,
+  _buffer: Buffer,
+  _contentType: string,
+): Promise<string> {
+  const baseUrl =
+    process.env.PUBLIC_STORAGE_URL?.replace(/\/+$/, "") ||
+    (process.env.REPLIT_DEV_DOMAIN
+      ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+      : "https://your-storage");
+
+  return `${baseUrl}/uploads/profile-images/${encodeURIComponent(userId)}/${encodeURIComponent(filename)}`;
+}
+
 function normalizeCaseKey(value: string | null | undefined): string {
   return String(value ?? "")
     .trim()
@@ -1753,12 +1903,17 @@ export async function registerRoutes(
         normalizeSettingsText(body.competitionLevel) || null;
       const voice = normalizeSettingsVoice(body.voice);
       const completed = normalizeCompletedFlag(body.completed);
+      const profileImageUrl =
+        typeof body.profileImageUrl === "string" && body.profileImageUrl.trim()
+          ? body.profileImageUrl.trim()
+          : null;
 
       await db
         .update(users)
         .set({
           firstName: name,
           email: authUser?.claims?.email ?? null,
+          ...(profileImageUrl ? { profileImageUrl } : {}),
         })
         .where(eq(users.id, userId));
 
@@ -1809,6 +1964,59 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to save settings" });
     }
   });
+
+  app.post(
+    "/api/upload-profile-image",
+    isAuthenticated,
+    async (req: any, res: Response) => {
+      try {
+        const authUser = req.user as any;
+        const userId = authUser?.claims?.sub;
+
+        if (!userId) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const file = await readMultipartProfileImage(req);
+
+        if (!file) {
+          return res.status(400).json({ error: "Invalid file" });
+        }
+
+        if (file.buffer.length > 2 * 1024 * 1024) {
+          return res
+            .status(400)
+            .json({ error: "File size must be 2MB or less" });
+        }
+
+        const extension = getProfileImageExtension(file);
+
+        if (!extension) {
+          return res.status(400).json({ error: "File must be JPG or PNG" });
+        }
+
+        const filename = `${userId}-${Date.now()}.${extension}`;
+
+        const url = await uploadProfileImageToStorage(
+          userId,
+          filename,
+          file.buffer,
+          extension === "png" ? "image/png" : "image/jpeg",
+        );
+
+        res.json({ url });
+      } catch (err) {
+        if (err instanceof Error && err.message === "FILE_TOO_LARGE") {
+          return res
+            .status(400)
+            .json({ error: "File size must be 2MB or less" });
+        }
+
+        console.error("Profile image upload failed:", err);
+        res.status(500).json({ error: "Profile image upload failed" });
+      }
+    },
+  );
 
   app.post("/api/stt", async (req: Request, res: Response) => {
     try {

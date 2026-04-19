@@ -58,6 +58,7 @@ const defaultSettings: InterloopSettingsValues = {
   competitionLevel: "",
   voice: "male_coach",
   completed: false,
+  profileImageUrl: "",
 };
 
 const defaultDashboardData: DashboardData = {
@@ -297,6 +298,7 @@ export default function Home() {
         const nextSettings: InterloopSettingsValues = {
           ...defaultSettings,
           ...data,
+          profileImageUrl: data?.profileImageUrl ?? "",
           completed: data?.completed === true,
         };
 
@@ -324,6 +326,7 @@ export default function Home() {
           const nextSettings: InterloopSettingsValues = {
             ...defaultSettings,
             ...parsed,
+            profileImageUrl: parsed.profileImageUrl ?? "",
             completed: parsed.completed === true,
           };
 
@@ -494,6 +497,7 @@ export default function Home() {
     async (values: InterloopSettingsValues) => {
       const nextSettings = {
         ...values,
+        profileImageUrl: values.profileImageUrl ?? "",
         completed: true,
       };
 
@@ -512,6 +516,8 @@ export default function Home() {
       const savedSettings: InterloopSettingsValues = {
         ...defaultSettings,
         ...data,
+        profileImageUrl:
+          nextSettings.profileImageUrl ?? data?.profileImageUrl ?? "",
         completed: data?.completed === true,
       };
 
@@ -1151,25 +1157,35 @@ export default function Home() {
 
                           {isUser && (
                             <div className="relative mt-1 h-8 w-8 shrink-0 overflow-hidden rounded-full">
-                              <div
-                                className="absolute inset-0 rounded-full border"
-                                style={{
-                                  borderColor: "rgba(255,176,0,0.32)",
-                                  background:
-                                    "linear-gradient(145deg, rgba(255,176,0,0.12), rgba(22,22,22,0.95))",
-                                  boxShadow:
-                                    "0 0 13px rgba(255,176,0,0.08), inset 0 0 8px rgba(255,176,0,0.06)",
-                                }}
-                              />
-                              <div
-                                className="absolute inset-[5px] rounded-full"
-                                style={{
-                                  background:
-                                    "linear-gradient(145deg, rgba(255,200,61,0.18), rgba(255,176,0,0.035), rgba(8,8,8,0.96))",
-                                  boxShadow:
-                                    "inset 0 0 8px rgba(255,200,61,0.08)",
-                                }}
-                              />
+                              {settingsData.profileImageUrl ? (
+                                <img
+                                  src={settingsData.profileImageUrl}
+                                  alt="User"
+                                  className="h-full w-full object-cover rounded-full"
+                                />
+                              ) : (
+                                <>
+                                  <div
+                                    className="absolute inset-0 rounded-full border"
+                                    style={{
+                                      borderColor: "rgba(255,176,0,0.32)",
+                                      background:
+                                        "linear-gradient(145deg, rgba(255,176,0,0.12), rgba(22,22,22,0.95))",
+                                      boxShadow:
+                                        "0 0 13px rgba(255,176,0,0.08), inset 0 0 8px rgba(255,176,0,0.06)",
+                                    }}
+                                  />
+                                  <div
+                                    className="absolute inset-[5px] rounded-full"
+                                    style={{
+                                      background:
+                                        "linear-gradient(145deg, rgba(255,200,61,0.18), rgba(255,176,0,0.035), rgba(8,8,8,0.96))",
+                                      boxShadow:
+                                        "inset 0 0 8px rgba(255,200,61,0.08)",
+                                    }}
+                                  />
+                                </>
+                              )}
                             </div>
                           )}
                         </div>

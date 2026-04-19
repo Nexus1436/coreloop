@@ -17,6 +17,7 @@ export interface InterloopSettingsValues {
   competitionLevel: string;
   voice: InterloopVoiceOption;
   completed: boolean;
+  profileImageUrl?: string;
 }
 
 interface InterloopSettingsProps {
@@ -61,6 +62,7 @@ export function InterloopSettings({
 }: InterloopSettingsProps) {
   const [form, setForm] = useState<InterloopSettingsValues>(initialValues);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setForm(initialValues);
@@ -108,10 +110,34 @@ export function InterloopSettings({
     playVoicePreview(preview);
   };
 
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const resp = await fetch("/api/upload-profile-image", {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+    });
+
+    if (!resp.ok) return;
+
+    const data = await resp.json();
+
+    setForm((prev) => ({
+      ...prev,
+      profileImageUrl: data.url,
+    }));
+  };
+
   const handleSave = () => {
     onSave({
       ...form,
       completed: true,
+      profileImageUrl: form.profileImageUrl,
     });
   };
 
@@ -130,6 +156,14 @@ export function InterloopSettings({
         }}
       >
         <div className="mx-auto w-full max-w-xl rounded-2xl border border-[#7a4a22]/60 bg-[#080604] p-6 shadow-[0_0_0_1px_rgba(255,178,87,0.06),0_0_44px_rgba(255,145,38,0.18),inset_0_1px_0_rgba(255,213,158,0.08)] sm:p-8">
+          <input
+            type="file"
+            accept="image/png, image/jpeg"
+            ref={fileInputRef}
+            style={{ display: "none" }}
+            onChange={handleFileChange}
+          />
+
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-medium tracking-[0.01em] text-[#ffc46f] drop-shadow-[0_0_18px_rgba(255,169,67,0.28)]">
@@ -188,6 +222,17 @@ export function InterloopSettings({
                 className={inputClassName}
               />
             </label>
+
+            <div className="flex flex-col gap-2 sm:col-span-2">
+              <span className={labelClassName}>Profile photo</span>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-fit rounded-full border border-[#4a3420] px-5 py-2.5 text-sm font-medium text-[#d4ad7a] transition hover:border-[#f7a43b]/70 hover:text-[#ffc46f] hover:shadow-[0_0_18px_rgba(247,164,59,0.12)]"
+              >
+                Upload Photo
+              </button>
+            </div>
 
             <label className="flex flex-col gap-2 sm:col-span-2">
               <span className={labelClassName}>Primary activity / sport</span>
