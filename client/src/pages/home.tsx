@@ -1205,12 +1205,7 @@ export default function Home() {
               }}
             >
               <div
-                className="relative mx-auto"
-                style={{
-                  width: "min(520px, 85vw)",
-                  height: "min(520px, 85vw)",
-                  maxWidth: "100%",
-                }}
+                className="relative mx-auto h-[min(780px,128vw)] w-[min(780px,128vw)] max-w-full sm:h-[min(520px,85vw)] sm:w-[min(520px,85vw)]"
                 onClick={handleTap}
               >
                 <div className="absolute inset-0 flex items-center justify-center">
