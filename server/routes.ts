@@ -164,6 +164,127 @@ function buildPersistedSettings(
   };
 }
 
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value == null) return false;
+
+  if (typeof value === "string") {
+    return value.trim() !== "";
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+
+  if (typeof value === "boolean") {
+    return value === true;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => hasMeaningfulValue(item));
+  }
+
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some((item) =>
+      hasMeaningfulValue(item),
+    );
+  }
+
+  return false;
+}
+
+function hasDurableMemoryEvidence(
+  memory: Awaited<ReturnType<typeof getMemory>>,
+): boolean {
+  const memoryRecord = memory as unknown as Record<string, unknown>;
+
+  return Object.entries(memoryRecord).some(([key, value]) => {
+    if (key === "identity") return false;
+    if (key === "sportContext") return false;
+    if (key === "preferences") return false;
+
+    return hasMeaningfulValue(value);
+  });
+}
+
+function hasMeaningfulConversationHistory(
+  storedMessages: Array<{ role?: string | null; content?: string | null }>,
+): boolean {
+  const meaningfulMessages = storedMessages.filter((message) => {
+    const content = String(message.content ?? "").trim();
+    if (!content) return false;
+    if (content.length < 20) return false;
+
+    return message.role === "user" || message.role === "assistant";
+  });
+
+  const hasAssistantContext = meaningfulMessages.some(
+    (message) => message.role === "assistant",
+  );
+
+  return meaningfulMessages.length >= 3 || hasAssistantContext;
+}
+
+function buildSettingsContextBlock(
+  settings: PersistedInterloopSettings,
+): string {
+  const lines: string[] = [];
+
+  if (settings.primaryActivity) {
+    lines.push(`Primary activity: ${settings.primaryActivity}`);
+  }
+
+  if (settings.activityLevel) {
+    lines.push(`Activity level: ${settings.activityLevel}`);
+  }
+
+  if (settings.competitionLevel) {
+    lines.push(`Competition level: ${settings.competitionLevel}`);
+  }
+
+  if (settings.dominantHand) {
+    lines.push(`Dominant hand: ${settings.dominantHand}`);
+  }
+
+  const bodyProfile = [
+    settings.age ? `age ${settings.age}` : "",
+    settings.height ? `height ${settings.height}` : "",
+    settings.weight ? `weight ${settings.weight}` : "",
+  ].filter(Boolean);
+
+  if (bodyProfile.length > 0) {
+    lines.push(`Body profile: ${bodyProfile.join(", ")}`);
+  }
+
+  if (lines.length === 0) return "";
+
+  return `
+=== SETTINGS INITIALIZATION CONTEXT ===
+This is structured setup context for a true new user.
+
+Use these settings only to interpret the user's first signals and shape early mechanism framing.
+Do not treat these settings as discovered memory, case evidence, retrieval evidence, or confirmed findings.
+Do not create or imply a case from settings alone.
+
+${lines.join("\n")}
+`;
+}
+
+function isTrueNewUserForInitialization({
+  resolvedActiveCase,
+  memory,
+  storedMessages,
+}: {
+  resolvedActiveCase: unknown;
+  memory: Awaited<ReturnType<typeof getMemory>>;
+  storedMessages: Array<{ role?: string | null; content?: string | null }>;
+}): boolean {
+  if (resolvedActiveCase) return false;
+  if (hasDurableMemoryEvidence(memory)) return false;
+  if (hasMeaningfulConversationHistory(storedMessages)) return false;
+
+  return true;
+}
+
 async function ensureUserRecord(userId: string, authUser: any) {
   let [existingUser] = await db
     .select()
@@ -2663,6 +2784,7 @@ ${memoryBlock}
         .from(messages)
         .where(eq(messages.conversationId, convoId))
         .orderBy(asc(messages.createdAt));
+      const storedMessagesBeforeCurrentTurn = previous;
       let storedFirstName = dbFirstName;
 
       await db.insert(messages).values({
@@ -2855,6 +2977,16 @@ ${memoryBlock}
       const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
       const runtimePatternBlock = await getDominantRuntimePatternBlock(userId);
       const continuityBlock = activeHypothesisBlock || runtimePatternBlock;
+      const settingsContextBlock = buildSettingsContextBlock(
+        buildPersistedSettings(existingUser?.firstName, memory),
+      );
+      const shouldUseSettingsInitialization =
+        !isCaseReview &&
+        isTrueNewUserForInitialization({
+          resolvedActiveCase,
+          memory,
+          storedMessages: storedMessagesBeforeCurrentTurn,
+        });
 
       let identityBlock = "";
 
@@ -3021,7 +3153,25 @@ ${ACTIVE_PROMPT}
         },
         {
           role: "system",
-          content: `
+          content: shouldUseSettingsInitialization
+            ? `
+Execution context for this conversation:
+
+${identityBlock}
+
+${settingsContextBlock}
+
+${currentConversationSummaryBlock}
+
+${patternPriorityBlock}
+
+${endingStateBlock}
+
+${userSideClosureBlock}
+
+${toneGuidanceBlock}
+          `.trim()
+            : `
 Execution context for this conversation:
 
 ${identityBlock}

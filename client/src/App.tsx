@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -16,37 +16,34 @@ function Router() {
 }
 
 /* =====================================================
-   LANDING PAGE — shown to unauthenticated users
+   LOGIN PAGE — shown to unauthenticated users
 ===================================================== */
 
-function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
+function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) {
+  const [, setLocation] = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [authError, setAuthError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const submitAuth = async (mode: "login" | "signup") => {
+  const submitLogin = async () => {
     if (isSubmitting) return;
 
     setAuthError("");
     setIsSubmitting(true);
 
     try {
-      const response = await fetch(
-        mode === "login" ? "/api/auth/login" : "/api/auth/signup",
-        {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            email,
-            password,
-          }),
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      });
 
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
@@ -113,7 +110,7 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
         autoComplete="on"
         onSubmit={(e) => {
           e.preventDefault();
-          submitAuth("login");
+          submitLogin();
         }}
         style={{
           width: "100%",
@@ -145,9 +142,7 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Password"
-          autoComplete={
-            authMode === "login" ? "current-password" : "new-password"
-          }
+          autoComplete="current-password"
           style={{
             backgroundColor: "transparent",
             border: "1px solid #333",
@@ -175,7 +170,6 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
         <button
           type="submit"
           disabled={isSubmitting}
-          onClick={() => setAuthMode("login")}
           style={{
             backgroundColor: "transparent",
             border: "1px solid #555",
@@ -204,10 +198,7 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
         <button
           type="button"
           disabled={isSubmitting}
-          onClick={() => {
-            setAuthMode("signup");
-            submitAuth("signup");
-          }}
+          onClick={() => setLocation("/signup")}
           style={{
             backgroundColor: "transparent",
             border: "1px solid #333",
@@ -224,6 +215,236 @@ function LandingPage({ onAuthenticated }: { onAuthenticated: () => void }) {
         </button>
       </form>
     </div>
+  );
+}
+
+/* =====================================================
+   CREATE ACCOUNT PAGE — shown to unauthenticated users
+===================================================== */
+
+function SignupPage({ onAuthenticated }: { onAuthenticated: () => void }) {
+  const [, setLocation] = useLocation();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const submitSignup = async () => {
+    if (isSubmitting) return;
+
+    setAuthError("");
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch("/api/auth/signup", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        setAuthError(errorBody?.message ?? "Authentication failed");
+        return;
+      }
+
+      const userResponse = await fetch("/api/auth/user", {
+        credentials: "include",
+      });
+
+      if (!userResponse.ok) {
+        const errorBody = await userResponse.json().catch(() => null);
+        setAuthError(errorBody?.message ?? "Unable to verify session");
+        return;
+      }
+
+      onAuthenticated();
+    } catch (_error) {
+      setAuthError("Authentication failed");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        width: "100%",
+        backgroundColor: "#000",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "32px",
+        padding: "24px",
+      }}
+    >
+      <div style={{ textAlign: "center" }}>
+        <h1
+          style={{
+            color: "#fff",
+            fontSize: "2rem",
+            fontWeight: 300,
+            letterSpacing: "0.15em",
+            marginBottom: "12px",
+          }}
+        >
+          Coreloop
+        </h1>
+        <p
+          style={{
+            color: "#666",
+            fontSize: "0.95rem",
+            letterSpacing: "0.05em",
+          }}
+        >
+          Movement intelligence. Built over time.
+        </p>
+      </div>
+
+      <form
+        autoComplete="on"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submitSignup();
+        }}
+        style={{
+          width: "100%",
+          maxWidth: "340px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+        }}
+      >
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Email"
+          autoComplete="email"
+          style={{
+            backgroundColor: "transparent",
+            border: "1px solid #333",
+            color: "#eee",
+            padding: "12px 14px",
+            fontSize: "0.95rem",
+            borderRadius: "2px",
+            outline: "none",
+          }}
+        />
+
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          autoComplete="new-password"
+          style={{
+            backgroundColor: "transparent",
+            border: "1px solid #333",
+            color: "#eee",
+            padding: "12px 14px",
+            fontSize: "0.95rem",
+            borderRadius: "2px",
+            outline: "none",
+          }}
+        />
+
+        {authError && (
+          <div
+            style={{
+              color: "#ff7a7a",
+              fontSize: "0.85rem",
+              lineHeight: 1.4,
+              textAlign: "center",
+            }}
+          >
+            {authError}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          style={{
+            backgroundColor: "transparent",
+            border: "1px solid #555",
+            color: "#ccc",
+            padding: "12px 24px",
+            fontSize: "0.9rem",
+            letterSpacing: "0.1em",
+            cursor: isSubmitting ? "default" : "pointer",
+            borderRadius: "2px",
+            opacity: isSubmitting ? 0.6 : 1,
+            transition: "all 0.2s ease",
+          }}
+          onMouseEnter={(e) => {
+            if (isSubmitting) return;
+            (e.target as HTMLButtonElement).style.borderColor = "#ffc83d";
+            (e.target as HTMLButtonElement).style.color = "#ffc83d";
+          }}
+          onMouseLeave={(e) => {
+            (e.target as HTMLButtonElement).style.borderColor = "#555";
+            (e.target as HTMLButtonElement).style.color = "#ccc";
+          }}
+        >
+          Create Account
+        </button>
+
+        <button
+          type="button"
+          disabled={isSubmitting}
+          onClick={() => setLocation("/login")}
+          style={{
+            backgroundColor: "transparent",
+            border: "1px solid #333",
+            color: "#999",
+            padding: "12px 24px",
+            fontSize: "0.85rem",
+            letterSpacing: "0.08em",
+            cursor: isSubmitting ? "default" : "pointer",
+            borderRadius: "2px",
+            opacity: isSubmitting ? 0.6 : 1,
+          }}
+        >
+          Log In
+        </button>
+      </form>
+    </div>
+  );
+}
+
+/* =====================================================
+   AUTH ROUTER — unauthenticated routes only
+===================================================== */
+
+function AuthRouter({ onAuthenticated }: { onAuthenticated: () => void }) {
+  const [, setLocation] = useLocation();
+
+  const handleAuthenticated = () => {
+    setLocation("/");
+    onAuthenticated();
+  };
+
+  return (
+    <Switch>
+      <Route path="/login">
+        <LoginPage onAuthenticated={handleAuthenticated} />
+      </Route>
+      <Route path="/signup">
+        <SignupPage onAuthenticated={handleAuthenticated} />
+      </Route>
+      <Route>
+        <LoginPage onAuthenticated={handleAuthenticated} />
+      </Route>
+    </Switch>
   );
 }
 
@@ -258,11 +479,11 @@ function App() {
     );
   }
 
-  // Not logged in — show landing page, block app access
+  // Not logged in — show auth routes, block app access
   if (isLoggedIn === false) {
     return (
       <QueryClientProvider client={queryClient}>
-        <LandingPage onAuthenticated={() => setIsLoggedIn(true)} />
+        <AuthRouter onAuthenticated={() => setIsLoggedIn(true)} />
         <Toaster />
       </QueryClientProvider>
     );

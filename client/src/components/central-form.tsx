@@ -124,8 +124,8 @@ export function CentralForm({
           <motion.div
             className="absolute bg-[rgba(58,58,58,1)] rounded-full"
             style={{
-              width: "52%",
-              height: "52%",
+              width: "86%",
+              height: "86%",
               scale: audioBoost,
               transformOrigin: "center center",
             }}
@@ -160,8 +160,8 @@ export function CentralForm({
           <motion.div
             className="absolute bg-[rgba(58,58,58,1)] rounded-full"
             style={{
-              width: "52%",
-              height: "52%",
+              width: "86%",
+              height: "86%",
               scale: audioBoost,
               transformOrigin: "center center",
             }}
@@ -197,8 +197,8 @@ export function CentralForm({
           <motion.div
             className="absolute bg-[rgba(58,58,58,1)] rounded-full"
             style={{
-              width: "52%",
-              height: "52%",
+              width: "86%",
+              height: "86%",
               scale: audioBoost,
               transformOrigin: "center center",
             }}
@@ -233,12 +233,12 @@ export function CentralForm({
         </div>
       </div>
 
-      <div className="relative z-10 w-[52%] h-[52%] flex items-center justify-center">
+      <div className="relative z-10 w-[68%] h-[68%] flex items-center justify-center translate-x-[2%]">
         <div className="flex items-center justify-center w-full h-full">
           <img
             src="/logo.png"
             alt="Interloop Logo"
-            className="w-full h-full object-cover object-center"
+            className="w-full h-full object-contain object-center"
             style={{
               opacity: 0.94,
               filter: "url(#pressed-charcoal)",

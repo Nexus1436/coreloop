@@ -1205,7 +1205,7 @@ export default function Home() {
               }}
             >
               <div
-                className="relative mx-auto h-[min(720px,100vw)] w-[min(720px,100vw)] sm:h-[min(520px,85vw)] sm:w-[min(520px,85vw)]"
+                className="relative mx-auto h-[min(780px,92vw)] w-[min(780px,92vw)] sm:h-[min(580px,92vw)] sm:w-[min(580px,92vw)]"
                 onClick={handleTap}
               >
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -1219,7 +1219,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="absolute inset-0 flex items-center justify-center px-10 sm:px-14 pointer-events-none">
                   <span
                     className="text-[18px] font-medium"
                     style={
@@ -1246,7 +1246,6 @@ export default function Home() {
                       <div
                         style={{
                           textAlign: "center",
-                          width: "260px",
                           lineHeight: "1.25",
                           display: "flex",
                           flexDirection: "column",
@@ -1264,7 +1263,6 @@ export default function Home() {
                       <div
                         style={{
                           textAlign: "center",
-                          width: "260px",
                           lineHeight: "1.25",
                           display: "flex",
                           flexDirection: "column",
