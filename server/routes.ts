@@ -795,156 +795,6 @@ function hasDominantHandProfileContext(text: string): boolean {
   );
 }
 
-function isStrongLiveInvestigationTurn(
-  currentUserText: string,
-  recentMessages: Array<{ role: string; content: string }>,
-): boolean {
-  const input = currentUserText.trim();
-  if (!input) return false;
-
-  const previousAssistantText =
-    [...recentMessages]
-      .reverse()
-      .find((m) => m.role === "assistant" && String(m.content ?? "").trim())
-      ?.content ?? "";
-
-  const strongCurrentTurnSignal =
-    qualifiesForTimelineSignal(input) ||
-    looksLikeAdjustment(input) ||
-    looksLikeOutcome(input) ||
-    detectOutcomeResult(input) != null ||
-    deriveBodyRegion(input) != null ||
-    !isFallbackMovementContext(deriveCaseContext(input).movementContext) ||
-    /\b(?:timing|rotation|rotate|load|pressure|mechanic|mechanics|sequence|shift|brace|hinge|backswing|forehand|backhand|contact point|stability|stable|unstable|compensation|compensating|breakdown|fatigue|under load|at speed)\b/i.test(
-      input,
-    );
-
-  if (strongCurrentTurnSignal) {
-    return true;
-  }
-
-  const borderlineCurrentTurnSignal =
-    /\b(?:when|while|during|every time|serve|swing|movement|feels off|awkward|not right|doesn't feel right|doesnt feel right|something is off)\b/i.test(
-      input,
-    );
-
-  const assistantWasInvestigating =
-    /\?\s*$/.test(String(previousAssistantText).trim()) ||
-    /\b(?:what happens|where exactly|does it show up|when does it happen|under load|at speed|under fatigue|on the backswing|on the serve|at contact|what changes when|does it hold if)\b/i.test(
-      String(previousAssistantText),
-    );
-
-  return borderlineCurrentTurnSignal && assistantWasInvestigating;
-}
-
-function detectRecentUnansweredProfileAsk(
-  recentMessages: Array<{ role: string; content: string }>,
-): ProfileFieldKey | null {
-  const recentAssistantMessages = recentMessages
-    .filter((m) => m.role === "assistant")
-    .slice(-4)
-    .map((m) => String(m.content ?? ""));
-
-  const recentUserMessages = recentMessages
-    .filter((m) => m.role === "user")
-    .slice(-3)
-    .map((m) => String(m.content ?? ""));
-
-  const checks: Array<{
-    key: ProfileFieldKey;
-    patterns: RegExp[];
-    answered: (text: string) => boolean;
-  }> = [
-    {
-      key: "primary_sport",
-      patterns: [
-        /\bwhat activity is this showing up in most\b/i,
-        /\bwhat sport are you mainly playing(?: right now)?\b/i,
-        /\bwhat do you spend most of your time doing physically\b/i,
-        /\bwhat are you mainly (?:playing|training|doing)\b/i,
-        /\bwhat'?s your main (?:sport|activity)\b/i,
-      ],
-      answered: hasPrimarySportProfileContext,
-    },
-    {
-      key: "dominant_hand",
-      patterns: [
-        /\bwhich side do you naturally lead with\b/i,
-        /\bare you right[-\s]?handed or left[-\s]?handed\b/i,
-        /\bwhat'?s your dominant (?:side|hand)\b/i,
-        /\bwhich hand is dominant for you\b/i,
-      ],
-      answered: hasDominantHandProfileContext,
-    },
-    {
-      key: "competition_level",
-      patterns: [
-        /\bis that more recreational or are you competing seriously\b/i,
-        /\bhow competitive is that for you\b/i,
-        /\bwhat level are you playing at\b/i,
-        /\bare you competing or mostly recreational\b/i,
-        /\bis this more rec or more competitive for you\b/i,
-      ],
-      answered: hasCompetitionLevelProfileContext,
-    },
-    {
-      key: "activity_level",
-      patterns: [
-        /\bhow often are you doing it right now\b/i,
-        /\bhow many days a week are you training\b/i,
-        /\bwhat does your week look like physically\b/i,
-        /\bhow active are you right now\b/i,
-        /\bhow much are you training these days\b/i,
-      ],
-      answered: hasActivityLevelProfileContext,
-    },
-    {
-      key: "age",
-      patterns: [/\bhow old are you\b/i, /\bwhat'?s your age\b/i],
-      answered: hasAgeProfileContext,
-    },
-    {
-      key: "height",
-      patterns: [/\bhow tall are you\b/i, /\bwhat'?s your height\b/i],
-      answered: hasHeightProfileContext,
-    },
-    {
-      key: "weight",
-      patterns: [
-        /\bwhat do you weigh right now\b/i,
-        /\broughly what do you weigh\b/i,
-        /\bwhat'?s your current weight\b/i,
-      ],
-      answered: hasWeightProfileContext,
-    },
-    {
-      key: "gender",
-      patterns: [
-        /\bare you male or female\b/i,
-        /\bhow do you want me to think about sex differences here\b/i,
-        /\bshould i think about this through a male or female lens\b/i,
-        /\bhow do you identify\b/i,
-      ],
-      answered: hasGenderProfileContext,
-    },
-  ];
-
-  for (const check of checks) {
-    const askedRecently = recentAssistantMessages.some((text) =>
-      check.patterns.some((pattern) => pattern.test(text)),
-    );
-    const answeredRecently = recentUserMessages.some((text) =>
-      check.answered(text),
-    );
-
-    if (askedRecently && !answeredRecently) {
-      return check.key;
-    }
-  }
-
-  return null;
-}
-
 function isOpenCaseStatus(status: string | null | undefined): boolean {
   if (status == null) return true;
   return /open|active|current/i.test(String(status));
@@ -1028,7 +878,7 @@ function extractFirstMatchingSentence(
         score += 4;
       }
       if (
-        /^(?:focus on|try|make sure|keep|let|allow|shift|think about)\b/i.test(
+        /^(?:try|make sure|let|allow|shift|load|relax|drive|rotate|brace|stack|press|pull|push|hinge|hold|stay)\b/i.test(
           normalized,
         )
       ) {
@@ -1096,6 +946,82 @@ function normalizeDashboardCandidate(value: string | null | undefined): string {
     .replace(/[*_`#>\-\[\]()'",.:;!?]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isGenericCoachingFillerText(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  const fillerPatterns = [
+    /^\s*the key is\b/i,
+    /^\s*this matters\b/i,
+    /^\s*that matters\b/i,
+    /^\s*it'?s important\b/i,
+    /^\s*it is important\b/i,
+    /^\s*that should help\b/i,
+    /^\s*this should help\b/i,
+    /^\s*stay aware of\b/i,
+    /^\s*be aware of\b/i,
+    /^\s*consistency\b/i,
+    /^\s*this exercise\b/i,
+    /\baligns with\b/i,
+    /\bwhat you need\b/i,
+    /\bthis is working\b/i,
+    /\bworking well\b/i,
+    /\baligning well\b/i,
+    /\bthis is aligning\b/i,
+    /\bgood sign\b/i,
+    /\bglad to hear\b/i,
+    /\bgreat to hear\b/i,
+    /\bhappy to hear\b/i,
+    /\bkeep it up\b/i,
+    /\blet me know\b/i,
+  ];
+
+  return fillerPatterns.some((pattern) => pattern.test(text));
+}
+
+function isGenericAdjustmentFillerText(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  const normalized = normalizeDashboardCandidate(text);
+
+  const genericExactValues = new Set([
+    "try this adjustment",
+    "try this adjustment and",
+    "keep observing",
+    "continue observing",
+    "continue doing this",
+    "keep doing this",
+    "focus on this",
+    "work on this",
+    "stay aware of this",
+    "be aware of this",
+  ]);
+
+  if (genericExactValues.has(normalized)) return true;
+
+  return (
+    /\btry this adjustment\b/i.test(text) ||
+    /\bkeep observing\b/i.test(text) ||
+    /\bcontinue observing\b/i.test(text) ||
+    /\bcontinue doing\b/i.test(text) ||
+    /\bkeep doing\b/i.test(text) ||
+    /\bstay aware of\b/i.test(text) ||
+    /\bbe aware of\b/i.test(text) ||
+    /^\s*focus on(?:\s+this|\s+that|\s+it)?\s*[.!?]?$/i.test(text) ||
+    /^\s*try(?:\s+this|\s+that|\s+it)?\s*[.!?]?$/i.test(text) ||
+    /^\s*make sure(?:\s+this|\s+that|\s+it)?\s*[.!?]?$/i.test(text) ||
+    /^\s*keep(?:\s+this|\s+that|\s+it)?\s*[.!?]?$/i.test(text) ||
+    /^\s*let(?:\s+this|\s+that|\s+it)?\s*[.!?]?$/i.test(text) ||
+    /^\s*allow(?:\s+this|\s+that|\s+it)?\s*[.!?]?$/i.test(text) ||
+    /^\s*think about(?:\s+this|\s+that|\s+it)?\s*[.!?]?$/i.test(text)
+  );
 }
 
 function isMechanismLikeText(value: string | null | undefined): boolean {
@@ -1183,19 +1109,41 @@ function isMechanismLikeText(value: string | null | undefined): boolean {
   );
 }
 
+function hasRealMechanicalLever(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+  if (text.length < 35) return false;
+  if (isGenericAdjustmentFillerText(text)) return false;
+  if (isGenericCoachingFillerText(text)) return false;
+  if (isLowSignalShiftText(text)) return false;
+
+  const actionPattern =
+    /^\s*(?:try|make sure|let|allow|shift|load|relax|drive|rotate|control|stack|move|press|pull|push|hinge|brace|stabilize|stabilise|hold|clear|stay)\b/i;
+
+  const mechanicalObjectPattern =
+    /\b(?:hip|hips|rib|ribs|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|rotation|hinge|foot|feet|ankle|knee|knees|glute|glutes|serve|swing|contact|backswing|pressure|weight|chest|torso|lat|lats|core|elbow|wrist)\b/i;
+
+  const changePattern =
+    /\b(?:instead of|rather than|before|after|through|under|until|as you|while you|during|into|out of|against|toward|away|forward|back|down|up|open|closed|hold|release|load|shift|drive|rotate|brace|stack|hinge|press|pull|push|clear)\b/i;
+
+  return (
+    actionPattern.test(text) &&
+    mechanicalObjectPattern.test(text) &&
+    changePattern.test(text)
+  );
+}
+
 function isTestLikeText(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
+  if (isGenericAdjustmentFillerText(text)) return false;
 
   const concreteActionStartPatterns = [
-    /^\s*focus on\b/i,
     /^\s*try\b/i,
     /^\s*make sure\b/i,
-    /^\s*keep\b/i,
     /^\s*let\b/i,
     /^\s*allow\b/i,
     /^\s*shift\b/i,
-    /^\s*think about\b/i,
     /^\s*load\b/i,
     /^\s*relax\b/i,
     /^\s*drive\b/i,
@@ -1248,44 +1196,7 @@ function isTestLikeText(value: string | null | undefined): boolean {
     return false;
   }
 
-  return /\b(?:hip|rib|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|hinge|foot|feet|ankle|knee|glute|serve|swing|contact|backswing|pressure)\b/i.test(
-    text,
-  );
-}
-
-function isGenericCoachingFillerText(
-  value: string | null | undefined,
-): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return true;
-
-  const fillerPatterns = [
-    /^\s*the key is\b/i,
-    /^\s*this matters\b/i,
-    /^\s*that matters\b/i,
-    /^\s*it'?s important\b/i,
-    /^\s*it is important\b/i,
-    /^\s*that should help\b/i,
-    /^\s*this should help\b/i,
-    /^\s*stay aware of\b/i,
-    /^\s*be aware of\b/i,
-    /^\s*consistency\b/i,
-    /^\s*this exercise\b/i,
-    /\baligns with\b/i,
-    /\bwhat you need\b/i,
-    /\bthis is working\b/i,
-    /\bworking well\b/i,
-    /\baligning well\b/i,
-    /\bthis is aligning\b/i,
-    /\bgood sign\b/i,
-    /\bglad to hear\b/i,
-    /\bgreat to hear\b/i,
-    /\bhappy to hear\b/i,
-    /\bkeep it up\b/i,
-    /\blet me know\b/i,
-  ];
-
-  return fillerPatterns.some((pattern) => pattern.test(text));
+  return hasRealMechanicalLever(text);
 }
 
 function isStrongHypothesisCandidate(
@@ -1339,21 +1250,20 @@ function isStrongAdjustmentCandidate(
 ): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
-  if (text.length < 25) return false;
+  if (text.length < 35) return false;
   if (text.length > 220) return false;
+  if (isGenericAdjustmentFillerText(text)) return false;
   if (isGenericCoachingFillerText(text)) return false;
   if (!isTestLikeText(text)) return false;
   if (isMechanismLikeText(text)) return false;
+  if (!hasRealMechanicalLever(text)) return false;
 
   const actionStartPatterns = [
-    /^\s*focus on\b/i,
     /^\s*try\b/i,
     /^\s*make sure\b/i,
-    /^\s*keep\b/i,
     /^\s*let\b/i,
     /^\s*allow\b/i,
     /^\s*shift\b/i,
-    /^\s*think about\b/i,
     /^\s*load\b/i,
     /^\s*relax\b/i,
     /^\s*drive\b/i,
@@ -1424,6 +1334,27 @@ function isStrongAdjustmentCandidate(
   if (!concreteBodyActionPatterns.some((pattern) => pattern.test(text))) {
     return false;
   }
+
+  return true;
+}
+
+function isValidMechanicalAdjustmentPair({
+  cue,
+  mechanicalFocus,
+}: {
+  cue: string | null | undefined;
+  mechanicalFocus: string | null | undefined;
+}): boolean {
+  const cueText = normalizePreviewValue(cue);
+  const mechanicalText = normalizePreviewValue(mechanicalFocus);
+
+  if (!cueText || !mechanicalText) return false;
+  if (!isStrongAdjustmentCandidate(cueText)) return false;
+  if (!hasRealMechanicalLever(mechanicalText)) return false;
+  if (isGenericAdjustmentFillerText(cueText)) return false;
+  if (isGenericAdjustmentFillerText(mechanicalText)) return false;
+  if (isGenericCoachingFillerText(cueText)) return false;
+  if (isGenericCoachingFillerText(mechanicalText)) return false;
 
   return true;
 }
@@ -1637,6 +1568,145 @@ function detectUserClosureSignal(text: string): boolean {
 }
 
 // ==============================
+// CASE PROGRESSION INTEGRITY HELPERS
+// ==============================
+
+type StoredHypothesisRow = {
+  id: number;
+  hypothesis: string | null;
+};
+
+type StoredAdjustmentRow = {
+  id: number;
+  caseId: number;
+  hypothesisId: number | null;
+  cue: string | null;
+  mechanicalFocus: string | null;
+};
+
+function isValidStoredHypothesis(
+  row: StoredHypothesisRow | null | undefined,
+): row is StoredHypothesisRow {
+  return Boolean(row?.id) && isStrongHypothesisCandidate(row?.hypothesis);
+}
+
+function isValidStoredAdjustment(
+  row: StoredAdjustmentRow | null | undefined,
+): row is StoredAdjustmentRow & { hypothesisId: number } {
+  return (
+    Boolean(row?.id) &&
+    typeof row?.hypothesisId === "number" &&
+    Number.isFinite(row.hypothesisId) &&
+    isValidMechanicalAdjustmentPair({
+      cue: row.cue,
+      mechanicalFocus: row.mechanicalFocus,
+    })
+  );
+}
+
+async function getLatestValidHypothesisForCase(
+  caseId: number,
+): Promise<StoredHypothesisRow | null> {
+  const hypothesisRows = await db
+    .select({
+      id: caseHypotheses.id,
+      hypothesis: caseHypotheses.hypothesis,
+    })
+    .from(caseHypotheses)
+    .where(eq(caseHypotheses.caseId, caseId))
+    .orderBy(desc(caseHypotheses.id))
+    .limit(5);
+
+  return hypothesisRows.find((row) => isValidStoredHypothesis(row)) ?? null;
+}
+
+async function getLatestValidAdjustmentForCase(
+  caseId: number,
+): Promise<(StoredAdjustmentRow & { hypothesisId: number }) | null> {
+  const adjustmentRows = await db
+    .select({
+      id: caseAdjustments.id,
+      caseId: caseAdjustments.caseId,
+      hypothesisId: caseAdjustments.hypothesisId,
+      cue: caseAdjustments.cue,
+      mechanicalFocus: caseAdjustments.mechanicalFocus,
+    })
+    .from(caseAdjustments)
+    .innerJoin(
+      caseHypotheses,
+      eq(caseAdjustments.hypothesisId, caseHypotheses.id),
+    )
+    .where(eq(caseAdjustments.caseId, caseId))
+    .orderBy(desc(caseAdjustments.id))
+    .limit(8);
+
+  for (const adjustment of adjustmentRows) {
+    if (!isValidStoredAdjustment(adjustment)) continue;
+
+    const [hypothesis] = await db
+      .select({
+        id: caseHypotheses.id,
+        hypothesis: caseHypotheses.hypothesis,
+      })
+      .from(caseHypotheses)
+      .where(eq(caseHypotheses.id, adjustment.hypothesisId))
+      .limit(1);
+
+    if (isValidStoredHypothesis(hypothesis)) {
+      return adjustment;
+    }
+  }
+
+  return null;
+}
+
+async function getValidAdjustmentForOutcomeWrite({
+  caseId,
+  adjustmentId,
+}: {
+  caseId: number;
+  adjustmentId?: number | null;
+}): Promise<(StoredAdjustmentRow & { hypothesisId: number }) | null> {
+  if (adjustmentId) {
+    const [adjustment] = await db
+      .select({
+        id: caseAdjustments.id,
+        caseId: caseAdjustments.caseId,
+        hypothesisId: caseAdjustments.hypothesisId,
+        cue: caseAdjustments.cue,
+        mechanicalFocus: caseAdjustments.mechanicalFocus,
+      })
+      .from(caseAdjustments)
+      .innerJoin(
+        caseHypotheses,
+        eq(caseAdjustments.hypothesisId, caseHypotheses.id),
+      )
+      .where(
+        and(
+          eq(caseAdjustments.id, adjustmentId),
+          eq(caseAdjustments.caseId, caseId),
+        ),
+      )
+      .limit(1);
+
+    if (!isValidStoredAdjustment(adjustment)) return null;
+
+    const [hypothesis] = await db
+      .select({
+        id: caseHypotheses.id,
+        hypothesis: caseHypotheses.hypothesis,
+      })
+      .from(caseHypotheses)
+      .where(eq(caseHypotheses.id, adjustment.hypothesisId))
+      .limit(1);
+
+    return isValidStoredHypothesis(hypothesis) ? adjustment : null;
+  }
+
+  return getLatestValidAdjustmentForCase(caseId);
+}
+
+// ==============================
 // STORED SESSION HISTORY BUILDER
 // ==============================
 
@@ -1676,7 +1746,6 @@ async function getStoredSessionHistory(
     sessionBlocks.join("\n\n")
   );
 }
-
 // ==============================
 // ACTIVE HYPOTHESIS LOOKUP
 // ==============================
@@ -1691,14 +1760,23 @@ async function getActiveHypothesisBlock(userId: string): Promise<string> {
     })
     .from(caseAdjustments)
     .innerJoin(cases, eq(caseAdjustments.caseId, cases.id))
+    .innerJoin(
+      caseHypotheses,
+      eq(caseAdjustments.hypothesisId, caseHypotheses.id),
+    )
     .leftJoin(caseOutcomes, eq(caseAdjustments.id, caseOutcomes.adjustmentId))
     .where(and(eq(cases.userId, userId), isNull(caseOutcomes.id)))
     .orderBy(desc(caseAdjustments.id))
-    .limit(1);
+    .limit(5);
 
-  if (unresolved.length === 0) return "";
+  const latest = unresolved.find((row) =>
+    isValidMechanicalAdjustmentPair({
+      cue: row.cue,
+      mechanicalFocus: row.mechanicalFocus,
+    }),
+  );
 
-  const latest = unresolved[0];
+  if (!latest) return "";
 
   return `
 === ACTIVE HYPOTHESIS (PRIORITY) ===
@@ -1801,8 +1879,13 @@ async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
           id: caseAdjustments.id,
           cue: caseAdjustments.cue,
           mechanicalFocus: caseAdjustments.mechanicalFocus,
+          hypothesisId: caseAdjustments.hypothesisId,
         })
         .from(caseAdjustments)
+        .innerJoin(
+          caseHypotheses,
+          eq(caseAdjustments.hypothesisId, caseHypotheses.id),
+        )
         .where(eq(caseAdjustments.caseId, caseRow.id))
         .orderBy(desc(caseAdjustments.id))
         .limit(2);
@@ -1812,15 +1895,37 @@ async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
           id: caseOutcomes.id,
           result: caseOutcomes.result,
           userFeedback: caseOutcomes.userFeedback,
+          adjustmentId: caseOutcomes.adjustmentId,
         })
         .from(caseOutcomes)
+        .innerJoin(
+          caseAdjustments,
+          eq(caseOutcomes.adjustmentId, caseAdjustments.id),
+        )
+        .innerJoin(
+          caseHypotheses,
+          eq(caseAdjustments.hypothesisId, caseHypotheses.id),
+        )
         .where(eq(caseOutcomes.caseId, caseRow.id))
         .orderBy(desc(caseOutcomes.id))
         .limit(3);
 
+      const validHypotheses = hypotheses.filter((h) =>
+        isValidStoredHypothesis(h),
+      );
+      const validAdjustments = adjustments.filter((a) =>
+        isValidStoredAdjustment({
+          caseId: caseRow.id,
+          id: a.id,
+          hypothesisId: a.hypothesisId,
+          cue: a.cue,
+          mechanicalFocus: a.mechanicalFocus,
+        }),
+      );
+
       const signalCount = signals.length;
-      const hypothesisCount = hypotheses.length;
-      const adjustmentCount = adjustments.length;
+      const hypothesisCount = validHypotheses.length;
+      const adjustmentCount = validAdjustments.length;
       const outcomeCount = outcomes.length;
 
       const improvedOutcomes = outcomes.filter((o) => {
@@ -1851,8 +1956,8 @@ async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
         activityType: (caseRow.activityType ?? "").trim(),
         score,
         signals,
-        hypotheses,
-        adjustments,
+        hypotheses: validHypotheses,
+        adjustments: validAdjustments,
         outcomes,
       };
     }),
@@ -2405,6 +2510,7 @@ ${memoryBlock}
         | {
             mechanicalFocus: string | null;
             cue: string | null;
+            hypothesisId: number | null;
           }
         | undefined;
       let latestHypothesis:
@@ -2428,8 +2534,13 @@ ${memoryBlock}
           .select({
             mechanicalFocus: caseAdjustments.mechanicalFocus,
             cue: caseAdjustments.cue,
+            hypothesisId: caseAdjustments.hypothesisId,
           })
           .from(caseAdjustments)
+          .innerJoin(
+            caseHypotheses,
+            eq(caseAdjustments.hypothesisId, caseHypotheses.id),
+          )
           .where(eq(caseAdjustments.caseId, selectedCase.id))
           .orderBy(desc(caseAdjustments.id))
           .limit(1);
@@ -2448,6 +2559,14 @@ ${memoryBlock}
             userFeedback: caseOutcomes.userFeedback,
           })
           .from(caseOutcomes)
+          .innerJoin(
+            caseAdjustments,
+            eq(caseOutcomes.adjustmentId, caseAdjustments.id),
+          )
+          .innerJoin(
+            caseHypotheses,
+            eq(caseAdjustments.hypothesisId, caseHypotheses.id),
+          )
           .where(eq(caseOutcomes.caseId, selectedCase.id))
           .orderBy(desc(caseOutcomes.id))
           .limit(1);
@@ -2816,58 +2935,6 @@ ${memoryBlock}
       } | null = null;
 
       resolvedActiveCase = await getConversationOpenCase(userId, convoId);
-
-      try {
-        const outcomeResult = detectOutcomeResult(userText);
-
-        if (outcomeResult) {
-          if (!resolvedActiveCase) {
-            resolvedActiveCase = await getConversationOpenCase(userId, convoId);
-          }
-
-          const activeCase = resolvedActiveCase;
-
-          if (activeCase && isOpenCaseStatus(activeCase.status)) {
-            const [latestOutcome] = await db
-              .select({
-                id: caseOutcomes.id,
-                result: caseOutcomes.result,
-                createdAt: caseOutcomes.createdAt,
-              })
-              .from(caseOutcomes)
-              .where(eq(caseOutcomes.caseId, activeCase.id))
-              .orderBy(desc(caseOutcomes.id))
-              .limit(1);
-
-            const latestCreatedAtMs = latestOutcome?.createdAt
-              ? new Date(latestOutcome.createdAt).getTime()
-              : 0;
-
-            const isDuplicateRecentOutcome =
-              Boolean(latestOutcome) &&
-              String(latestOutcome.result ?? "") === outcomeResult &&
-              latestCreatedAtMs > 0 &&
-              Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
-
-            if (!isDuplicateRecentOutcome) {
-              await db.insert(caseOutcomes).values({
-                caseId: activeCase.id,
-                result: outcomeResult,
-                userFeedback: userText,
-              });
-
-              if (outcomeResult === "Improved") {
-                await db
-                  .update(cases)
-                  .set({ status: "resolved" })
-                  .where(eq(cases.id, activeCase.id));
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Auto outcome capture failed:", err);
-      }
 
       try {
         const shouldCreateCase =
@@ -3395,6 +3462,10 @@ Produce the corrected response now.
 
       try {
         if (resolvedActiveCase && isOpenCaseStatus(resolvedActiveCase.status)) {
+          let validHypothesis = await getLatestValidHypothesisForCase(
+            resolvedActiveCase.id,
+          );
+
           const hypothesisSentence = extractFirstMatchingSentence(finalText, [
             /\bbecause\b/i,
             /\bdue to\b/i,
@@ -3440,6 +3511,7 @@ Produce the corrected response now.
           ) {
             const [latestStoredHypothesis] = await db
               .select({
+                id: caseHypotheses.id,
                 hypothesis: caseHypotheses.hypothesis,
               })
               .from(caseHypotheses)
@@ -3453,75 +3525,174 @@ Produce the corrected response now.
                 latestStoredHypothesis?.hypothesis,
               )
             ) {
-              await db.insert(caseHypotheses).values({
-                caseId: resolvedActiveCase.id,
-                hypothesis: hypothesisSentence,
-              });
+              const [insertedHypothesis] = await db
+                .insert(caseHypotheses)
+                .values({
+                  caseId: resolvedActiveCase.id,
+                  hypothesis: hypothesisSentence,
+                })
+                .returning({
+                  id: caseHypotheses.id,
+                  hypothesis: caseHypotheses.hypothesis,
+                });
+
+              if (isValidStoredHypothesis(insertedHypothesis)) {
+                validHypothesis = insertedHypothesis;
+              }
+            } else if (isValidStoredHypothesis(latestStoredHypothesis)) {
+              validHypothesis = latestStoredHypothesis;
             }
           }
 
-          const adjustmentSentence = extractFirstMatchingSentence(finalText, [
-            /^\s*focus on\b/i,
-            /^\s*try\b/i,
-            /^\s*make sure\b/i,
-            /^\s*let\b/i,
-            /^\s*allow\b/i,
-            /^\s*shift\b/i,
-            /^\s*keep\b/i,
-            /^\s*think about\b/i,
-            /^\s*load\b/i,
-            /^\s*relax\b/i,
-            /^\s*drive\b/i,
-            /^\s*rotate\b/i,
-            /^\s*brace\b/i,
-            /^\s*stack\b/i,
-            /^\s*press\b/i,
-            /^\s*pull\b/i,
-            /^\s*push\b/i,
-            /^\s*hinge\b/i,
-            /^\s*hold\b/i,
-            /^\s*stay\b/i,
-          ]);
+          if (!validHypothesis) {
+            console.log("CASE ADJUSTMENT SKIPPED: no valid hypothesis", {
+              caseId: resolvedActiveCase.id,
+            });
+          } else {
+            const adjustmentSentence = extractFirstMatchingSentence(finalText, [
+              /^\s*try\b/i,
+              /^\s*make sure\b/i,
+              /^\s*let\b/i,
+              /^\s*allow\b/i,
+              /^\s*shift\b/i,
+              /^\s*load\b/i,
+              /^\s*relax\b/i,
+              /^\s*drive\b/i,
+              /^\s*rotate\b/i,
+              /^\s*brace\b/i,
+              /^\s*stack\b/i,
+              /^\s*press\b/i,
+              /^\s*pull\b/i,
+              /^\s*push\b/i,
+              /^\s*hinge\b/i,
+              /^\s*hold\b/i,
+              /^\s*stay\b/i,
+            ]);
 
-          if (
-            adjustmentSentence &&
-            isStrongAdjustmentCandidate(adjustmentSentence) &&
-            !areEquivalentDashboardCandidates(
-              adjustmentSentence,
-              hypothesisSentence,
-            )
-          ) {
-            const [latestStoredAdjustment] = await db
-              .select({
-                cue: caseAdjustments.cue,
-                mechanicalFocus: caseAdjustments.mechanicalFocus,
-              })
-              .from(caseAdjustments)
-              .where(eq(caseAdjustments.caseId, resolvedActiveCase.id))
-              .orderBy(desc(caseAdjustments.id))
-              .limit(1);
+            const mechanicalFocus =
+              extractFirstMatchingSentence(finalText, [
+                /\b(?:change|shift|load|brace|stack|rotate|hold|release|drive|hinge|press|pull|push|clear)\b/i,
+                /\b(?:hip|hips|rib|ribs|pelvis|trunk|shoulder|shoulders|back|spine|foot|feet|ankle|knee|knees|glute|glutes|serve|swing|contact|backswing|pressure|weight|chest|torso|lat|lats|core|elbow|wrist)\b/i,
+              ]) ?? null;
 
-            const isDuplicateAdjustment =
-              areEquivalentDashboardCandidates(
-                adjustmentSentence,
-                latestStoredAdjustment?.cue,
-              ) ||
-              areEquivalentDashboardCandidates(
-                adjustmentSentence,
-                latestStoredAdjustment?.mechanicalFocus,
-              );
-
-            if (!isDuplicateAdjustment) {
-              await db.insert(caseAdjustments).values({
-                caseId: resolvedActiveCase.id,
+            if (
+              adjustmentSentence &&
+              mechanicalFocus &&
+              isValidMechanicalAdjustmentPair({
                 cue: adjustmentSentence,
-                mechanicalFocus: adjustmentSentence,
+                mechanicalFocus,
+              }) &&
+              !areEquivalentDashboardCandidates(
+                adjustmentSentence,
+                hypothesisSentence,
+              )
+            ) {
+              const [latestStoredAdjustment] = await db
+                .select({
+                  cue: caseAdjustments.cue,
+                  mechanicalFocus: caseAdjustments.mechanicalFocus,
+                  hypothesisId: caseAdjustments.hypothesisId,
+                })
+                .from(caseAdjustments)
+                .where(eq(caseAdjustments.caseId, resolvedActiveCase.id))
+                .orderBy(desc(caseAdjustments.id))
+                .limit(1);
+
+              const isDuplicateAdjustment =
+                areEquivalentDashboardCandidates(
+                  adjustmentSentence,
+                  latestStoredAdjustment?.cue,
+                ) ||
+                areEquivalentDashboardCandidates(
+                  adjustmentSentence,
+                  latestStoredAdjustment?.mechanicalFocus,
+                );
+
+              if (!isDuplicateAdjustment) {
+                await db.insert(caseAdjustments).values({
+                  caseId: resolvedActiveCase.id,
+                  hypothesisId: validHypothesis.id,
+                  cue: adjustmentSentence,
+                  mechanicalFocus,
+                });
+              }
+            } else if (adjustmentSentence || mechanicalFocus) {
+              console.log("CASE ADJUSTMENT SKIPPED: weak adjustment", {
+                caseId: resolvedActiveCase.id,
+                hypothesisId: validHypothesis.id,
+                adjustmentSentence,
+                mechanicalFocus,
               });
             }
           }
         }
       } catch (err) {
         console.error("Case extraction write failed:", err);
+      }
+
+      try {
+        const outcomeResult = detectOutcomeResult(userText);
+
+        if (outcomeResult) {
+          if (!resolvedActiveCase) {
+            resolvedActiveCase = await getConversationOpenCase(userId, convoId);
+          }
+
+          const activeCase = resolvedActiveCase;
+
+          if (activeCase && isOpenCaseStatus(activeCase.status)) {
+            const validAdjustment = await getValidAdjustmentForOutcomeWrite({
+              caseId: activeCase.id,
+            });
+
+            if (!validAdjustment) {
+              console.log("AUTO OUTCOME SKIPPED: no valid adjustment", {
+                caseId: activeCase.id,
+              });
+            } else {
+              const [latestOutcome] = await db
+                .select({
+                  id: caseOutcomes.id,
+                  result: caseOutcomes.result,
+                  adjustmentId: caseOutcomes.adjustmentId,
+                  createdAt: caseOutcomes.createdAt,
+                })
+                .from(caseOutcomes)
+                .where(eq(caseOutcomes.adjustmentId, validAdjustment.id))
+                .orderBy(desc(caseOutcomes.id))
+                .limit(1);
+
+              const latestCreatedAtMs = latestOutcome?.createdAt
+                ? new Date(latestOutcome.createdAt).getTime()
+                : 0;
+
+              const isDuplicateRecentOutcome =
+                Boolean(latestOutcome) &&
+                String(latestOutcome.result ?? "") === outcomeResult &&
+                latestOutcome?.adjustmentId === validAdjustment.id &&
+                latestCreatedAtMs > 0 &&
+                Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
+
+              if (!isDuplicateRecentOutcome) {
+                await db.insert(caseOutcomes).values({
+                  caseId: activeCase.id,
+                  adjustmentId: validAdjustment.id,
+                  result: outcomeResult,
+                  userFeedback: userText,
+                });
+
+                if (outcomeResult === "Improved") {
+                  await db
+                    .update(cases)
+                    .set({ status: "resolved" })
+                    .where(eq(cases.id, activeCase.id));
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Auto outcome capture failed:", err);
       }
 
       try {
@@ -3575,8 +3746,17 @@ Produce the corrected response now.
       }
 
       try {
+        const validAdjustment =
+          resolvedActiveCase && isOpenCaseStatus(resolvedActiveCase.status)
+            ? await getValidAdjustmentForOutcomeWrite({
+                caseId: resolvedActiveCase.id,
+              })
+            : null;
+
         const shouldWriteAdjustment =
-          userText.length > 30 && looksLikeAdjustment(userText);
+          userText.length > 30 &&
+          looksLikeAdjustment(userText) &&
+          Boolean(validAdjustment);
 
         if (shouldWriteAdjustment) {
           await writeTimelineEntry({
@@ -3591,8 +3771,17 @@ Produce the corrected response now.
       }
 
       try {
+        const validAdjustment =
+          resolvedActiveCase && isOpenCaseStatus(resolvedActiveCase.status)
+            ? await getValidAdjustmentForOutcomeWrite({
+                caseId: resolvedActiveCase.id,
+              })
+            : null;
+
         const shouldWriteOutcome =
-          userText.length > 20 && looksLikeOutcome(userText);
+          userText.length > 20 &&
+          looksLikeOutcome(userText) &&
+          Boolean(validAdjustment);
 
         if (shouldWriteOutcome) {
           await writeTimelineEntry({
@@ -3639,14 +3828,36 @@ Produce the corrected response now.
   app.post("/api/outcome", async (req: Request, res: Response) => {
     try {
       const { caseId, adjustmentId, result, userFeedback } = req.body ?? {};
+      const numericCaseId = Number(caseId);
+      const numericAdjustmentId =
+        adjustmentId == null ? null : Number(adjustmentId);
 
-      if (!caseId || !result) {
+      if (!Number.isFinite(numericCaseId) || !result) {
         return res.status(400).json({ error: "Missing required fields" });
       }
 
+      if (
+        adjustmentId != null &&
+        (!Number.isFinite(numericAdjustmentId) || !numericAdjustmentId)
+      ) {
+        return res.status(400).json({ error: "Invalid adjustmentId" });
+      }
+
+      const validAdjustment = await getValidAdjustmentForOutcomeWrite({
+        caseId: numericCaseId,
+        adjustmentId: numericAdjustmentId,
+      });
+
+      if (!validAdjustment) {
+        return res.status(409).json({
+          error:
+            "Outcome requires a valid adjustment tied to a valid hypothesis",
+        });
+      }
+
       await db.insert(caseOutcomes).values({
-        caseId,
-        adjustmentId: adjustmentId ?? null,
+        caseId: numericCaseId,
+        adjustmentId: validAdjustment.id,
         result,
         userFeedback: userFeedback ?? null,
       });
@@ -3659,7 +3870,7 @@ Produce the corrected response now.
         await db
           .update(cases)
           .set({ status: "resolved" })
-          .where(eq(cases.id, caseId));
+          .where(eq(cases.id, numericCaseId));
       }
 
       res.json({ ok: true });
