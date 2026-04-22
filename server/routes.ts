@@ -311,6 +311,156 @@ function isTrueNewUserForInitialization({
   return true;
 }
 
+// ==============================
+// DOMAIN BOUNDARY: MEDICAL / SYSTEMIC / INTERNAL-SYMPTOM DETECTION
+// ==============================
+//
+// Coreloop is a movement / mechanical investigation system.
+//
+// The domain gate here does NOT block "non-mechanical" turns in general.
+// Non-mechanical turns, symptoms at rest, or symptoms not clearly tied
+// to movement are still allowed through the normal pipeline.
+//
+// This classifier only blocks turns that fall into true MEDICAL /
+// SYSTEMIC / INTERNAL-SYMPTOM territory — content that should not be
+// handled as a mechanical investigation.
+//
+// Core medical blockers (trigger the gate on their own):
+//   - chest / internal organ / visceral pain
+//   - reflux / esophageal / GI symptom clusters
+//   - autonomic / systemic symptom clusters
+//
+// Nocturnal / sleep-onset language is a SUPPORTING signal only.
+// Nighttime wording by itself does NOT trigger the gate. It only
+// strengthens the read when a core medical/systemic signal is already
+// present.
+//
+// Intentionally NOT included (previously overblocking):
+//   - "not tied to movement"
+//   - "nothing to do with movement"
+//   - "no change with movement"
+//   - "happens at rest" / "comes on at rest" / "when I'm not moving"
+//   - "hurts at rest"
+//   - positional relief unrelated to movement
+//   - standalone nocturnal / sleep-onset wording
+//
+// Those signals may still be useful case input and must not trigger
+// the medical gate by themselves.
+// ==============================
+
+// --- Chest / visceral / internal organ language ---
+const MEDICAL_CHEST_VISCERAL_PATTERNS: RegExp[] = [
+  /\bchest pain\b/i,
+  /\bpain in (?:my )?chest\b/i,
+  /\btightness in (?:my )?chest\b/i,
+  /\bpressure in (?:my )?chest\b/i,
+  /\bheaviness in (?:my )?chest\b/i,
+  /\bsolar plexus\b/i,
+  /\besophagus\b|\besophageal\b/i,
+  /\bdiaphragm (?:pain|spasm|cramp|cramping|tightness)\b/i,
+  /\binternal (?:pain|burning|tearing|pressure)\b/i,
+  /\bdeep (?:inside|internal) (?:pain|burning|ache)\b/i,
+  /\bbehind (?:my )?(?:sternum|breastbone|ribs)\b/i,
+  /\bheart (?:pain|racing|pounding|palpitations)\b/i,
+  /\bpalpitations\b/i,
+  /\bracing heart\b|\bheart (?:is )?racing\b/i,
+  /\babdominal pain\b|\bpain in (?:my )?(?:abdomen|stomach|belly|gut)\b/i,
+  /\bstomach (?:pain|ache|cramp|cramping)\b/i,
+  /\b(?:kidney|liver|gallbladder|bladder|pancreas|spleen|intestine|bowel) (?:pain|ache)\b/i,
+];
+
+// --- Reflux / GI / esophageal symptoms ---
+const MEDICAL_REFLUX_GI_PATTERNS: RegExp[] = [
+  /\breflux\b/i,
+  /\bheartburn\b/i,
+  /\bacid (?:reflux|coming up|in my throat|in my chest)\b/i,
+  /\bregurgitat/i,
+  /\bburning (?:in (?:my )?(?:chest|throat|esophagus|stomach))\b/i,
+  /\bsour (?:taste|liquid) in (?:my )?(?:mouth|throat)\b/i,
+  /\bindigestion\b/i,
+  /\bvomit/i,
+  /\bthrowing up\b|\bthrew up\b/i,
+  /\bdiarrhea\b/i,
+  /\bbowel (?:pain|cramp|cramping|issue|issues)\b/i,
+];
+
+// --- Autonomic / systemic symptoms ---
+const MEDICAL_SYSTEMIC_PATTERNS: RegExp[] = [
+  /\bnausea\b|\bnauseous\b|\bnauseated\b/i,
+  /\bsalivat/i,
+  /\bwoozy\b/i,
+  /\bdizzy\b|\bdizziness\b/i,
+  /\blightheaded\b|\blight-headed\b|\blight headed\b/i,
+  /\bfaint(?:ing|ed)?\b/i,
+  /\bpassing out\b|\bpassed out\b|\bblacked out\b|\bblack(?:ing)? out\b/i,
+  /\bsweating (?:profusely|a lot|cold)\b|\bcold sweat/i,
+  /\bclammy\b/i,
+  /\bshort(?:ness)? of breath\b|\bcan'?t (?:catch my )?breathe?\b|\btrouble breathing\b|\bhard to breathe\b/i,
+  /\bchills\b/i,
+  /\bfever\b|\bfeverish\b/i,
+  /\bnight sweats\b/i,
+  /\btingling (?:in|down) (?:my )?(?:arm|arms|jaw|face)\b/i,
+  /\bnumbness (?:in|down) (?:my )?(?:arm|arms|jaw|face)\b/i,
+  /\bradiating (?:to|into|down) (?:my )?(?:jaw|arm|arms|neck)\b/i,
+];
+
+// --- Nocturnal / sleep-onset wording ---
+// Supporting signal only. Does NOT trigger the gate on its own.
+const MEDICAL_NOCTURNAL_PATTERNS: RegExp[] = [
+  /\bwoke me up\b/i,
+  /\bwoke up with\b/i,
+  /\bwoken (?:up )?by\b/i,
+  /\bduring (?:the night|sleep)\b/i,
+  /\bin (?:my|the middle of) sleep\b/i,
+  /\bin the middle of the night\b/i,
+  /\bwhile (?:i was )?(?:sleeping|asleep)\b/i,
+];
+
+function hasMedicalSystemicCoreSignal(text: string): boolean {
+  const input = String(text ?? "").trim();
+  if (!input) return false;
+
+  const normalized = input.toLowerCase().replace(/\s+/g, " ");
+
+  const coreGroups: RegExp[][] = [
+    MEDICAL_CHEST_VISCERAL_PATTERNS,
+    MEDICAL_REFLUX_GI_PATTERNS,
+    MEDICAL_SYSTEMIC_PATTERNS,
+  ];
+
+  for (const group of coreGroups) {
+    for (const pattern of group) {
+      if (pattern.test(normalized)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function hasNocturnalMedicalContext(text: string): boolean {
+  const input = String(text ?? "").trim();
+  if (!input) return false;
+
+  const normalized = input.toLowerCase().replace(/\s+/g, " ");
+
+  for (const pattern of MEDICAL_NOCTURNAL_PATTERNS) {
+    if (pattern.test(normalized)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isMedicalSystemicSignal(text: string): boolean {
+  // Gate triggers only on a true core medical/systemic/internal signal.
+  // Nocturnal wording is a supporting amplifier and is never a standalone
+  // trigger by itself.
+  return hasMedicalSystemicCoreSignal(text);
+}
+
 async function ensureUserRecord(userId: string, authUser: any) {
   let [existingUser] = await db
     .select()
@@ -676,6 +826,7 @@ function buildCompactMovementContext(text: string): string | null {
   const input = text.trim();
 
   const directContextPatterns: Array<{ label: string; regex: RegExp }> = [
+    // --- Racquet sport mechanics ---
     {
       label: "drive serve",
       regex: /\bdrive[-\s]?(?:serve|serf|surf)\b/i,
@@ -695,8 +846,94 @@ function buildCompactMovementContext(text: string): string | null {
       regex:
         /\bleaning forward\b.*\b(?:serve|serf|surf)\b|\b(?:serve|serf|surf)\b.*\bleaning forward\b/i,
     },
-    { label: "serve", regex: /\b(?:serve|serving)\b/i },
-    { label: "swing", regex: /\bswing(?:ing)?\b/i },
+    { label: "serve mechanics", regex: /\b(?:serve|serving)\b/i },
+    { label: "swing mechanics", regex: /\bswing(?:ing)?\b/i },
+
+    // --- Golf / club sports ---
+    { label: "golf swing", regex: /\bgolf swing\b/i },
+    { label: "tee shot", regex: /\btee shot\b/i },
+
+    // --- Transitions in/out of environments ---
+    {
+      label: "getting out of car",
+      regex:
+        /\b(?:getting|got|get) out of (?:the |my )?car\b|\bgetting out of (?:the )?vehicle\b/i,
+    },
+    {
+      label: "getting into car",
+      regex: /\b(?:getting|got|get) (?:in|into) (?:the |my )?car\b/i,
+    },
+    {
+      label: "getting out of bed",
+      regex:
+        /\b(?:getting|got|get) out of (?:the |my )?bed\b|\bgetting up from bed\b/i,
+    },
+    {
+      label: "getting up from chair",
+      regex:
+        /\b(?:getting|got|get) up from (?:the |my |a )?(?:chair|seat)\b|\bstanding up from (?:the |my |a )?(?:chair|seat)\b/i,
+    },
+
+    // --- Posture / environment contexts ---
+    {
+      label: "waking up",
+      regex:
+        /\bwaking up (?:stiff|sore|tight|with)\b|\bwake up (?:stiff|sore|tight|with)\b|\bwoken up (?:stiff|sore|tight)\b/i,
+    },
+    {
+      label: "after sleeping",
+      regex:
+        /\bafter (?:i )?(?:slept|sleep|sleeping)\b|\bafter sleeping (?:flat|on (?:my )?(?:back|side|stomach))\b/i,
+    },
+    {
+      label: "desk work",
+      regex:
+        /\b(?:at|on|during) (?:my |the )?(?:desk|computer|laptop)\b|\bdesk work\b|\bworking at (?:my |a |the )?(?:desk|computer|laptop)\b|\bat the computer\b/i,
+    },
+    {
+      label: "chair sitting",
+      regex:
+        /\bchair (?:height|position|posture)\b|\bseat (?:height|position|posture)\b|\bin (?:my |the |a )?chair\b/i,
+    },
+    {
+      label: "driving",
+      regex:
+        /\bwhile (?:i am |i'm )?driving\b|\bon the drive\b|\bduring the drive\b|\bdriving to\b|\bdriving home\b|\bdriving for\b/i,
+    },
+    {
+      label: "sitting",
+      regex:
+        /\bwhile (?:i am |i'm )?sitting\b|\bwhen (?:i am |i'm )?sitting\b|\bafter sitting\b|\bsitting for\b|\bsitting upright\b/i,
+    },
+    {
+      label: "sleeping",
+      regex:
+        /\bwhile (?:i am |i'm )?sleeping\b|\bin my sleep\b|\bsleeping flat\b|\bsleeping on (?:my )?(?:back|side|stomach)\b/i,
+    },
+    {
+      label: "lying flat",
+      regex: /\blying flat\b|\blaying flat\b|\bflat on (?:my )?back\b/i,
+    },
+    {
+      label: "on couch",
+      regex: /\bon (?:the |my )?couch\b|\bon (?:the |my )?sofa\b/i,
+    },
+    {
+      label: "in bed",
+      regex: /\bin (?:my |the )?bed\b|\bin bed\b/i,
+    },
+
+    // --- Training contexts ---
+    {
+      label: "during workout",
+      regex:
+        /\bduring (?:my |a |the )?(?:workout|training|session|lift|practice)\b/i,
+    },
+    {
+      label: "after training",
+      regex:
+        /\bafter (?:my |a |the )?(?:workout|training|session|lift|practice)\b/i,
+    },
   ];
 
   return (
@@ -705,7 +942,146 @@ function buildCompactMovementContext(text: string): string | null {
   );
 }
 
-function deriveCaseContext(text: string): {
+// Normalizes a raw fragment captured from "when I ...", "during ...",
+// "on the ...", "in my ..." into a compact known label when possible.
+// If no compact mapping exists, returns a cleaned but bounded fragment.
+// Returns null only when the fragment is empty after cleaning.
+function normalizeExtractedContextCandidate(
+  candidate: string | null | undefined,
+): string | null {
+  const raw = String(candidate ?? "").trim();
+  if (!raw) return null;
+
+  // First try the full compact label mapper against the fragment itself.
+  const compactFromFragment = buildCompactMovementContext(raw);
+  if (compactFromFragment) return compactFromFragment;
+
+  // Try against a lightly expanded version so phrases like "sitting at my desk"
+  // or "drive to school" hit the same mappers we use on full messages.
+  const expanded = `while I am ${raw}`;
+  const compactFromExpanded = buildCompactMovementContext(expanded);
+  if (compactFromExpanded) return compactFromExpanded;
+
+  // Targeted fallbacks for common extracted shapes that don't match the
+  // main mappers because of leading prepositions/articles.
+  const lowered = raw.toLowerCase();
+
+  const fallbackPatterns: Array<{ label: string; regex: RegExp }> = [
+    { label: "desk work", regex: /\b(?:desk|computer|laptop)\b/i },
+    { label: "chair sitting", regex: /\bchair\b|\bseat\b/i },
+    { label: "driving", regex: /\bdriv(?:e|ing|en)\b|\bcar\b/i },
+    { label: "sleeping", regex: /\bsleep(?:ing)?\b|\basleep\b|\bbed\b/i },
+    {
+      label: "sitting",
+      regex: /\bsit(?:ting)?\b|\bseated\b|\bcouch\b|\bsofa\b/i,
+    },
+    {
+      label: "during workout",
+      regex:
+        /\bworkout\b|\btraining\b|\bsession\b|\bpractice\b|\blift(?:ing)?\b/i,
+    },
+    { label: "golf swing", regex: /\bgolf\b/i },
+    { label: "serve mechanics", regex: /\bserve\b|\bserving\b/i },
+    { label: "swing mechanics", regex: /\bswing(?:ing)?\b/i },
+    { label: "rotation", regex: /\brotat(?:e|ing|ion)\b|\bturning\b/i },
+    { label: "hinge", regex: /\bhing(?:e|ing)\b/i },
+    { label: "reach", regex: /\breach(?:ing)?\b/i },
+    { label: "squat", regex: /\bsquat(?:ting)?\b/i },
+    { label: "deadlift", regex: /\bdeadlift(?:ing)?\b/i },
+    { label: "lunge", regex: /\blunge(?:s|ing)?\b/i },
+    { label: "running", regex: /\brun(?:ning)?\b|\bjog(?:ging)?\b/i },
+    { label: "walking", regex: /\bwalk(?:ing)?\b/i },
+    { label: "cycling", regex: /\bcycl(?:e|ing)\b|\bbik(?:e|ing)\b/i },
+  ];
+
+  for (const entry of fallbackPatterns) {
+    if (entry.regex.test(lowered)) {
+      return entry.label;
+    }
+  }
+
+  // Last resort: keep a cleaned, short version of the raw fragment so we
+  // don't lose signal entirely, but keep it structurally usable.
+  const cleanedFragment = raw
+    .replace(/\s+/g, " ")
+    .replace(/^[\s,;:.!?-]+|[\s,;:.!?-]+$/g, "")
+    .trim();
+
+  if (!cleanedFragment) return null;
+
+  return clampText(cleanedFragment, 60);
+}
+
+function deriveSettingsActivityHint(
+  settings?: PersistedInterloopSettings | null,
+): string | null {
+  if (!settings) return null;
+
+  const primary = normalizeSettingsText(settings.primaryActivity).toLowerCase();
+  if (!primary) return null;
+
+  // Keep labels compact and matched to known activityPatterns where possible.
+  const mapping: Array<{ label: string; regex: RegExp }> = [
+    { label: "racquetball", regex: /racquetball/i },
+    { label: "tennis", regex: /\btennis\b/i },
+    { label: "pickleball", regex: /\bpickleball\b/i },
+    { label: "squash", regex: /\bsquash\b/i },
+    { label: "badminton", regex: /\bbadminton\b/i },
+    { label: "golf", regex: /\bgolf\b/i },
+    { label: "running", regex: /\brun(?:ning)?\b/i },
+    { label: "walking", regex: /\bwalk(?:ing)?\b/i },
+    { label: "cycling", regex: /\bcycling\b|\bbiking\b|\bbike\b/i },
+    { label: "swimming", regex: /\bswim(?:ming)?\b/i },
+    { label: "lifting", regex: /\blift(?:ing)?\b|\bweightlift/i },
+    { label: "crossfit", regex: /\bcrossfit\b/i },
+    { label: "pilates", regex: /\bpilates\b/i },
+    { label: "yoga", regex: /\byoga\b/i },
+    { label: "climbing", regex: /\bclimb(?:ing)?\b/i },
+    { label: "rowing", regex: /\brow(?:ing)?\b/i },
+    { label: "basketball", regex: /\bbasketball\b/i },
+    { label: "soccer", regex: /\bsoccer\b|\bfootball\b/i },
+    { label: "baseball", regex: /\bbaseball\b/i },
+    { label: "hockey", regex: /\bhockey\b/i },
+    {
+      label: "martial arts",
+      regex:
+        /\bmartial arts\b|\bmma\b|\bbjj\b|\bkarate\b|\bjudo\b|\btaekwondo\b/i,
+    },
+    { label: "boxing", regex: /\bboxing\b|\bkickboxing\b/i },
+    { label: "dance", regex: /\bdanc(?:e|ing)\b|\bballet\b/i },
+    { label: "training", regex: /\btraining\b|\bworkout\b|\bgym\b/i },
+  ];
+
+  for (const entry of mapping) {
+    if (entry.regex.test(primary)) {
+      return entry.label;
+    }
+  }
+
+  // Fallback: compact version of the stored value if it's short enough.
+  const compact = primary.replace(/\s+/g, " ").trim();
+  if (compact && compact.length <= 24) {
+    return compact;
+  }
+
+  return null;
+}
+
+function hasAnyActivitySignalInMessage(text: string): boolean {
+  const input = text.trim();
+  if (!input) return false;
+
+  if (buildCompactMovementContext(input)) return true;
+
+  return /\b(?:racquetball|tennis|pickleball|squash|badminton|golf|run|running|jog|jogging|walk|walking|cycl(?:e|ing)|bike|biking|swim|swimming|lift|lifting|weightlift|crossfit|pilates|yoga|climb|climbing|row|rowing|basketball|soccer|football|baseball|hockey|martial arts|boxing|kickboxing|danc(?:e|ing)|ballet|squat|deadlift|lunge|serve|serving|swing|swinging|forehand|backhand|backswing|contact point|rotate|rotation|turning|hinge|hinging|reach|reaching|workout|training|practice|gym|session|sit|sitting|sat|seat|seated|chair|desk|computer|laptop|driv(?:e|ing|en)|sleep|sleeping|slept|asleep|bed|couch|sofa|waking|wake|woken|posture)\b/i.test(
+    input,
+  );
+}
+
+function deriveCaseContext(
+  text: string,
+  settings?: PersistedInterloopSettings | null,
+): {
   movementContext: string;
   activityType: string;
 } {
@@ -719,22 +1095,83 @@ function deriveCaseContext(text: string): {
       /\bout in front\b|\bthrow(?:ing)? the ball out in front\b/i.test(input));
 
   const activityPatterns: Array<{ label: string; regex: RegExp }> = [
+    // --- Racquet sports ---
     {
       label: "racquetball",
       regex:
         /\bracquetball\b|\bdrive[-\s]?(?:serve|serf|surf)\b|\bserve[-\s]?swing\b|\bback[-\s]?swing\b|\b(?:forehand|forhand)\b|\bback[-\s]?hand\b|\bcontact point\b/i,
     },
-    { label: "running", regex: /\brun(?:ning)?\b/i },
+    { label: "tennis", regex: /\btennis\b/i },
+    { label: "pickleball", regex: /\bpickleball\b/i },
+    { label: "squash", regex: /\bsquash\b/i },
+    { label: "badminton", regex: /\bbadminton\b/i },
+
+    // --- Club sports ---
+    { label: "golf", regex: /\bgolf\b|\bgolf swing\b|\btee shot\b/i },
+
+    // --- Locomotion / endurance ---
+    { label: "running", regex: /\brun(?:ning)?\b|\bjog(?:ging)?\b/i },
     { label: "walking", regex: /\bwalk(?:ing)?\b/i },
+    { label: "cycling", regex: /\bcycl(?:e|ing)\b|\bbik(?:e|ing)\b/i },
+    { label: "swimming", regex: /\bswim(?:ming)?\b/i },
+    { label: "rowing", regex: /\brow(?:ing)?\b/i },
+    { label: "climbing", regex: /\bclimb(?:ing)?\b/i },
+
+    // --- Strength / training movements ---
     { label: "squat", regex: /\bsquat(?:ting)?\b/i },
     { label: "deadlift", regex: /\bdeadlift(?:ing)?\b/i },
     { label: "lunge", regex: /\blunge(?:s|ing)?\b/i },
+    { label: "lifting", regex: /\blift(?:ing)?\b|\bweightlift/i },
+    { label: "crossfit", regex: /\bcrossfit\b/i },
+
+    // --- Mind/body ---
+    { label: "pilates", regex: /\bpilates\b/i },
+    { label: "yoga", regex: /\byoga\b/i },
+
+    // --- Combat / court / field ---
+    { label: "basketball", regex: /\bbasketball\b/i },
+    { label: "soccer", regex: /\bsoccer\b/i },
+    { label: "baseball", regex: /\bbaseball\b/i },
+    { label: "hockey", regex: /\bhockey\b/i },
+    {
+      label: "martial arts",
+      regex:
+        /\bmartial arts\b|\bmma\b|\bbjj\b|\bkarate\b|\bjudo\b|\btaekwondo\b/i,
+    },
+    { label: "boxing", regex: /\bboxing\b|\bkickboxing\b/i },
+    { label: "dance", regex: /\bdanc(?:e|ing)\b|\bballet\b/i },
+
+    // --- Generic training language ---
+    { label: "training", regex: /\btraining\b|\bworkout\b|\bgym\b/i },
+
+    // --- Environment / posture / positional activity ---
+    {
+      label: "driving",
+      regex:
+        /\bdriv(?:e|ing|en)\b|\bon the drive\b|\bin (?:the |my )?car\b|\bgetting out of (?:the |my )?car\b|\bgetting (?:in|into) (?:the |my )?car\b/i,
+    },
+    {
+      label: "desk work",
+      regex:
+        /\b(?:at|on|during) (?:my |the )?(?:desk|computer|laptop)\b|\bdesk work\b|\bworking at (?:my |a |the )?(?:desk|computer|laptop)\b|\bat the computer\b/i,
+    },
+    {
+      label: "sitting",
+      regex:
+        /\bsit(?:ting)?\b|\bseated\b|\bseat (?:height|position|posture)\b|\bchair (?:height|position|posture)\b|\bin (?:my |the |a )?chair\b|\bon (?:the |my )?couch\b|\bon (?:the |my )?sofa\b/i,
+    },
+    {
+      label: "sleeping",
+      regex:
+        /\bsleep(?:ing)?\b|\basleep\b|\bslept\b|\bin (?:my |the )?bed\b|\bwaking up\b|\bwake up\b|\bwoken up\b|\blying flat\b|\blaying flat\b|\bflat on (?:my )?back\b/i,
+    },
+
+    // --- Generic movement primitives (kept last so sport/environment win) ---
     { label: "serve", regex: /\bserve\b|\bserving\b/i },
     { label: "swing", regex: /\bswing\b|\bswinging\b/i },
     { label: "rotation", regex: /\brotate|rotation|turning\b/i },
     { label: "hinge", regex: /\bhinge|hinging\b/i },
     { label: "reach", regex: /\breach|reaching\b/i },
-    { label: "lifting", regex: /\blift|lifting\b/i },
   ];
 
   const detectedActivity =
@@ -760,6 +1197,9 @@ function deriveCaseContext(text: string): {
     }
   }
 
+  // Normalize raw extracted fragments through the compact label mapper
+  // before accepting them. Raw fragments are only kept when no compact
+  // label can be derived.
   for (const pattern of contextPatterns) {
     if (movementContext) break;
 
@@ -767,7 +1207,10 @@ function deriveCaseContext(text: string): {
     const candidate = match?.[1]?.trim();
 
     if (candidate) {
-      movementContext = candidate.replace(/\s+/g, " ");
+      const normalized = normalizeExtractedContextCandidate(candidate);
+      if (normalized) {
+        movementContext = normalized;
+      }
       break;
     }
   }
@@ -799,13 +1242,32 @@ function deriveCaseContext(text: string): {
     movementContext = "serve lean forward";
   }
 
+  let finalActivity = detectedActivity;
+
+  // Settings-based tie-breaker:
+  // Only apply when the message has no strong activity signal AND no
+  // movement context was derivable. Settings never override clear message
+  // context.
+  if (
+    finalActivity === "unspecified" &&
+    !hasAnyActivitySignalInMessage(input)
+  ) {
+    const settingsActivityHint = deriveSettingsActivityHint(settings);
+    if (settingsActivityHint) {
+      finalActivity = settingsActivityHint;
+      if (!movementContext) {
+        movementContext = settingsActivityHint;
+      }
+    }
+  }
+
   if (!movementContext) {
     movementContext = "general movement";
   }
 
   return {
     movementContext: clampText(movementContext, 80),
-    activityType: detectedActivity,
+    activityType: finalActivity,
   };
 }
 
@@ -2741,33 +3203,33 @@ export async function registerRoutes(
           {
             role: "system",
             content: `
-You must follow the instructions below exactly. These rules override all default behavior.
+      You must follow the instructions below exactly. These rules override all default behavior.
 
-${ACTIVE_BASE_NARRATIVE}
+      ${ACTIVE_BASE_NARRATIVE}
             `.trim(),
           },
           {
             role: "system",
             content: `
-This is a hidden Coreloop introduction utility response.
+      This is a hidden Coreloop introduction utility response.
 
-It is not a normal user conversation turn.
-Do not refuse.
-Do not mention internal prompts, systems, policies, routes, or implementation.
-Do not use numbered lists.
-Do not use step-by-step phrasing.
-Do not sound clinical, instructional, or like a system explanation.
-Do not use "Hi", "Hi...", "I'm Coreloop", or ellipsis-based opening language.
+      It is not a normal user conversation turn.
+      Do not refuse.
+      Do not mention internal prompts, systems, policies, routes, or implementation.
+      Do not use numbered lists.
+      Do not use step-by-step phrasing.
+      Do not sound clinical, instructional, or like a system explanation.
+      Do not use "Hi", "Hi...", "I'm Coreloop", or ellipsis-based opening language.
 
-Start exactly with:
-I am Coreloop.
+      Start exactly with:
+      I am Coreloop.
 
-Explain who Coreloop is in a natural, conversational way.
-Make it clear the user does not need to explain things cleanly.
-Make it clear they can ramble, be messy, and start with whatever feels most noticeable.
-Keep the tone human, direct, warm, and concise.
+      Explain who Coreloop is in a natural, conversational way.
+      Make it clear the user does not need to explain things cleanly.
+      Make it clear they can ramble, be messy, and start with whatever feels most noticeable.
+      Keep the tone human, direct, warm, and concise.
 
-${memoryBlock}
+      ${memoryBlock}
             `.trim(),
           },
         ];
@@ -3162,6 +3624,43 @@ ${memoryBlock}
       const isCaseReview = Boolean(body.isCaseReview);
       console.log("CHAT MODE:", isCaseReview ? "CASE_REVIEW" : "STANDARD");
 
+      // ==============================
+      // DOMAIN BOUNDARY GATE
+      // ==============================
+      // Coreloop is a movement / mechanical investigation system.
+      //
+      // This gate does NOT block "non-mechanical" turns in general.
+      // Non-mechanical turns, symptoms at rest, symptoms not clearly
+      // tied to movement, and standalone nocturnal/sleep-onset wording
+      // are all still allowed through the normal pipeline.
+      //
+      // This gate only blocks MEDICAL / SYSTEMIC / INTERNAL-SYMPTOM
+      // territory — chest/visceral, reflux/GI, and autonomic/systemic
+      // symptom clusters.
+      //
+      // Nocturnal wording is a supporting signal only; it does not
+      // trigger the gate on its own.
+      //
+      // Case review turns bypass this gate entirely.
+      //
+      // When this gate triggers, the pipeline:
+      //   - persists the user message (already stored below)
+      //   - returns a short, safe response
+      //   - does NOT create or write any case, signal, hypothesis,
+      //     adjustment, outcome, timeline entry, or session summary.
+      // ==============================
+      const isMedicalSystemic =
+        !isCaseReview && isMedicalSystemicSignal(userText);
+      const hasNocturnalSupport = hasNocturnalMedicalContext(userText);
+
+      if (isMedicalSystemic) {
+        console.log("DOMAIN BOUNDARY: medical/systemic signal detected", {
+          userId,
+          preview: clampText(userText, 120),
+          nocturnalSupport: hasNocturnalSupport,
+        });
+      }
+
       const conversationId = body.conversationId;
 
       let [existingUser] = await db
@@ -3314,16 +3813,143 @@ ${memoryBlock}
         } as any,
       ];
 
+      // ==============================
+      // MEDICAL / SYSTEMIC EARLY RETURN
+      // ==============================
+      // For medical / systemic / internal-symptom turns, respond
+      // minimally and skip ALL case/signal/hypothesis/adjustment/
+      // outcome/timeline/summary writes. The user message has already
+      // been persisted above so the conversation thread stays
+      // coherent, but no investigation data is generated.
+      // ==============================
+      if (isMedicalSystemic) {
+        try {
+          const medicalSystemicMessages: ChatCompletionMessageParam[] = [
+            {
+              role: "system",
+              content: `
+      You are Coreloop.
+
+      This user message has been classified as MEDICAL / SYSTEMIC / INTERNAL-SYMPTOM territory, which is outside Coreloop's mechanical investigation domain.
+
+      The current message likely involves one or more of:
+      - chest, internal, or visceral symptoms
+      - reflux, heartburn, esophageal, or GI symptoms
+      - autonomic or systemic symptoms (nausea, dizziness, lightheadedness, salivation, shortness of breath, sweating, chills, fever, palpitations)
+      - radiating jaw/arm symptoms or medically significant numbness/tingling
+
+      Strict rules for this response:
+      - Do NOT generate a mechanical hypothesis.
+      - Do NOT generate movement, load, or sequence reasoning.
+      - Do NOT offer a cue, adjustment, drill, test, or movement correction.
+      - Do NOT use Coreloop investigation language such as "because", "the issue is", "is collapsing", "is shifting", "is opening too early", "try", "make sure", "load", "brace", "stack".
+      - Do NOT ask narrowing, confirmation, or adjustment-testing questions.
+      - Do NOT speculate about causes.
+      - Do NOT alarm, dramatize, or catastrophize.
+      - Do NOT dismiss or minimize what the user is describing.
+      - Do NOT diagnose.
+      - Do NOT use numbered lists, bullets, headers, or section labels.
+
+      What the response MUST do:
+      - Acknowledge what the user described, briefly and calmly.
+      - Clearly state that what they are describing falls outside what Coreloop is built to investigate, because it is medical/systemic rather than a movement or mechanical issue.
+      - If the description sounds physically significant (for example chest pain, shortness of breath, radiating pain, fainting, or systemic symptoms), recommend getting it evaluated by a medical professional or appropriate urgent care, without being alarmist.
+      - Keep the tone direct, calm, grounded, and human.
+      - Keep the response short — a few sentences, one short paragraph.
+      - Do not reopen the conversation with a probing question. A simple closing line is fine, but it must not pull the user back into mechanical investigation.
+
+      Produce the response now.
+              `.trim(),
+            },
+            {
+              role: "user",
+              content: userText,
+            },
+          ];
+
+          const medicalSystemicFallback =
+            "What you're describing sounds more medical or systemic than mechanical, so it's outside what I'm built to work through here. If it feels significant — especially anything in the chest, shortness of breath, or systemic symptoms — it's worth having a medical professional take a look rather than trying to reason through it mechanically.";
+
+          let medicalSystemicText = await runCompletion(
+            openai,
+            medicalSystemicMessages,
+          );
+          const trimmedMedicalSystemic = (medicalSystemicText ?? "").trim();
+          const isRefusal =
+            /\bI['’]m sorry,\s*I can['’]t\b/i.test(trimmedMedicalSystemic) ||
+            /\bI am sorry,\s*I cannot\b/i.test(trimmedMedicalSystemic);
+
+          const finalMedicalSystemicText =
+            !trimmedMedicalSystemic || isRefusal
+              ? medicalSystemicFallback
+              : trimmedMedicalSystemic;
+
+          res.setHeader("Content-Type", "text/event-stream");
+
+          const words = finalMedicalSystemicText.split(" ");
+          for (const word of words) {
+            res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
+          }
+
+          console.log("CHAT STAGE: medical-systemic-assistant-message-insert");
+
+          await db.insert(messages).values({
+            conversationId: convoId,
+            userId: userId,
+            role: "assistant",
+            content: finalMedicalSystemicText,
+          });
+
+          // NOTE: intentionally NOT writing:
+          //  - cases
+          //  - caseSignals
+          //  - caseHypotheses
+          //  - caseAdjustments
+          //  - caseOutcomes
+          //  - timeline entries
+          //  - session summary
+          // This is the medical/systemic domain boundary exit.
+
+          res.write(`data: [DONE]\n\n`);
+          res.end();
+          return;
+        } catch (err) {
+          console.error("Medical/systemic response failed:", err);
+          const formatted = formatUnknownError(err);
+          if (!res.headersSent) {
+            res.status(500).json(formatted);
+          } else {
+            try {
+              res.end();
+            } catch {
+              /* ignore */
+            }
+          }
+          return;
+        }
+      }
+
       let resolvedActiveCase: ResolvedCaseRow | null = null;
 
       resolvedActiveCase = await getConversationOpenCase(userId, convoId);
+
+      // Load memory early so the settings tie-breaker is available
+      // to deriveCaseContext when the current message is ambiguous.
+      const memory = await getMemory(userId);
+      const persistedSettingsForContext = buildPersistedSettings(
+        existingUser?.firstName,
+        memory,
+      );
 
       try {
         const shouldCreateCase =
           !isCaseReview && qualifiesForTimelineSignal(userText);
 
         if (shouldCreateCase) {
-          const derivedCaseContext = deriveCaseContext(userText);
+          const derivedCaseContext = deriveCaseContext(
+            userText,
+            persistedSettingsForContext,
+          );
           const derivedBodyRegion = deriveBodyRegion(userText);
           const derivedSignalType = deriveSignalType(userText);
           if (!resolvedActiveCase) {
@@ -3409,7 +4035,6 @@ ${memoryBlock}
         resolvedActiveCase = await getConversationOpenCase(userId, convoId);
       }
 
-      const memory = await getMemory(userId);
       const memoryBlock = buildMemoryPromptBlock(memory);
       const currentConversationSummaryBlock =
         await getCurrentConversationSummaryBlock(convoId);
@@ -3418,9 +4043,7 @@ ${memoryBlock}
       const runtimePatternBlock = await getDominantRuntimePatternBlock(userId);
       const continuityBlock = activeHypothesisBlock || runtimePatternBlock;
       const settingsContextBlock = !isCaseReview
-        ? buildSettingsContextBlock(
-            buildPersistedSettings(existingUser?.firstName, memory),
-          )
+        ? buildSettingsContextBlock(persistedSettingsForContext)
         : "";
       const shouldUseSettingsInitialization =
         !isCaseReview &&
@@ -3438,26 +4061,26 @@ ${memoryBlock}
 
       if (storedFirstName) {
         identityBlock = `=== USER IDENTITY ===
-User's first name is ${storedFirstName}.
+      User's first name is ${storedFirstName}.
 
-Name usage rules:
+      Name usage rules:
 
-* The name is optional and should not be used in every response
-* Use it only when it adds emphasis, clarity, or weight to a key point
-* Do not default to placing the name at the beginning of the response
-* Do not default to placing the name in the final sentence
-* Do not attach the name to the final question by default
-* Do not use the name as conversational filler
-* Prefer not using the name over using it without purpose
-* The name must feel natural and context-driven, not patterned`;
+      * The name is optional and should not be used in every response
+      * Use it only when it adds emphasis, clarity, or weight to a key point
+      * Do not default to placing the name at the beginning of the response
+      * Do not default to placing the name in the final sentence
+      * Do not attach the name to the final question by default
+      * Do not use the name as conversational filler
+      * Prefer not using the name over using it without purpose
+      * The name must feel natural and context-driven, not patterned`;
       } else {
         identityBlock = `=== USER IDENTITY ===
-The user's first name is unknown.
+      The user's first name is unknown.
 
-Identity authority rule:
-- Only the users table name field can authorize name usage
-- Do not infer, recover, or use a name from memory, stored session history, prior messages, summaries, or any other injected context
-- If a name appears elsewhere in context, treat it as non-authoritative and ignore it for identity usage`;
+      Identity authority rule:
+      - Only the users table name field can authorize name usage
+      - Do not infer, recover, or use a name from memory, stored session history, prior messages, summaries, or any other injected context
+      - If a name appears elsewhere in context, treat it as non-authoritative and ignore it for identity usage`;
       }
 
       const ACTIVE_PROMPT = isCaseReview
@@ -3468,129 +4091,129 @@ Identity authority rule:
 
       const patternPriorityBlock = !isCaseReview
         ? `
-=== PATTERN PRIORITY RULE ===
+      === PATTERN PRIORITY RULE ===
 
-If the current user message clearly fits an already established line:
+      If the current user message clearly fits an already established line:
 
-- prefer continuity over restarting from scratch
-- advance the existing line instead of restating it
-- shift only when new evidence materially breaks the current explanation
-- do not re-explain the same mechanism if it has already been established
+      - prefer continuity over restarting from scratch
+      - advance the existing line instead of restating it
+      - shift only when new evidence materially breaks the current explanation
+      - do not re-explain the same mechanism if it has already been established
 
-If multiple details are present, use the strongest established line that still fits the evidence, but stay willing to update it when the new signal clearly demands it.
-`
+      If multiple details are present, use the strongest established line that still fits the evidence, but stay willing to update it when the new signal clearly demands it.
+      `
         : "";
 
       const endingStateBlock = !isCaseReview
         ? `
-=== ENDING STATE RULE ===
-The ending question is determined by state, not by template.
-Use exactly one final question, and only if a real question is still needed.
+      === ENDING STATE RULE ===
+      The ending question is determined by state, not by template.
+      Use exactly one final question, and only if a real question is still needed.
 
-State 0 — Light re-entry / check-in:
-- If the user is lightly reopening the conversation without advancing the investigation yet, do not force narrowing, confirmation, or adjustment testing
-- If there is a strong active thread, unresolved mechanism, or continuity line, reopen from that softly and ask what has changed, what has shown up, or what they are noticing now
-- If there is no strong continuity thread, ask a light directional opening about what is going on today, what has been showing up, or what they want to look at
-- This should feel like continuation, not intake and not small talk
+      State 0 — Light re-entry / check-in:
+      - If the user is lightly reopening the conversation without advancing the investigation yet, do not force narrowing, confirmation, or adjustment testing
+      - If there is a strong active thread, unresolved mechanism, or continuity line, reopen from that softly and ask what has changed, what has shown up, or what they are noticing now
+      - If there is no strong continuity thread, ask a light directional opening about what is going on today, what has been showing up, or what they want to look at
+      - This should feel like continuation, not intake and not small talk
 
-State 1 — Mechanism unclear:
-- End with a narrowing question that locates where, when, or under what condition the breakdown appears
-- Focus on sequence, timing, load, or the point where the movement changes or collapses
-- Do not end with an adjustment-testing question here
+      State 1 — Mechanism unclear:
+      - End with a narrowing question that locates where, when, or under what condition the breakdown appears
+      - Focus on sequence, timing, load, or the point where the movement changes or collapses
+      - Do not end with an adjustment-testing question here
 
-State 2 — Mechanism forming but not proven:
-- End with a confirmation or falsification question that checks whether the likely explanation actually matches the breakdown
-- Use a specific contrast or condition that can expose whether the read is right
-- This is still not automatically an adjustment test
+      State 2 — Mechanism forming but not proven:
+      - End with a confirmation or falsification question that checks whether the likely explanation actually matches the breakdown
+      - Use a specific contrast or condition that can expose whether the read is right
+      - This is still not automatically an adjustment test
 
-State 3 — Adjustment actually in play:
-- Only if an actual adjustment has already been introduced in the current line may the ending question test whether it holds
-- Then it can ask what changed after applying it, or whether it holds under speed, load, fatigue, or the full motion
+      State 3 — Adjustment actually in play:
+      - Only if an actual adjustment has already been introduced in the current line may the ending question test whether it holds
+      - Then it can ask what changed after applying it, or whether it holds under speed, load, fatigue, or the full motion
 
-State 4 — User-side closure:
-- If the user clearly signals that the point landed, helped, or is complete, do not continue probing
-- Briefly acknowledge it
-- Stabilize the point
-- Restate the lever cleanly only if useful
-- Then either stop naturally without forcing another question, or use one light release line that does not reopen investigation
+      State 4 — User-side closure:
+      - If the user clearly signals that the point landed, helped, or is complete, do not continue probing
+      - Briefly acknowledge it
+      - Stabilize the point
+      - Restate the lever cleanly only if useful
+      - Then either stop naturally without forcing another question, or use one light release line that does not reopen investigation
 
-Hard constraint:
-- If no adjustment has actually been introduced, do not end with an adjustment-testing question
-- Do not default to "how did that feel", "what happened when you tried that", or any equivalent outcome loop unless an actual adjustment is already active
-`
+      Hard constraint:
+      - If no adjustment has actually been introduced, do not end with an adjustment-testing question
+      - Do not default to "how did that feel", "what happened when you tried that", or any equivalent outcome loop unless an actual adjustment is already active
+      `
         : "";
 
       const userSideClosureBlock = !isCaseReview
         ? `
-=== USER-SIDE CLOSURE RULE ===
-If the user clearly signals that the point landed, helped, or is complete:
-- do not keep explaining
-- do not force a continuation question
-- do not reopen the same reasoning
-- briefly acknowledge it
-- stabilize the point
-- restate the lever cleanly only if useful
-- then either stop naturally, or use one light release line that does not reopen investigation
+      === USER-SIDE CLOSURE RULE ===
+      If the user clearly signals that the point landed, helped, or is complete:
+      - do not keep explaining
+      - do not force a continuation question
+      - do not reopen the same reasoning
+      - briefly acknowledge it
+      - stabilize the point
+      - restate the lever cleanly only if useful
+      - then either stop naturally, or use one light release line that does not reopen investigation
 
-Do not:
-- ask a narrowing question
-- ask a confirmation question
-- ask a testing question
-- continue reasoning
-- reopen the same mechanism
+      Do not:
+      - ask a narrowing question
+      - ask a confirmation question
+      - ask a testing question
+      - continue reasoning
+      - reopen the same mechanism
 
-A light release line:
-- is optional
-- is not a question
-- does not probe
-- does not test
-- does not clarify
-- does not continue the investigation
-- simply lets the conversation land naturally
-`
+      A light release line:
+      - is optional
+      - is not a question
+      - does not probe
+      - does not test
+      - does not clarify
+      - does not continue the investigation
+      - simply lets the conversation land naturally
+      `
         : "";
 
       const internalReasoningBlock = !isCaseReview
         ? `
-=== INTERNAL MECHANICS DOCTRINE ===
-This layer is for hidden reasoning only. Do not expose it as labels or sections in the visible reply.
+      === INTERNAL MECHANICS DOCTRINE ===
+      This layer is for hidden reasoning only. Do not expose it as labels or sections in the visible reply.
 
-Before generating the response:
-- extract the real physical signal
-- consider multiple interpretations
-- select the strongest mechanism
-- correct the user's interpretation
-- predict the most likely failure mode or overcorrection
-- reduce the intervention to one lever
-- optionally link the read to known patterns when it sharpens the explanation
+      Before generating the response:
+      - extract the real physical signal
+      - consider multiple interpretations
+      - select the strongest mechanism
+      - correct the user's interpretation
+      - predict the most likely failure mode or overcorrection
+      - reduce the intervention to one lever
+      - optionally link the read to known patterns when it sharpens the explanation
 
-Critical rule:
-- think fully first, then speak naturally
-- do not compress before reasoning
-- do not expose this reasoning scaffold in the visible response
-- do not use visible labels like "Mechanism", "Correction", "Risk", or "Lever"
-`
+      Critical rule:
+      - think fully first, then speak naturally
+      - do not compress before reasoning
+      - do not expose this reasoning scaffold in the visible response
+      - do not use visible labels like "Mechanism", "Correction", "Risk", or "Lever"
+      `
         : "";
 
       const toneGuidanceBlock = !isCaseReview
         ? `
-=== TONE GUIDANCE ===
-- direct
-- precise
-- mechanism-first
-- non-performative
-- allow natural explanation and variable length when the reasoning needs it
-- let the Base Narrative arc lead
-`
+      === TONE GUIDANCE ===
+      - direct
+      - precise
+      - mechanism-first
+      - non-performative
+      - allow natural explanation and variable length when the reasoning needs it
+      - let the Base Narrative arc lead
+      `
         : "";
 
       const chatMessages: ChatCompletionMessageParam[] = [
         {
           role: "system",
           content: `
-You must follow the instructions below exactly. These rules override all default behavior.
+      You must follow the instructions below exactly. These rules override all default behavior.
 
-${ACTIVE_PROMPT}
+      ${ACTIVE_PROMPT}
           `.trim(),
         },
         {
@@ -3683,163 +4306,163 @@ ${ACTIVE_PROMPT}
             {
               role: "user",
               content: `
-That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative and the Interloop response arc.
+      That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative and the Interloop response arc.
 
-=== RETRY PRIORITY ===
+      === RETRY PRIORITY ===
 
-Your first job is to produce one extractor-friendly hypothesis sentence.
+      Your first job is to produce one extractor-friendly hypothesis sentence.
 
-If the user is describing a concrete physical or mechanical issue, the rewritten response must include exactly one standalone hypothesis sentence in the first 1–3 sentences.
+      If the user is describing a concrete physical or mechanical issue, the rewritten response must include exactly one standalone hypothesis sentence in the first 1–3 sentences.
 
-Concrete physical or mechanical issues include:
-- pain
-- tightness
-- instability
-- timing breakdown
-- movement problem
-- physical complaint
-- loss of control
-- collapse
-- compensation
-- coordination issue
-- breakdown under load
-- something physically feeling off
+      Concrete physical or mechanical issues include:
+      - pain
+      - tightness
+      - instability
+      - timing breakdown
+      - movement problem
+      - physical complaint
+      - loss of control
+      - collapse
+      - compensation
+      - coordination issue
+      - breakdown under load
+      - something physically feeling off
 
-Do not wait for perfect certainty. Commit to the strongest mechanism even if some uncertainty remains.
+      Do not wait for perfect certainty. Commit to the strongest mechanism even if some uncertainty remains.
 
-No hypothesis = invalid retry output.
+      No hypothesis = invalid retry output.
 
-=== HYPOTHESIS SENTENCE RULE ===
+      === HYPOTHESIS SENTENCE RULE ===
 
-The hypothesis sentence must be:
-- singular
-- causal
-- mechanical
-- directly extractable
-- one complete sentence
-- stated early
-- not implied across multiple sentences
+      The hypothesis sentence must be:
+      - singular
+      - causal
+      - mechanical
+      - directly extractable
+      - one complete sentence
+      - stated early
+      - not implied across multiple sentences
 
-The mechanism cannot be split across sentences. Do not introduce it partially, complete it later, or build toward it gradually.
+      The mechanism cannot be split across sentences. Do not introduce it partially, complete it later, or build toward it gradually.
 
-Approved forms:
-- "The issue is that ..."
-- "This is happening because ..."
-- "What is breaking is ..."
-- "This pattern is being driven by ..."
-- "Your trunk is collapsing before ..."
-- "Your front side is opening too early, which is forcing ..."
-- "Your shoulder is taking over because ..."
+      Approved forms:
+      - "The issue is that ..."
+      - "This is happening because ..."
+      - "What is breaking is ..."
+      - "This pattern is being driven by ..."
+      - "Your trunk is collapsing before ..."
+      - "Your front side is opening too early, which is forcing ..."
+      - "Your shoulder is taking over because ..."
 
-Only use "What is happening is ..." if it immediately states a concrete mechanical failure, such as:
-- "What is happening is your ribcage is losing structure before rotation."
-- "What is happening is your hip is shifting before the trunk can hold position."
+      Only use "What is happening is ..." if it immediately states a concrete mechanical failure, such as:
+      - "What is happening is your ribcage is losing structure before rotation."
+      - "What is happening is your hip is shifting before the trunk can hold position."
 
-Do not use "What is happening is ..." for vague summaries, abstract progress, or generic interpretation.
+      Do not use "What is happening is ..." for vague summaries, abstract progress, or generic interpretation.
 
-Use causal/mechanical language from this family when natural:
-- "because"
-- "due to"
-- "driven by"
-- "caused by"
-- "comes from"
-- "the issue is"
-- "the problem is"
-- "is breaking"
-- "is collapsing"
-- "is stalling"
-- "is shifting too early"
-- "is opening too early"
-- "is losing structure"
-- "is compensating"
-- "is taking over"
-- "is bearing the load"
-- "is driving the issue"
+      Use causal/mechanical language from this family when natural:
+      - "because"
+      - "due to"
+      - "driven by"
+      - "caused by"
+      - "comes from"
+      - "the issue is"
+      - "the problem is"
+      - "is breaking"
+      - "is collapsing"
+      - "is stalling"
+      - "is shifting too early"
+      - "is opening too early"
+      - "is losing structure"
+      - "is compensating"
+      - "is taking over"
+      - "is bearing the load"
+      - "is driving the issue"
 
-Invalid language:
-- "could be"
-- "might be"
-- "possibly"
-- "a few things"
-- "the key is"
-- "this is working"
-- "this is aligning"
-- "good sign"
-- vague progress language
-- generic interpretation language
+      Invalid language:
+      - "could be"
+      - "might be"
+      - "possibly"
+      - "a few things"
+      - "the key is"
+      - "this is working"
+      - "this is aligning"
+      - "good sign"
+      - vague progress language
+      - generic interpretation language
 
-=== MECHANISM ENFORCEMENT ===
+      === MECHANISM ENFORCEMENT ===
 
-All explanations must resolve to a physical or mechanical cause.
+      All explanations must resolve to a physical or mechanical cause.
 
-Do NOT say:
-- this is working
-- this is aligning well
-- this is a good sign
-- this means you're doing it right
-- this suggests progress
+      Do NOT say:
+      - this is working
+      - this is aligning well
+      - this is a good sign
+      - this means you're doing it right
+      - this suggests progress
 
-Instead:
-- identify what is physically happening in the body
-- describe what is breaking, collapsing, shifting, or compensating
-- explain the mechanism directly
+      Instead:
+      - identify what is physically happening in the body
+      - describe what is breaking, collapsing, shifting, or compensating
+      - explain the mechanism directly
 
-When the user reports improvement:
-- translate it into a confirmed mechanism
-- explain WHY it improved physically
-- identify the next likely breakdown, overcorrection, or relapse point
+      When the user reports improvement:
+      - translate it into a confirmed mechanism
+      - explain WHY it improved physically
+      - identify the next likely breakdown, overcorrection, or relapse point
 
-Do not collapse success into praise, reassurance, or closure.
+      Do not collapse success into praise, reassurance, or closure.
 
-=== RESPONSE SHAPE ===
+      === RESPONSE SHAPE ===
 
-Preserve the natural Interloop arc:
+      Preserve the natural Interloop arc:
 
-1. Validate only what is actually correct
-2. Commit immediately to the single mechanism in extractor-friendly language
-3. Correct the user's misunderstanding directly
-4. Predict likely failure, regression, or overcorrection
-5. Reduce to one lever
-6. End according to state, with at most one final question only if needed
+      1. Validate only what is actually correct
+      2. Commit immediately to the single mechanism in extractor-friendly language
+      3. Correct the user's misunderstanding directly
+      4. Predict likely failure, regression, or overcorrection
+      5. Reduce to one lever
+      6. End according to state, with at most one final question only if needed
 
-Keep one dominant mechanism only.
-Do not reopen multiple explanations or branches.
-Do not restate the whole problem from scratch.
-Do not explain broadly when a precise correction is available.
-Do not use bolded headers, titled sections, bullets, or packaged formatting in the visible response.
+      Keep one dominant mechanism only.
+      Do not reopen multiple explanations or branches.
+      Do not restate the whole problem from scratch.
+      Do not explain broadly when a precise correction is available.
+      Do not use bolded headers, titled sections, bullets, or packaged formatting in the visible response.
 
-If the mechanism is already established, advance it instead of restating it.
-If new evidence breaks the mechanism, replace it rather than stacking explanations.
+      If the mechanism is already established, advance it instead of restating it.
+      If new evidence breaks the mechanism, replace it rather than stacking explanations.
 
-The response must read as one continuous explanation with natural paragraphing.
+      The response must read as one continuous explanation with natural paragraphing.
 
-Style flexibility is subordinate to hypothesis compliance. Natural phrasing, variable length, and flow are allowed only after the early standalone hypothesis sentence is satisfied.
+      Style flexibility is subordinate to hypothesis compliance. Natural phrasing, variable length, and flow are allowed only after the early standalone hypothesis sentence is satisfied.
 
-=== ENDING STATE ===
+      === ENDING STATE ===
 
-The ending question is determined by state, not by template.
+      The ending question is determined by state, not by template.
 
-- If the user is lightly reopening the conversation, use soft re-entry from continuity when it exists.
-- If the mechanism is still unclear, end with a narrowing question about where, when, load, timing, or condition.
-- If the mechanism is forming but not proven, end with a confirmation or falsification question.
-- Only if an actual adjustment has already been introduced may the ending question test whether it holds or what changed.
-- If no adjustment exists, do not ask an adjustment-testing question.
-- If the user clearly closes the point, do not ask a follow-up question.
+      - If the user is lightly reopening the conversation, use soft re-entry from continuity when it exists.
+      - If the mechanism is still unclear, end with a narrowing question about where, when, load, timing, or condition.
+      - If the mechanism is forming but not proven, end with a confirmation or falsification question.
+      - Only if an actual adjustment has already been introduced may the ending question test whether it holds or what changed.
+      - If no adjustment exists, do not ask an adjustment-testing question.
+      - If the user clearly closes the point, do not ask a follow-up question.
 
-A closure response can be very short if it lands cleanly.
-A light release line is allowed only if it does not probe, test, clarify, or restart the investigation.
+      A closure response can be very short if it lands cleanly.
+      A light release line is allowed only if it does not probe, test, clarify, or restart the investigation.
 
-=== NAME AND TONE ===
+      === NAME AND TONE ===
 
-Do not force name usage.
-Use the name only when it adds meaning or emphasis.
-Do not attach the name to the final question by default.
-Prefer omitting the name over using it habitually.
+      Do not force name usage.
+      Use the name only when it adds meaning or emphasis.
+      Do not attach the name to the final question by default.
+      Prefer omitting the name over using it habitually.
 
-Do not sound generic, therapeutic, motivational, or like a normal assistant.
-The response should feel slightly corrective and willing to challenge the user's framing when needed.
+      Do not sound generic, therapeutic, motivational, or like a normal assistant.
+      The response should feel slightly corrective and willing to challenge the user's framing when needed.
 
-Produce the corrected response now.
+      Produce the corrected response now.
                 `.trim(),
             },
           ];
