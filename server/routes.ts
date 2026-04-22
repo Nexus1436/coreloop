@@ -70,6 +70,8 @@ const INTERLOOP_SETTINGS_VOICE_IDS = {
   male_pt: "3WZjQ5NUrKH37Zw6Vgp7",
 } as const;
 
+const CONVERSATION_SESSION_TIMEOUT_MS = 1000 * 60 * 60 * 6;
+
 type PersistedInterloopVoice = keyof typeof INTERLOOP_SETTINGS_VOICE_IDS;
 
 // ==============================
@@ -258,14 +260,38 @@ function buildSettingsContextBlock(
   if (lines.length === 0) return "";
 
   return `
-=== SETTINGS INITIALIZATION CONTEXT ===
-This is structured setup context for a true new user.
+=== PERSISTENT USER SETTINGS CONTEXT ===
+These are stable user-provided profile settings.
 
-Use these settings only to interpret the user's first signals and shape early mechanism framing.
-Do not treat these settings as discovered memory, case evidence, retrieval evidence, or confirmed findings.
-Do not create or imply a case from settings alone.
+Use these settings as durable interpretive context across the user's lifetime.
+They should shape how you read relevant activity demands, body profile, dominant side, load, sport/activity context, and movement signals.
+
+Settings are not case evidence.
+Settings do not prove a current mechanism.
+Settings do not override the current user signal.
+Settings do not create or imply a case by themselves.
+Settings are not discovered findings.
+
+They are an always-available profile anchor for interpreting the user's current message when relevant.
 
 ${lines.join("\n")}
+`;
+}
+
+function buildSettingsInitializationEmphasisBlock(
+  shouldUseSettingsInitialization: boolean,
+): string {
+  if (!shouldUseSettingsInitialization) return "";
+
+  return `
+=== NEW USER SETTINGS EMPHASIS ===
+This appears to be an early conversation for this user.
+
+Use the persistent settings context more actively to orient the first few interpretations and make the opening investigation specific to the user's profile.
+
+Do not treat settings as proof of a mechanism.
+Do not create or imply a case from settings alone.
+Current user signals still control the investigation.
 `;
 }
 
@@ -512,6 +538,138 @@ function isFallbackMovementContext(value: string | null | undefined): boolean {
 
 function isFallbackActivityType(value: string | null | undefined): boolean {
   return normalizeCaseKey(value) === "unspecified";
+}
+
+function normalizeLifecycleMessage(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, " ");
+}
+
+function stripLeadingGreeting(text: string): string {
+  return text
+    .trim()
+    .replace(
+      /^(?:hi|hey|hello|good morning|good afternoon|good evening|how are you|what's up|whats up|sup)\b[\s,!.?;-]*/i,
+      "",
+    )
+    .trim();
+}
+
+function isGreetingOpeningMessage(text: string): boolean {
+  const normalized = normalizeLifecycleMessage(text);
+  if (!normalized) return false;
+
+  const greetingOnly =
+    /^(?:hi|hey|hello|good morning|good afternoon|good evening|how are you|how are you doing|what's up|whats up|sup)[\s,!.?]*$/i;
+
+  const greetingLed =
+    /^(?:hi|hey|hello|good morning|good afternoon|good evening|how are you|how are you doing|what's up|whats up|sup)\b/i;
+
+  return greetingOnly.test(normalized) || greetingLed.test(normalized);
+}
+
+function dependsOnPriorConversationContext(text: string): boolean {
+  const normalized = normalizeLifecycleMessage(text);
+  if (!normalized) return false;
+
+  const withoutGreeting = normalizeLifecycleMessage(stripLeadingGreeting(text));
+  const candidates = [normalized, withoutGreeting].filter(Boolean);
+
+  const dependencyPatterns = [
+    /\byou said\b/i,
+    /\byou mentioned\b/i,
+    /\blike you said\b/i,
+    /\bwhat you said\b/i,
+    /\bthat thing you said\b/i,
+    /\bthat adjustment\b/i,
+    /\bthat cue\b/i,
+    /\bthat drill\b/i,
+    /\bthat test\b/i,
+    /\bthat worked\b/i,
+    /\bthis worked\b/i,
+    /\bit worked\b/i,
+    /\bthat helped\b/i,
+    /\bthis helped\b/i,
+    /\bi tried\b/i,
+    /\bi did that\b/i,
+    /\bi did it\b/i,
+    /\bafter i tried it\b/i,
+    /\bafter trying it\b/i,
+    /\bafter i did that\b/i,
+    /\bwhen i did that\b/i,
+    /\bwhen i tried it\b/i,
+    /\bthat makes sense\b/i,
+    /\bthis makes sense\b/i,
+    /\bexactly\b/i,
+    /^(?:yes|yeah|yep|no|nah),?\s+but\b/i,
+    /^(?:yes|yeah|yep|no|nah),?\s+(?:and|that|this|it)\b/i,
+    /\bstill\s+(?:hurts|feels|happens|there|doing|getting|having|not|is|isn't|does|doesn't|can't|cannot)\b/i,
+    /\bsame\s+(?:thing|issue|problem|spot|pain|feeling|side)\b/i,
+    /\bagain\s+(?:when|after|with|during|on|in)\b/i,
+    /\bbefore\s+(?:like|when|after|you|that|this|it)\b/i,
+  ];
+
+  return candidates.some((candidate) =>
+    dependencyPatterns.some((pattern) => pattern.test(candidate)),
+  );
+}
+
+function isFreshSessionOpener(text: string): boolean {
+  const normalized = normalizeLifecycleMessage(text);
+  if (!normalized) return false;
+  if (dependsOnPriorConversationContext(text)) return false;
+
+  const hasGreeting = isGreetingOpeningMessage(text);
+  const withoutGreeting = normalizeLifecycleMessage(stripLeadingGreeting(text));
+  const openerText = withoutGreeting || normalized;
+
+  const explicitFreshPatterns = [
+    /\bdifferent thing\b/i,
+    /\bsomething else\b/i,
+    /\bsomething different\b/i,
+    /\bnew issue\b/i,
+    /\bnew problem\b/i,
+    /\banother thing\b/i,
+    /\banother issue\b/i,
+    /\bswitching gears\b/i,
+    /\bcan we talk about\b/i,
+    /\bnow i want to talk about\b/i,
+    /\blet'?s work on\b/i,
+    /\bi need help with\b/i,
+    /\bi want to work on\b/i,
+    /\bi want to talk about\b/i,
+    /\bcan you help me with\b/i,
+    /\bcan we work on\b/i,
+  ];
+
+  if (explicitFreshPatterns.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+
+  const standaloneOpeningPatterns = [
+    /^(?:i need help|i need some help|can you help|need help)\b/i,
+    /^(?:i have|i've got|ive got)\s+(?:a|an|this|some|another|new)?\s*(?:issue|problem|question|thing)\b/i,
+    /^(?:my|the)\s+\w+(?:\s+\w+){0,5}\s+(?:hurts|is hurting|feels|keeps|started|has been)\b/i,
+    /^(?:today|lately|recently)\b.*\b(?:hurts|pain|tight|issue|problem|feels off|not right|help|started hurting)\b/i,
+  ];
+
+  if (standaloneOpeningPatterns.some((pattern) => pattern.test(openerText))) {
+    return true;
+  }
+
+  if (
+    hasGreeting &&
+    openerText &&
+    explicitFreshPatterns.some((pattern) => pattern.test(openerText))
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function buildCompactMovementContext(text: string): string | null {
@@ -800,17 +958,19 @@ function isOpenCaseStatus(status: string | null | undefined): boolean {
   return /open|active|current/i.test(String(status));
 }
 
-async function getConversationOpenCase(
-  userId: string,
-  conversationId: number,
-): Promise<{
+type ResolvedCaseRow = {
   id: number;
   userId: string;
   conversationId: number | null;
   movementContext: string | null;
   activityType: string | null;
   status: string | null;
-} | null> {
+};
+
+async function getConversationOpenCase(
+  userId: string,
+  conversationId: number,
+): Promise<ResolvedCaseRow | null> {
   const [conversationOpenCase] = await db
     .select({
       id: cases.id,
@@ -832,6 +992,58 @@ async function getConversationOpenCase(
   }
 
   return conversationOpenCase;
+}
+
+async function resolveCaseReviewTargetCase({
+  userId,
+  conversationId,
+  currentCase,
+}: {
+  userId: string;
+  conversationId: number;
+  currentCase: ResolvedCaseRow | null;
+}): Promise<ResolvedCaseRow | null> {
+  if (currentCase) return currentCase;
+
+  const conversationCase = await getConversationOpenCase(
+    userId,
+    conversationId,
+  );
+  if (conversationCase) return conversationCase;
+
+  const [latestOpenUserCase] = await db
+    .select({
+      id: cases.id,
+      userId: cases.userId,
+      conversationId: cases.conversationId,
+      movementContext: cases.movementContext,
+      activityType: cases.activityType,
+      status: cases.status,
+    })
+    .from(cases)
+    .where(eq(cases.userId, userId))
+    .orderBy(desc(cases.updatedAt), desc(cases.id))
+    .limit(8);
+
+  if (latestOpenUserCase && isOpenCaseStatus(latestOpenUserCase.status)) {
+    return latestOpenUserCase;
+  }
+
+  const [latestUserCase] = await db
+    .select({
+      id: cases.id,
+      userId: cases.userId,
+      conversationId: cases.conversationId,
+      movementContext: cases.movementContext,
+      activityType: cases.activityType,
+      status: cases.status,
+    })
+    .from(cases)
+    .where(eq(cases.userId, userId))
+    .orderBy(desc(cases.updatedAt), desc(cases.id))
+    .limit(1);
+
+  return latestUserCase ?? null;
 }
 
 function extractFirstMatchingSentence(
@@ -1704,6 +1916,137 @@ async function getValidAdjustmentForOutcomeWrite({
   }
 
   return getLatestValidAdjustmentForCase(caseId);
+}
+
+async function getLatestOutcomeForCase(caseId: number): Promise<{
+  id: number;
+  result: string | null;
+  userFeedback: string | null;
+  adjustmentId: number | null;
+} | null> {
+  const [outcome] = await db
+    .select({
+      id: caseOutcomes.id,
+      result: caseOutcomes.result,
+      userFeedback: caseOutcomes.userFeedback,
+      adjustmentId: caseOutcomes.adjustmentId,
+    })
+    .from(caseOutcomes)
+    .where(eq(caseOutcomes.caseId, caseId))
+    .orderBy(desc(caseOutcomes.id))
+    .limit(1);
+
+  return outcome ?? null;
+}
+
+async function buildSessionSummaryContext({
+  userId,
+  conversationId,
+  userText,
+  finalText,
+  resolvedActiveCase,
+  isCaseReview,
+}: {
+  userId: string;
+  conversationId: number;
+  userText: string;
+  finalText: string;
+  resolvedActiveCase: ResolvedCaseRow | null;
+  isCaseReview: boolean;
+}): Promise<string[]> {
+  const context: string[] = [
+    `Latest user message: ${clampText(userText, 1200)}`,
+    `Latest assistant response: ${clampText(finalText, 1600)}`,
+    `Case review turn: ${isCaseReview ? "yes" : "no"}`,
+    `User signaled closure: ${detectUserClosureSignal(userText) ? "yes" : "no"}`,
+  ];
+
+  let activeCase = resolvedActiveCase;
+
+  if (!activeCase) {
+    activeCase = await getConversationOpenCase(userId, conversationId);
+  }
+
+  if (!activeCase) {
+    context.push("Active case: none tied to this session turn.");
+    context.push("Unresolved state: no active case evidence available.");
+    return context;
+  }
+
+  const activeCaseTitle = buildActiveCaseTitle(
+    activeCase.movementContext,
+    activeCase.activityType,
+  );
+  const latestHypothesis = await getLatestValidHypothesisForCase(activeCase.id);
+  const latestAdjustment = await getLatestValidAdjustmentForCase(activeCase.id);
+  const latestOutcome = await getLatestOutcomeForCase(activeCase.id);
+  const isResolved =
+    String(activeCase.status ?? "")
+      .trim()
+      .toLowerCase() === "resolved" ||
+    detectOutcomeResult(
+      `${String(latestOutcome?.result ?? "")} ${String(
+        latestOutcome?.userFeedback ?? "",
+      )}`.trim(),
+    ) === "Improved";
+
+  context.push(`Active case id: ${activeCase.id}`);
+  context.push(
+    `Active case title: ${
+      activeCaseTitle ||
+      [activeCase.activityType, activeCase.movementContext]
+        .filter(Boolean)
+        .join(" / ") ||
+      "unknown"
+    }`,
+  );
+  context.push(
+    `Movement/activity context: ${[
+      activeCase.movementContext,
+      activeCase.activityType,
+    ]
+      .filter(Boolean)
+      .join(" / ")}`,
+  );
+  context.push(
+    `Latest valid hypothesis: ${
+      latestHypothesis?.hypothesis?.trim() || "none recorded"
+    }`,
+  );
+  context.push(
+    `Latest valid adjustment/test: ${
+      latestAdjustment
+        ? [
+            latestAdjustment.cue?.trim(),
+            latestAdjustment.mechanicalFocus?.trim(),
+          ]
+            .filter(Boolean)
+            .join(" — ")
+        : "none recorded"
+    }`,
+  );
+  context.push(
+    `Latest outcome: ${
+      latestOutcome
+        ? [latestOutcome.result?.trim(), latestOutcome.userFeedback?.trim()]
+            .filter(Boolean)
+            .join(": ")
+        : "none recorded"
+    }`,
+  );
+  context.push(
+    `Unresolved state: ${
+      isResolved
+        ? "resolved or improved"
+        : latestAdjustment
+          ? "test/adjustment is still active unless the user clearly resolved it"
+          : latestHypothesis
+            ? "mechanism is active/forming but no valid adjustment has been captured"
+            : "investigation remains open"
+    }`,
+  );
+
+  return context;
 }
 
 // ==============================
@@ -2880,6 +3223,52 @@ ${memoryBlock}
             .status(403)
             .json({ error: "Invalid conversation ownership" });
         }
+
+        const recentConversationMessages = await db
+          .select({
+            id: messages.id,
+            role: messages.role,
+            content: messages.content,
+            createdAt: messages.createdAt,
+          })
+          .from(messages)
+          .where(eq(messages.conversationId, convoId))
+          .orderBy(desc(messages.createdAt), desc(messages.id))
+          .limit(4);
+
+        const latestMessage = recentConversationMessages[0];
+        const latestMessageTime = latestMessage?.createdAt
+          ? new Date(latestMessage.createdAt).getTime()
+          : existing.createdAt
+            ? new Date(existing.createdAt).getTime()
+            : Date.now();
+
+        const shouldBehaviorallyRollover =
+          !isCaseReview &&
+          recentConversationMessages.length > 0 &&
+          isFreshSessionOpener(userText) &&
+          !dependsOnPriorConversationContext(userText);
+
+        if (shouldBehaviorallyRollover) {
+          console.log("CONVERSATION ROLLOVER: behavioral", {
+            userId,
+            oldConversationId: convoId,
+            reason: "fresh_session_opener",
+          });
+
+          convoId = Number.NaN;
+        } else if (
+          latestMessageTime > 0 &&
+          Date.now() - latestMessageTime > CONVERSATION_SESSION_TIMEOUT_MS
+        ) {
+          console.log("CONVERSATION ROLLOVER: timeout", {
+            userId,
+            oldConversationId: convoId,
+            inactiveMs: Date.now() - latestMessageTime,
+          });
+
+          convoId = Number.NaN;
+        }
       }
 
       console.log("CHAT STAGE: conversation-create");
@@ -2925,14 +3314,7 @@ ${memoryBlock}
         } as any,
       ];
 
-      let resolvedActiveCase: {
-        id: number;
-        userId: string;
-        conversationId: number | null;
-        movementContext: string | null;
-        activityType: string | null;
-        status: string | null;
-      } | null = null;
+      let resolvedActiveCase: ResolvedCaseRow | null = null;
 
       resolvedActiveCase = await getConversationOpenCase(userId, convoId);
 
@@ -2959,16 +3341,7 @@ ${memoryBlock}
               signalType: derivedSignalType,
             });
           } else {
-            let newCase:
-              | {
-                  id: number;
-                  userId: string;
-                  conversationId: number | null;
-                  movementContext: string | null;
-                  activityType: string | null;
-                  status: string | null;
-                }
-              | undefined;
+            let newCase: ResolvedCaseRow | undefined;
 
             try {
               [newCase] = await db
@@ -3044,9 +3417,11 @@ ${memoryBlock}
       const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
       const runtimePatternBlock = await getDominantRuntimePatternBlock(userId);
       const continuityBlock = activeHypothesisBlock || runtimePatternBlock;
-      const settingsContextBlock = buildSettingsContextBlock(
-        buildPersistedSettings(existingUser?.firstName, memory),
-      );
+      const settingsContextBlock = !isCaseReview
+        ? buildSettingsContextBlock(
+            buildPersistedSettings(existingUser?.firstName, memory),
+          )
+        : "";
       const shouldUseSettingsInitialization =
         !isCaseReview &&
         isTrueNewUserForInitialization({
@@ -3054,6 +3429,10 @@ ${memoryBlock}
           memory,
           storedMessages: storedMessagesBeforeCurrentTurn,
         });
+      const settingsInitializationEmphasisBlock =
+        buildSettingsInitializationEmphasisBlock(
+          shouldUseSettingsInitialization,
+        );
 
       let identityBlock = "";
 
@@ -3220,44 +3599,31 @@ ${ACTIVE_PROMPT}
         },
         {
           role: "system",
-          content: shouldUseSettingsInitialization
-            ? `
-Execution context for this conversation:
+          content: `
+        Execution context for this conversation:
 
-${identityBlock}
+        ${identityBlock}
 
-${settingsContextBlock}
+        ${settingsContextBlock}
 
-${currentConversationSummaryBlock}
+        ${settingsInitializationEmphasisBlock}
 
-${patternPriorityBlock}
+        ${currentConversationSummaryBlock}
 
-${endingStateBlock}
+        ${memoryBlock}
 
-${userSideClosureBlock}
+        ${continuityBlock}
 
-${toneGuidanceBlock}
-          `.trim()
-            : `
-Execution context for this conversation:
+        ${patternPriorityBlock}
 
-${identityBlock}
+        ${endingStateBlock}
 
-${currentConversationSummaryBlock}
+        ${userSideClosureBlock}
 
-${memoryBlock}
-
-${continuityBlock}
-
-${patternPriorityBlock}
-
-${endingStateBlock}
-
-${userSideClosureBlock}
-
-${toneGuidanceBlock}
-          `.trim(),
+        ${toneGuidanceBlock}
+                  `.trim(),
         },
+
         ...previous.slice(-16).map((m) => ({
           role: m.role as "user" | "assistant",
           content: String(m.content ?? ""),
@@ -3319,7 +3685,90 @@ ${toneGuidanceBlock}
               content: `
 That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative and the Interloop response arc.
 
-=== CRITICAL MECHANISM ENFORCEMENT ===
+=== RETRY PRIORITY ===
+
+Your first job is to produce one extractor-friendly hypothesis sentence.
+
+If the user is describing a concrete physical or mechanical issue, the rewritten response must include exactly one standalone hypothesis sentence in the first 1–3 sentences.
+
+Concrete physical or mechanical issues include:
+- pain
+- tightness
+- instability
+- timing breakdown
+- movement problem
+- physical complaint
+- loss of control
+- collapse
+- compensation
+- coordination issue
+- breakdown under load
+- something physically feeling off
+
+Do not wait for perfect certainty. Commit to the strongest mechanism even if some uncertainty remains.
+
+No hypothesis = invalid retry output.
+
+=== HYPOTHESIS SENTENCE RULE ===
+
+The hypothesis sentence must be:
+- singular
+- causal
+- mechanical
+- directly extractable
+- one complete sentence
+- stated early
+- not implied across multiple sentences
+
+The mechanism cannot be split across sentences. Do not introduce it partially, complete it later, or build toward it gradually.
+
+Approved forms:
+- "The issue is that ..."
+- "This is happening because ..."
+- "What is breaking is ..."
+- "This pattern is being driven by ..."
+- "Your trunk is collapsing before ..."
+- "Your front side is opening too early, which is forcing ..."
+- "Your shoulder is taking over because ..."
+
+Only use "What is happening is ..." if it immediately states a concrete mechanical failure, such as:
+- "What is happening is your ribcage is losing structure before rotation."
+- "What is happening is your hip is shifting before the trunk can hold position."
+
+Do not use "What is happening is ..." for vague summaries, abstract progress, or generic interpretation.
+
+Use causal/mechanical language from this family when natural:
+- "because"
+- "due to"
+- "driven by"
+- "caused by"
+- "comes from"
+- "the issue is"
+- "the problem is"
+- "is breaking"
+- "is collapsing"
+- "is stalling"
+- "is shifting too early"
+- "is opening too early"
+- "is losing structure"
+- "is compensating"
+- "is taking over"
+- "is bearing the load"
+- "is driving the issue"
+
+Invalid language:
+- "could be"
+- "might be"
+- "possibly"
+- "a few things"
+- "the key is"
+- "this is working"
+- "this is aligning"
+- "good sign"
+- vague progress language
+- generic interpretation language
+
+=== MECHANISM ENFORCEMENT ===
 
 All explanations must resolve to a physical or mechanical cause.
 
@@ -3330,109 +3779,65 @@ Do NOT say:
 - this means you're doing it right
 - this suggests progress
 
-Do NOT use generic interpretation language.
-
 Instead:
 - identify what is physically happening in the body
 - describe what is breaking, collapsing, shifting, or compensating
 - explain the mechanism directly
 
-If the response does not contain a clear mechanical explanation, it is invalid and must be rewritten.
-
 When the user reports improvement:
 - translate it into a confirmed mechanism
 - explain WHY it improved physically
+- identify the next likely breakdown, overcorrection, or relapse point
 
-Do not stop at success language.
+Do not collapse success into praise, reassurance, or closure.
 
-=== LANGUAGE CONSTRAINT ===
+=== RESPONSE SHAPE ===
 
-Reject phrases like:
-- "the key is"
-- "this is working"
-- "this aligns well"
-- "this is a good sign"
+Preserve the natural Interloop arc:
 
-These are invalid outputs and must not appear.
+1. Validate only what is actually correct
+2. Commit immediately to the single mechanism in extractor-friendly language
+3. Correct the user's misunderstanding directly
+4. Predict likely failure, regression, or overcorrection
+5. Reduce to one lever
+6. End according to state, with at most one final question only if needed
 
-Required response behavior:
-- Keep one dominant mechanism only
-- Do not reopen multiple explanations or branches
-- Preserve the natural Interloop arc: controlled validation, mechanism identification, interpretation correction, failure mode prediction, one lever, optional sequence or contextual tie, then one final question chosen from state
-- Think fully before writing
-- Use hidden reasoning to extract the real signal, consider multiple interpretations, choose the strongest mechanism, correct the user's interpretation, predict the likely failure mode, and reduce it to one lever
-- Do not expose the reasoning scaffold as labels or sections
-- Start by validating only what is actually correct, then immediately correct the user's misunderstanding in natural language
-- Correct the user's misunderstanding directly, without labeling it or naming it
-- If the user reports improvement or success, begin with brief earned validation, then explain what the improvement means mechanically
-- When success is reported, identify the next likely breakdown, overcorrection, or relapse point instead of drifting into praise or closure
-- If the mechanism is already established, advance it instead of restating it
-- Do not repeat the same explanation in slightly different wording
-- Each follow-up must move the investigation forward
-- Identify the single most important error, misread, or drift point
-- Correct that point directly and decisively
-- Use contrast when useful (not X, Y)
-- Compress the correction into one clear idea, expressed naturally inside the explanation
-- Tie the correction to the user's known pattern/history when relevant
-- Predict the most likely next overcorrection, compensation, failure, or relapse point
-- Give one tight execution model, not multiple options
-- Give one immediate real-world check for whether it is correct
-- The ending question is determined by state, not by template
-- End with at most one final question, and only if a real question is needed
-- If the user is lightly reopening the conversation without materially advancing the investigation, use soft re-entry: reopen from continuity when it exists and ask what has changed, what has shown up, or what they are noticing now
-- If the mechanism is still unclear, end with a narrowing question that locates where, when, or under what condition the breakdown appears
-- If the mechanism is forming but not yet proven, end with a confirmation or falsification question that checks whether the read actually matches the breakdown
-- Only if an actual adjustment has already been introduced in the current line may the ending question test whether it holds or what changed after applying it
-- If no adjustment exists, do not ask an adjustment-testing question
-- If the user clearly closes the point, do not ask any follow-up question
-- In a closure response, brief acknowledgment is enough
-- A closure response can be very short if it lands cleanly
-- Do not expand a correct closure into a longer answer
-- If the user says thank you, that helped, that makes sense, perfect, got it, exactly, or otherwise signals completion, let it land and stop naturally
-- After closure, you may optionally use one light release line, but it must not reopen investigation
-- A light release line is not a question and does not probe, test, clarify, or restart reasoning
-- When the user reports that something worked, translate the success into mechanism confirmation, not encouragement
-- Do not treat initial success as resolution; treat it as confirmation and only test it under variation if an actual adjustment is already active
-- If success has been reported without a real adjustment in play, do not collapse into an adjustment/outcome loop; keep the final question aligned to the actual state of the investigation
-- Before success is confirmed, do not ask a binary closure question; ask the question that best fits the current state: soft re-entry, narrowing, confirmation, or adjustment stress-test
-- Make the final question specific and mechanically useful
-- Prefer a specific condition check, contrast check, or binary probe when it sharpens the state-based question
-- Allow natural phrasing, variable length, and variable structure when the reasoning needs it
-- Avoid repeating the same key terms across responses (such as "pattern", "coordination", "adjustment", "alignment")
-- Vary wording naturally when describing similar ideas
-- Do not rely on a fixed vocabulary to explain similar situations
-- The same concept should be expressed in different ways across responses
-- Prefer natural phrasing over consistent terminology
-- It is acceptable to use these terms occasionally when they are the clearest way to describe something
-- However, they must not become the default or repeated structure of explanation
+Keep one dominant mechanism only.
+Do not reopen multiple explanations or branches.
+Do not restate the whole problem from scratch.
+Do not explain broadly when a precise correction is available.
+Do not use bolded headers, titled sections, bullets, or packaged formatting in the visible response.
 
-Hard rules:
-- Do not hedge when pattern continuity is already established
-- Do not use bolded headers, titled sections, bullets, or packaged formatting
-- Do not sound generic, therapeutic, motivational, or like a normal assistant
-- Do not restate the whole problem from scratch
-- Do not explain broadly when a precise correction is available
-- The response should feel slightly corrective and willing to challenge the user's framing when needed
-- The response must read as one continuous explanation with natural paragraphing
-- Avoid repeated phrases like "the incorrect assumption is" or "most likely overcorrection"; vary phrasing naturally
-- Prefer direct, natural correction language instead of formal or scripted phrasing
-- Make the governing rule short and punchy, not descriptive
-- Make the final question specific and mechanically useful
-- Do not force name usage
-- Use the name only when it adds meaning or emphasis
-- Do not use the name more than once unless absolutely necessary
-- Do not place the name consistently at the start of responses
-- Do not place the name consistently at the end of responses
-- Do not attach the name to the final question by default
-- The name must not follow a repeated positional pattern
-- Prefer omitting the name over using it habitually
-- Do not let success-state responses collapse into praise, reassurance, or generic encouragement
-- Do not end a success-state response with "keep it up", "let me know", or other assistant-style closure
+If the mechanism is already established, advance it instead of restating it.
+If new evidence breaks the mechanism, replace it rather than stacking explanations.
 
-Preserve what is already working in the draft:
-- keep the paragraph flow
-- keep the sense of continuity
-- keep the mechanism-first feel
+The response must read as one continuous explanation with natural paragraphing.
+
+Style flexibility is subordinate to hypothesis compliance. Natural phrasing, variable length, and flow are allowed only after the early standalone hypothesis sentence is satisfied.
+
+=== ENDING STATE ===
+
+The ending question is determined by state, not by template.
+
+- If the user is lightly reopening the conversation, use soft re-entry from continuity when it exists.
+- If the mechanism is still unclear, end with a narrowing question about where, when, load, timing, or condition.
+- If the mechanism is forming but not proven, end with a confirmation or falsification question.
+- Only if an actual adjustment has already been introduced may the ending question test whether it holds or what changed.
+- If no adjustment exists, do not ask an adjustment-testing question.
+- If the user clearly closes the point, do not ask a follow-up question.
+
+A closure response can be very short if it lands cleanly.
+A light release line is allowed only if it does not probe, test, clarify, or restart the investigation.
+
+=== NAME AND TONE ===
+
+Do not force name usage.
+Use the name only when it adds meaning or emphasis.
+Do not attach the name to the final question by default.
+Prefer omitting the name over using it habitually.
+
+Do not sound generic, therapeutic, motivational, or like a normal assistant.
+The response should feel slightly corrective and willing to challenge the user's framing when needed.
 
 Produce the corrected response now.
                 `.trim(),
@@ -3703,11 +4108,11 @@ Produce the corrected response now.
         });
 
         if (isCaseReview && finalText.length > 60) {
-          let caseReviewTarget = resolvedActiveCase;
-
-          if (!caseReviewTarget) {
-            caseReviewTarget = await getConversationOpenCase(userId, convoId);
-          }
+          const caseReviewTarget = await resolveCaseReviewTargetCase({
+            userId,
+            conversationId: convoId,
+            currentCase: resolvedActiveCase,
+          });
 
           console.log("CASE REVIEW TARGET:", caseReviewTarget?.id ?? null);
 
@@ -3721,7 +4126,7 @@ Produce the corrected response now.
             console.log("CASE REVIEW STORED:", caseReviewTarget.id);
           } else {
             console.warn(
-              "CASE REVIEW SKIPPED: no conversation-scoped case found for user",
+              "CASE REVIEW SKIPPED: no valid case target found for user",
               userId,
             );
           }
@@ -3802,12 +4207,34 @@ Produce the corrected response now.
       }
 
       try {
-        const summary = await generateSessionSummary(userText, []);
+        if (!isCaseReview) {
+          const summaryContext = await buildSessionSummaryContext({
+            userId,
+            conversationId: convoId,
+            userText,
+            finalText,
+            resolvedActiveCase,
+            isCaseReview,
+          });
+          const summarySeed = `
+          Session summary target:
+          Preserve the issue under investigation, active or likely mechanism, current test or adjustment, latest outcome or shift, and what remains unresolved.
 
-        await db
-          .update(conversations)
-          .set({ summary })
-          .where(eq(conversations.id, convoId));
+          Latest completed turn:
+          User: ${userText}
+          Assistant: ${finalText}
+
+          Session state context:
+          ${summaryContext.join("\n")}
+                    `.trim();
+
+          const summary = await generateSessionSummary(summarySeed, []);
+
+          await db
+            .update(conversations)
+            .set({ summary })
+            .where(eq(conversations.id, convoId));
+        }
       } catch (err) {
         console.error("Summary generation failed:", err);
       }
