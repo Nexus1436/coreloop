@@ -9,8 +9,11 @@ import {
   setupAuth,
   isAuthenticated,
 } from "./replit_integrations/auth/replitAuth";
+import express from "express";
 import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
+import { promises as fsp } from "fs";
+import path from "path";
 
 import OpenAI from "openai";
 import { ElevenLabsClient } from "elevenlabs";
@@ -75,6 +78,22 @@ const CONVERSATION_SESSION_TIMEOUT_MS = 1000 * 60 * 60 * 6;
 type PersistedInterloopVoice = keyof typeof INTERLOOP_SETTINGS_VOICE_IDS;
 
 // ==============================
+// PROFILE IMAGE FILE SYSTEM PATHS
+// ==============================
+
+const PROFILE_IMAGE_URL_PREFIX = "/uploads/profile-images";
+const UPLOADS_ROOT_DIR = path.resolve(process.cwd(), "uploads");
+const PROFILE_IMAGES_DIR = path.join(UPLOADS_ROOT_DIR, "profile-images");
+
+async function ensureProfileImagesDirectory(): Promise<void> {
+  try {
+    await fsp.mkdir(PROFILE_IMAGES_DIR, { recursive: true });
+  } catch (err) {
+    console.error("Failed to ensure profile images directory:", err);
+  }
+}
+
+// ==============================
 // UTILITY: TEXT CLAMP
 // ==============================
 
@@ -91,6 +110,13 @@ function normalizeStoredFirstName(value: unknown): string | null {
   return trimmed;
 }
 
+function normalizeStoredProfileImageUrl(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed || /^null$/i.test(trimmed)) return "";
+  return trimmed;
+}
+
 type PersistedInterloopSettings = {
   name: string;
   age: string;
@@ -102,6 +128,7 @@ type PersistedInterloopSettings = {
   competitionLevel: string;
   voice: PersistedInterloopVoice;
   completed: boolean;
+  profileImageUrl: string;
 };
 
 function normalizeSettingsText(value: unknown): string {
@@ -133,6 +160,7 @@ function normalizeAgeForMemory(value: unknown): number | null {
 function buildPersistedSettings(
   firstName: unknown,
   memory: Awaited<ReturnType<typeof getMemory>>,
+  profileImageUrl?: unknown,
 ): PersistedInterloopSettings {
   const memoryWithPreferences = memory as typeof memory & {
     preferences?: {
@@ -163,6 +191,7 @@ function buildPersistedSettings(
     completed: normalizeCompletedFlag(
       memoryWithPreferences.preferences?.setupCompleted,
     ),
+    profileImageUrl: normalizeStoredProfileImageUrl(profileImageUrl),
   };
 }
 
@@ -314,41 +343,7 @@ function isTrueNewUserForInitialization({
 // ==============================
 // DOMAIN BOUNDARY: MEDICAL / SYSTEMIC / INTERNAL-SYMPTOM DETECTION
 // ==============================
-//
-// Coreloop is a movement / mechanical investigation system.
-//
-// The domain gate here does NOT block "non-mechanical" turns in general.
-// Non-mechanical turns, symptoms at rest, or symptoms not clearly tied
-// to movement are still allowed through the normal pipeline.
-//
-// This classifier only blocks turns that fall into true MEDICAL /
-// SYSTEMIC / INTERNAL-SYMPTOM territory — content that should not be
-// handled as a mechanical investigation.
-//
-// Core medical blockers (trigger the gate on their own):
-//   - chest / internal organ / visceral pain
-//   - reflux / esophageal / GI symptom clusters
-//   - autonomic / systemic symptom clusters
-//
-// Nocturnal / sleep-onset language is a SUPPORTING signal only.
-// Nighttime wording by itself does NOT trigger the gate. It only
-// strengthens the read when a core medical/systemic signal is already
-// present.
-//
-// Intentionally NOT included (previously overblocking):
-//   - "not tied to movement"
-//   - "nothing to do with movement"
-//   - "no change with movement"
-//   - "happens at rest" / "comes on at rest" / "when I'm not moving"
-//   - "hurts at rest"
-//   - positional relief unrelated to movement
-//   - standalone nocturnal / sleep-onset wording
-//
-// Those signals may still be useful case input and must not trigger
-// the medical gate by themselves.
-// ==============================
 
-// --- Chest / visceral / internal organ language ---
 const MEDICAL_CHEST_VISCERAL_PATTERNS: RegExp[] = [
   /\bchest pain\b/i,
   /\bpain in (?:my )?chest\b/i,
@@ -369,7 +364,6 @@ const MEDICAL_CHEST_VISCERAL_PATTERNS: RegExp[] = [
   /\b(?:kidney|liver|gallbladder|bladder|pancreas|spleen|intestine|bowel) (?:pain|ache)\b/i,
 ];
 
-// --- Reflux / GI / esophageal symptoms ---
 const MEDICAL_REFLUX_GI_PATTERNS: RegExp[] = [
   /\breflux\b/i,
   /\bheartburn\b/i,
@@ -384,7 +378,6 @@ const MEDICAL_REFLUX_GI_PATTERNS: RegExp[] = [
   /\bbowel (?:pain|cramp|cramping|issue|issues)\b/i,
 ];
 
-// --- Autonomic / systemic symptoms ---
 const MEDICAL_SYSTEMIC_PATTERNS: RegExp[] = [
   /\bnausea\b|\bnauseous\b|\bnauseated\b/i,
   /\bsalivat/i,
@@ -404,8 +397,6 @@ const MEDICAL_SYSTEMIC_PATTERNS: RegExp[] = [
   /\bradiating (?:to|into|down) (?:my )?(?:jaw|arm|arms|neck)\b/i,
 ];
 
-// --- Nocturnal / sleep-onset wording ---
-// Supporting signal only. Does NOT trigger the gate on its own.
 const MEDICAL_NOCTURNAL_PATTERNS: RegExp[] = [
   /\bwoke me up\b/i,
   /\bwoke up with\b/i,
@@ -455,9 +446,6 @@ function hasNocturnalMedicalContext(text: string): boolean {
 }
 
 function isMedicalSystemicSignal(text: string): boolean {
-  // Gate triggers only on a true core medical/systemic/internal signal.
-  // Nocturnal wording is a supporting amplifier and is never a standalone
-  // trigger by itself.
   return hasMedicalSystemicCoreSignal(text);
 }
 
@@ -660,19 +648,32 @@ function getProfileImageExtension(
   return null;
 }
 
+function sanitizePathSegment(value: string): string {
+  return String(value ?? "")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[._]+|[._]+$/g, "")
+    .slice(0, 128);
+}
+
 async function uploadProfileImageToStorage(
   userId: string,
   filename: string,
-  _buffer: Buffer,
+  buffer: Buffer,
   _contentType: string,
 ): Promise<string> {
-  const baseUrl =
-    process.env.PUBLIC_STORAGE_URL?.replace(/\/+$/, "") ||
-    (process.env.REPLIT_DEV_DOMAIN
-      ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-      : "https://your-storage");
+  const safeUserId = sanitizePathSegment(userId) || "user";
+  const safeFilename = sanitizePathSegment(filename) || `profile-${Date.now()}`;
 
-  return `${baseUrl}/uploads/profile-images/${encodeURIComponent(userId)}/${encodeURIComponent(filename)}`;
+  const userDir = path.join(PROFILE_IMAGES_DIR, safeUserId);
+  await fsp.mkdir(userDir, { recursive: true });
+
+  const fullPath = path.join(userDir, safeFilename);
+  await fsp.writeFile(fullPath, buffer);
+
+  return `${PROFILE_IMAGE_URL_PREFIX}/${encodeURIComponent(
+    safeUserId,
+  )}/${encodeURIComponent(safeFilename)}`;
 }
 
 function normalizeCaseKey(value: string | null | undefined): string {
@@ -826,7 +827,6 @@ function buildCompactMovementContext(text: string): string | null {
   const input = text.trim();
 
   const directContextPatterns: Array<{ label: string; regex: RegExp }> = [
-    // --- Racquet sport mechanics ---
     {
       label: "drive serve",
       regex: /\bdrive[-\s]?(?:serve|serf|surf)\b/i,
@@ -849,11 +849,9 @@ function buildCompactMovementContext(text: string): string | null {
     { label: "serve mechanics", regex: /\b(?:serve|serving)\b/i },
     { label: "swing mechanics", regex: /\bswing(?:ing)?\b/i },
 
-    // --- Golf / club sports ---
     { label: "golf swing", regex: /\bgolf swing\b/i },
     { label: "tee shot", regex: /\btee shot\b/i },
 
-    // --- Transitions in/out of environments ---
     {
       label: "getting out of car",
       regex:
@@ -874,7 +872,6 @@ function buildCompactMovementContext(text: string): string | null {
         /\b(?:getting|got|get) up from (?:the |my |a )?(?:chair|seat)\b|\bstanding up from (?:the |my |a )?(?:chair|seat)\b/i,
     },
 
-    // --- Posture / environment contexts ---
     {
       label: "waking up",
       regex:
@@ -923,7 +920,6 @@ function buildCompactMovementContext(text: string): string | null {
       regex: /\bin (?:my |the )?bed\b|\bin bed\b/i,
     },
 
-    // --- Training contexts ---
     {
       label: "during workout",
       regex:
@@ -942,28 +938,19 @@ function buildCompactMovementContext(text: string): string | null {
   );
 }
 
-// Normalizes a raw fragment captured from "when I ...", "during ...",
-// "on the ...", "in my ..." into a compact known label when possible.
-// If no compact mapping exists, returns a cleaned but bounded fragment.
-// Returns null only when the fragment is empty after cleaning.
 function normalizeExtractedContextCandidate(
   candidate: string | null | undefined,
 ): string | null {
   const raw = String(candidate ?? "").trim();
   if (!raw) return null;
 
-  // First try the full compact label mapper against the fragment itself.
   const compactFromFragment = buildCompactMovementContext(raw);
   if (compactFromFragment) return compactFromFragment;
 
-  // Try against a lightly expanded version so phrases like "sitting at my desk"
-  // or "drive to school" hit the same mappers we use on full messages.
   const expanded = `while I am ${raw}`;
   const compactFromExpanded = buildCompactMovementContext(expanded);
   if (compactFromExpanded) return compactFromExpanded;
 
-  // Targeted fallbacks for common extracted shapes that don't match the
-  // main mappers because of leading prepositions/articles.
   const lowered = raw.toLowerCase();
 
   const fallbackPatterns: Array<{ label: string; regex: RegExp }> = [
@@ -1000,8 +987,6 @@ function normalizeExtractedContextCandidate(
     }
   }
 
-  // Last resort: keep a cleaned, short version of the raw fragment so we
-  // don't lose signal entirely, but keep it structurally usable.
   const cleanedFragment = raw
     .replace(/\s+/g, " ")
     .replace(/^[\s,;:.!?-]+|[\s,;:.!?-]+$/g, "")
@@ -1020,7 +1005,6 @@ function deriveSettingsActivityHint(
   const primary = normalizeSettingsText(settings.primaryActivity).toLowerCase();
   if (!primary) return null;
 
-  // Keep labels compact and matched to known activityPatterns where possible.
   const mapping: Array<{ label: string; regex: RegExp }> = [
     { label: "racquetball", regex: /racquetball/i },
     { label: "tennis", regex: /\btennis\b/i },
@@ -1058,7 +1042,6 @@ function deriveSettingsActivityHint(
     }
   }
 
-  // Fallback: compact version of the stored value if it's short enough.
   const compact = primary.replace(/\s+/g, " ").trim();
   if (compact && compact.length <= 24) {
     return compact;
@@ -1095,7 +1078,6 @@ function deriveCaseContext(
       /\bout in front\b|\bthrow(?:ing)? the ball out in front\b/i.test(input));
 
   const activityPatterns: Array<{ label: string; regex: RegExp }> = [
-    // --- Racquet sports ---
     {
       label: "racquetball",
       regex:
@@ -1106,10 +1088,8 @@ function deriveCaseContext(
     { label: "squash", regex: /\bsquash\b/i },
     { label: "badminton", regex: /\bbadminton\b/i },
 
-    // --- Club sports ---
     { label: "golf", regex: /\bgolf\b|\bgolf swing\b|\btee shot\b/i },
 
-    // --- Locomotion / endurance ---
     { label: "running", regex: /\brun(?:ning)?\b|\bjog(?:ging)?\b/i },
     { label: "walking", regex: /\bwalk(?:ing)?\b/i },
     { label: "cycling", regex: /\bcycl(?:e|ing)\b|\bbik(?:e|ing)\b/i },
@@ -1117,18 +1097,15 @@ function deriveCaseContext(
     { label: "rowing", regex: /\brow(?:ing)?\b/i },
     { label: "climbing", regex: /\bclimb(?:ing)?\b/i },
 
-    // --- Strength / training movements ---
     { label: "squat", regex: /\bsquat(?:ting)?\b/i },
     { label: "deadlift", regex: /\bdeadlift(?:ing)?\b/i },
     { label: "lunge", regex: /\blunge(?:s|ing)?\b/i },
     { label: "lifting", regex: /\blift(?:ing)?\b|\bweightlift/i },
     { label: "crossfit", regex: /\bcrossfit\b/i },
 
-    // --- Mind/body ---
     { label: "pilates", regex: /\bpilates\b/i },
     { label: "yoga", regex: /\byoga\b/i },
 
-    // --- Combat / court / field ---
     { label: "basketball", regex: /\bbasketball\b/i },
     { label: "soccer", regex: /\bsoccer\b/i },
     { label: "baseball", regex: /\bbaseball\b/i },
@@ -1141,10 +1118,8 @@ function deriveCaseContext(
     { label: "boxing", regex: /\bboxing\b|\bkickboxing\b/i },
     { label: "dance", regex: /\bdanc(?:e|ing)\b|\bballet\b/i },
 
-    // --- Generic training language ---
     { label: "training", regex: /\btraining\b|\bworkout\b|\bgym\b/i },
 
-    // --- Environment / posture / positional activity ---
     {
       label: "driving",
       regex:
@@ -1166,7 +1141,6 @@ function deriveCaseContext(
         /\bsleep(?:ing)?\b|\basleep\b|\bslept\b|\bin (?:my |the )?bed\b|\bwaking up\b|\bwake up\b|\bwoken up\b|\blying flat\b|\blaying flat\b|\bflat on (?:my )?back\b/i,
     },
 
-    // --- Generic movement primitives (kept last so sport/environment win) ---
     { label: "serve", regex: /\bserve\b|\bserving\b/i },
     { label: "swing", regex: /\bswing\b|\bswinging\b/i },
     { label: "rotation", regex: /\brotate|rotation|turning\b/i },
@@ -1197,9 +1171,6 @@ function deriveCaseContext(
     }
   }
 
-  // Normalize raw extracted fragments through the compact label mapper
-  // before accepting them. Raw fragments are only kept when no compact
-  // label can be derived.
   for (const pattern of contextPatterns) {
     if (movementContext) break;
 
@@ -1244,10 +1215,6 @@ function deriveCaseContext(
 
   let finalActivity = detectedActivity;
 
-  // Settings-based tie-breaker:
-  // Only apply when the message has no strong activity signal AND no
-  // movement context was derivable. Settings never override clear message
-  // context.
   if (
     finalActivity === "unspecified" &&
     !hasAnyActivitySignalInMessage(input)
@@ -2866,6 +2833,15 @@ export async function registerRoutes(
 
   registerAnalyticsRoutes(app);
 
+  await ensureProfileImagesDirectory();
+  app.use(
+    "/uploads",
+    express.static(UPLOADS_ROOT_DIR, {
+      fallthrough: true,
+      index: false,
+    }),
+  );
+
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ ok: true });
   });
@@ -2882,7 +2858,13 @@ export async function registerRoutes(
       const userRecord = await ensureUserRecord(userId, authUser);
       const memory = await getMemory(userId);
 
-      res.json(buildPersistedSettings(userRecord?.firstName, memory));
+      res.json(
+        buildPersistedSettings(
+          userRecord?.firstName,
+          memory,
+          (userRecord as any)?.profileImageUrl,
+        ),
+      );
     } catch (err) {
       console.error("Failed to load settings:", err);
       res.status(500).json({ error: "Failed to load settings" });
@@ -2988,7 +2970,19 @@ export async function registerRoutes(
 
       const updatedMemory = await getMemory(userId);
 
-      res.json(buildPersistedSettings(name, updatedMemory));
+      const [updatedUser] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+      res.json(
+        buildPersistedSettings(
+          name,
+          updatedMemory,
+          (updatedUser as any)?.profileImageUrl ?? profileImageUrl,
+        ),
+      );
     } catch (err) {
       console.error("Failed to save settings:", err);
       res.status(500).json({ error: "Failed to save settings" });
@@ -3793,12 +3787,6 @@ ${memoryBlock}
       // ==============================
       // MEDICAL / SYSTEMIC EARLY RETURN
       // ==============================
-      // For medical / systemic / internal-symptom turns, respond
-      // minimally and skip ALL case/signal/hypothesis/adjustment/
-      // outcome/timeline/summary writes. The user message has already
-      // been persisted above so the conversation thread stays
-      // coherent, but no investigation data is generated.
-      // ==============================
       if (isMedicalSystemic) {
         try {
           const medicalSystemicMessages: ChatCompletionMessageParam[] = [
@@ -3876,16 +3864,6 @@ Produce the response now.
             content: finalMedicalSystemicText,
           });
 
-          // NOTE: intentionally NOT writing:
-          //  - cases
-          //  - caseSignals
-          //  - caseHypotheses
-          //  - caseAdjustments
-          //  - caseOutcomes
-          //  - timeline entries
-          //  - session summary
-          // This is the medical/systemic domain boundary exit.
-
           res.write(`data: [DONE]\n\n`);
           res.end();
           return;
@@ -3909,12 +3887,11 @@ Produce the response now.
 
       resolvedActiveCase = await getConversationOpenCase(userId, convoId);
 
-      // Load memory early so the settings tie-breaker is available
-      // to deriveCaseContext when the current message is ambiguous.
       const memory = await getMemory(userId);
       const persistedSettingsForContext = buildPersistedSettings(
         existingUser?.firstName,
         memory,
+        (existingUser as any)?.profileImageUrl,
       );
 
       try {

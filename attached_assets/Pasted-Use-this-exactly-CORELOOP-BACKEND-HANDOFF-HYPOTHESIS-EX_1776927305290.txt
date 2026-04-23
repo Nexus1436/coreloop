@@ -1,0 +1,371 @@
+Use this exactly.
+
+---
+
+# CORELOOP BACKEND HANDOFF — HYPOTHESIS EXTRACTION RELIABILITY + POSITIVE OUTCOME CAPTURE EXPANSION
+
+You are editing `routes.ts` only.
+
+You are working on a live system.
+
+---
+
+## EXECUTION CONSTRAINTS
+
+You do **NOT** have access to:
+
+* my local drive
+* my local files
+* my Replit
+* any hidden project context beyond what I paste into this thread
+
+You may work **only** from the exact file contents I paste here.
+
+Do **NOT** assume access to any other files.
+Do **NOT** reference files you were not given.
+Do **NOT** make speculative edits outside the pasted material.
+
+If a required dependency is missing from the pasted file, make the smallest safe assumption possible and keep the change scoped to the pasted file only.
+
+---
+
+## OUTPUT RULES
+
+Return:
+
+* the **FULL corrected file**
+* not snippets
+* not partial patches
+* not diffs
+* not explanations unless I explicitly ask for them
+
+Because `routes.ts` is large, you may return it in **two continuous code blocks only if necessary**, but together they must form the **entire corrected `routes.ts` file** with nothing omitted.
+
+Do **NOT** abbreviate.
+Do **NOT** omit unchanged sections.
+Do **NOT** summarize the file instead of returning it.
+
+---
+
+## SCOPE RULES
+
+Stay strictly inside the requested objective.
+
+Do **NOT**:
+
+* redesign architecture
+* refactor unrelated code
+* change frontend code
+* change upload/image behavior
+* change settings hydration behavior
+* change medical gate behavior
+* change case review behavior
+* change summary architecture
+* change conversation rollover behavior
+* make optional improvements outside this fix
+
+Make the surgical extraction/detection fix only.
+
+---
+
+## OBJECTIVE
+
+We need to fix two backend problems in `routes.ts`:
+
+### 1. Hypothesis extraction is missing valid assistant mechanism sentences
+
+In real usage, the assistant sometimes produces a legitimate mechanical explanation, but no hypothesis is stored in `case_hypotheses`.
+
+### 2. Positive outcome capture is too narrow
+
+Users often communicate success indirectly, and the current outcome detection misses valid positive language that should count as an outcome.
+
+This pass must improve both systems without broadly loosening quality or polluting the database.
+
+---
+
+## PROBLEM A — HYPOTHESIS EXTRACTION MISS
+
+### Observed failure
+
+A legitimate assistant explanation was produced, but no hypothesis was stored.
+
+Example pattern:
+
+* assistant gives a real mechanical explanation
+* explanation is specific enough to count
+* database still shows no hypothesis
+
+### Important clarification
+
+The hypothesis should be captured from the **assistant’s mechanism sentence**, not from the later user thank-you message.
+
+### What this means
+
+The extraction gate is too narrow or too dependent on a small set of trigger phrases.
+
+---
+
+## HYPOTHESIS FIX REQUIREMENTS
+
+### 1. Preserve quality
+
+Do **NOT** turn every assistant sentence into a hypothesis.
+
+Do **NOT** accept:
+
+* generic coaching filler
+* vague success language
+* broad wellness statements
+* closure language
+* “the key is…”
+* “this should help…”
+* “good sign…”
+* motivational filler
+* simple acknowledgments
+* non-mechanical summaries
+
+The stored hypothesis must still be:
+
+* singular
+* causal or explanatory
+* mechanical
+* specific enough to stand alone
+
+---
+
+### 2. Expand valid mechanism phrasing support
+
+Right now the system appears too dependent on narrow trigger phrases like:
+
+* because
+* due to
+* driven by
+* caused by
+* the issue is
+* the problem is
+* is breaking
+* is collapsing
+
+Expand support so valid assistant mechanism sentences still qualify when they are clearly explanatory even if they use other legitimate Coreloop phrasing.
+
+This includes real explanation patterns such as:
+
+* reduced X during Y, leading to Z
+* loss of X during Y, causing Z
+* X during rest leading to Y
+* X at rest leading to stiffness / pain / tightness
+* irritation / pressure / mobility / circulation descriptions that are clearly framed as the reason for the complaint
+* “which was affecting…”
+* “leading to…”
+* “resulting in…”
+* “contributing to…”
+* “reducing… and causing…”
+
+The core rule:
+If the sentence clearly explains **what is happening physically and why the complaint is occurring**, it should have a path to qualify.
+
+---
+
+### 3. Keep the hypothesis mechanical
+
+Do **NOT** broaden so far that:
+
+* generic health commentary
+* medical/systemic redirects
+* eye symptoms
+* internal symptom guidance
+* out-of-scope language
+
+start entering `case_hypotheses`.
+
+Keep the current domain boundary intact.
+
+---
+
+### 4. Improve only extraction reliability
+
+Do **NOT** rewrite the assistant doctrine.
+Do **NOT** force broader assistant output.
+This is an extraction reliability fix, not a narrative redesign.
+
+---
+
+## PROBLEM B — POSITIVE OUTCOME CAPTURE TOO NARROW
+
+### Observed failure
+
+A user gave a clear positive signal, but the system did not capture it as a positive outcome.
+
+Important distinction:
+
+* the hypothesis should come from the assistant’s earlier mechanism sentence
+* the positive outcome should come from the user’s later positive feedback language
+
+### Current issue
+
+The system seems too dependent on obvious literal language like:
+
+* better
+* improved
+* worked
+
+That is too narrow.
+
+---
+
+## OUTCOME FIX REQUIREMENTS
+
+### 1. Expand positive outcome detection carefully
+
+Update positive outcome detection so it can recognize valid user-side positive feedback language.
+
+Add support for phrase families like:
+
+#### Strong positive outcome signals
+
+These should count as positive outcome / improved:
+
+* that helped
+* this helped
+* that was helpful
+* this was helpful
+* that did help
+* this did help
+* that worked
+* this worked
+* you’ve been helping me
+* you've been helping me
+* this has been helping
+* that has been helping
+* this is helping
+* that is helping
+
+#### Softer positive / understanding signals
+
+These should also be captured where appropriate as positive landing language:
+
+* that makes sense
+* this makes sense
+* makes sense now
+* okay, that makes sense
+* got it, that helps
+* understood, that helps
+* perfect, that makes sense
+* that was what I needed
+* that’s what I needed
+* that is what I needed
+
+---
+
+### 2. Do NOT treat plain gratitude alone as outcome
+
+This is important.
+
+Do **NOT** make plain:
+
+* thank you
+* thanks
+* appreciate it
+
+count as “Improved” by themselves.
+
+Examples:
+
+* “thank you” alone → not enough
+* “thanks” alone → not enough
+* “thank you, that helped” → enough
+* “thank you, that makes sense” → enough
+* “you’ve been helping me” → enough
+
+---
+
+### 3. Keep negative and neutral detection intact
+
+Do **NOT** break existing detection for:
+
+* worse
+* aggravated
+* more pain
+* same
+* no change
+* didn’t help
+
+---
+
+### 4. Keep outcome capture tied to current case logic
+
+Do **NOT** redesign the current architecture where outcome writing still depends on a valid case / valid adjustment chain where applicable.
+
+Stay inside the current system.
+
+---
+
+## ADDITIONAL REQUIREMENT — CLOSURE SIGNAL ALIGNMENT
+
+Update user closure detection so it recognizes meaningful positive landing language more reliably.
+
+Specifically make sure closure detection includes language families like:
+
+* that makes sense
+* this makes sense
+* makes sense now
+* that helped
+* this helped
+* that was helpful
+* this was helpful
+* you’ve been helping me
+* you've been helping me
+
+But do **NOT** turn closure detection into generic sentiment analysis.
+
+---
+
+## SUCCESS CRITERIA
+
+After this patch:
+
+### Hypothesis
+
+* valid assistant mechanism sentences are captured more reliably
+* assistant explanations that clearly describe a physical reason for the issue can qualify even without only using the old narrow phrase family
+* generic filler still does not become a hypothesis
+* weak broad coaching language still does not enter `case_hypotheses`
+
+### Outcome
+
+* valid user language like:
+
+  * “that helped”
+  * “this helped”
+  * “you’ve been helping me”
+  * “that makes sense”
+  * “this makes sense”
+  * “that was helpful”
+    is captured more reliably as a positive outcome
+* plain “thank you” alone still does **not** count
+* “same” / “worse” behavior remains intact
+
+### Closure
+
+* the system better recognizes when the user is positively landing the point
+* without turning every polite closing into a stored success signal
+
+---
+
+## FILE TO EDIT
+
+* `routes.ts`
+
+---
+
+## OUTPUT FORMAT
+
+Return:
+
+* FULL corrected `routes.ts`
+* preferably in one code block
+* if necessary, in two continuous code blocks only
+* nothing else
+
+---

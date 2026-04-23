@@ -111,26 +111,51 @@ export function InterloopSettings({
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
 
-    const formData = new FormData();
-    formData.append("file", file);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
 
-    const resp = await fetch("/api/upload-profile-image", {
-      method: "POST",
-      body: formData,
-      credentials: "include",
-    });
+      const resp = await fetch("/api/upload-profile-image", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
 
-    if (!resp.ok) return;
+      if (!resp.ok) {
+        console.error("Profile image upload failed:", resp.status);
+        return;
+      }
 
-    const data = await resp.json();
+      const data = await resp.json().catch(() => null);
+      const uploadedUrl =
+        data && typeof data.url === "string" && data.url.trim()
+          ? data.url.trim()
+          : null;
 
-    setForm((prev) => ({
-      ...prev,
-      profileImageUrl: data.url,
-    }));
+      if (!uploadedUrl) {
+        console.error("Profile image upload: no URL returned");
+        return;
+      }
+
+      // Immediately push the durable backend URL into live form state
+      // so the avatar bubble can render the new image right away,
+      // without waiting for a full save cycle or a settings refetch.
+      setForm((prev) => ({
+        ...prev,
+        profileImageUrl: uploadedUrl,
+      }));
+    } catch (err) {
+      console.error("Profile image upload error:", err);
+    } finally {
+      // Reset the input so selecting the same file again still fires onChange.
+      if (input) {
+        input.value = "";
+      }
+    }
   };
 
   const handleSave = () => {
@@ -225,13 +250,41 @@ export function InterloopSettings({
 
             <div className="flex flex-col gap-2 sm:col-span-2">
               <span className={labelClassName}>Profile photo</span>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="w-fit rounded-full border border-[#4a3420] px-5 py-2.5 text-sm font-medium text-[#d4ad7a] transition hover:border-[#f7a43b]/70 hover:text-[#ffc46f] hover:shadow-[0_0_18px_rgba(247,164,59,0.12)]"
-              >
-                Upload Photo
-              </button>
+              <div className="flex items-center gap-4">
+                <span
+                  className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#6b4525]/80 bg-[#120b05] shadow-[0_0_16px_rgba(255,157,54,0.08)]"
+                  aria-hidden="true"
+                >
+                  {form.profileImageUrl ? (
+                    <img
+                      src={form.profileImageUrl}
+                      alt="Profile preview"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-7 w-7 text-[#6b4525]"
+                    >
+                      <circle cx="12" cy="8" r="4" />
+                      <path d="M4 21c0-4 4-7 8-7s8 3 8 7" />
+                    </svg>
+                  )}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-fit rounded-full border border-[#4a3420] px-5 py-2.5 text-sm font-medium text-[#d4ad7a] transition hover:border-[#f7a43b]/70 hover:text-[#ffc46f] hover:shadow-[0_0_18px_rgba(247,164,59,0.12)]"
+                >
+                  Upload Photo
+                </button>
+              </div>
             </div>
 
             <label className="flex flex-col gap-2 sm:col-span-2">
