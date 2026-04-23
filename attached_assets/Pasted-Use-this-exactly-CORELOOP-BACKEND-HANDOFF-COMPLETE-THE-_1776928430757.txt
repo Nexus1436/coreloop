@@ -1,0 +1,268 @@
+Use this exactly.
+
+---
+
+# CORELOOP BACKEND HANDOFF — COMPLETE THE HYPOTHESIS RELIABILITY FIX
+
+You are editing `routes.ts` only.
+
+You are working on a live system.
+
+---
+
+## EXECUTION CONSTRAINTS
+
+You do **NOT** have access to:
+
+* my local drive
+* my local files
+* my Replit
+* any hidden project context beyond what I paste into this thread
+
+You may work **only** from the exact file contents I paste here.
+
+Do **NOT** assume access to any other files.
+Do **NOT** reference files you were not given.
+Do **NOT** make speculative edits outside the pasted material.
+
+If a required dependency is missing from the pasted file, make the smallest safe assumption possible and keep the change scoped to the pasted file only.
+
+---
+
+## OUTPUT RULES
+
+Return:
+
+* the **FULL corrected file**
+* not snippets
+* not partial patches
+* not diffs
+* not explanations unless I explicitly ask for them
+
+Because `routes.ts` is large, you may return it in **two continuous code blocks only if necessary**, but together they must form the **entire corrected `routes.ts` file** with nothing omitted.
+
+Do **NOT** abbreviate.
+Do **NOT** omit unchanged sections.
+Do **NOT** summarize the file instead of returning it.
+
+---
+
+## SCOPE RULES
+
+Stay strictly inside the requested objective.
+
+Do **NOT**:
+
+* redesign architecture
+* refactor unrelated code
+* change frontend code
+* change upload/image behavior
+* change settings hydration behavior
+* change medical gate behavior
+* change case review behavior
+* change summary architecture
+* change conversation rollover behavior
+* make optional improvements outside this fix
+
+Make the surgical hypothesis-reliability completion fix only.
+
+---
+
+## OBJECTIVE
+
+The previous pass correctly expanded:
+
+* `detectOutcomeResult(...)`
+* `looksLikeOutcome(...)`
+* `detectUserClosureSignal(...)`
+
+Keep those changes.
+
+But the previous pass did **NOT** actually complete the hypothesis reliability fix.
+
+Right now the file contains a partial hypothesis patch that widened `isStrongHypothesisCandidate(...)`, but the new phrasing still does not reliably get captured because two other layers were left too narrow.
+
+This pass is only to complete that hypothesis fix.
+
+---
+
+## CURRENT PROBLEM
+
+The file currently does this:
+
+### What was already changed
+
+* `isStrongHypothesisCandidate(...)` was widened to include phrases like:
+
+  * `leading to`
+  * `resulting in`
+  * `contributing to`
+  * `which was affecting`
+  * `at rest leading`
+  * `irritation`
+  * `pressure`
+  * `reduced circulation`
+  * `reduced mobility`
+  * `limiting`
+  * `preventing`
+  * `inhibiting`
+  * `restricting`
+  * plus separate patterns for:
+
+    * `reduced ... during`
+    * `loss of ... during`
+
+### What was NOT changed
+
+1. `isMechanismLikeText(...)` is still too narrow and does **not** recognize those new explanatory phrase families.
+2. The `extractFirstMatchingSentence(...)` pattern list used for `hypothesisSentence` extraction inside the case write block is still the old narrow list.
+
+So the widened hypothesis regex is not enough by itself.
+
+---
+
+## REQUIRED FIX
+
+You must make **exactly two** additional targeted edits.
+
+Do **NOT** touch the already-correct outcome / closure expansion.
+
+---
+
+## EDIT 1 — EXPAND `isMechanismLikeText(...)`
+
+Locate `isMechanismLikeText(...)`.
+
+Right now its `explicitMechanismPatterns` and/or equivalent logic are still too narrow.
+
+Expand the mechanism recognition so it can treat clearly explanatory assistant sentences as mechanism-like when they use phrasing such as:
+
+* `leading to`
+* `resulting in`
+* `contributing to`
+* `which was affecting`
+* `reduced ... during`
+* `loss of ... during`
+* `at rest leading`
+* `reduced circulation`
+* `reduced mobility`
+* `limiting`
+* `preventing`
+* `inhibiting`
+* `restricting`
+
+Important rule:
+
+Do **NOT** remove the existing protections:
+
+* instruction rejection must remain
+* generic success rejection must remain
+* filler must still stay out
+
+This edit should only make real explanatory physical/mechanical sentences eligible to be seen as mechanism-like.
+
+Do **NOT** broaden this into generic health commentary or medical/systemic redirects.
+
+---
+
+## EDIT 2 — EXPAND THE `hypothesisSentence` EXTRACTION PATTERN LIST
+
+Locate the `extractFirstMatchingSentence(finalText, [ ... ])` call used to derive:
+
+```ts
+const hypothesisSentence = extractFirstMatchingSentence(finalText, [ ... ]);
+```
+
+That pattern list is still the old narrow pattern family.
+
+Expand that list so a candidate sentence can be selected when it uses the same explanatory families added above, specifically:
+
+* `leading to`
+* `resulting in`
+* `contributing to`
+* `which was affecting`
+* `reduced ... during`
+* `loss of ... during`
+* `at rest leading`
+* `reduced circulation`
+* `reduced mobility`
+* `limiting`
+* `preventing`
+* `inhibiting`
+* `restricting`
+
+Do this in the same style as the existing list.
+
+Do **NOT** redesign extraction logic.
+Do **NOT** change scoring.
+Do **NOT** change `extractFirstMatchingSentence(...)` itself beyond what is required elsewhere.
+Only widen the candidate pattern list for hypothesis sentence extraction.
+
+---
+
+## PRESERVE THESE RULES EXACTLY
+
+Do **NOT** change:
+
+* thresholds in `isStrongHypothesisCandidate(...)`
+* `isGenericCoachingFillerText(...)`
+* `isTestLikeText(...)`
+* directive rejection logic
+* outcome detection
+* closure detection
+* worse/same detection
+* outcome write flow
+* adjustment extraction
+* any route behavior
+
+The outcome and closure edits from the previous pass are already correct and should remain untouched.
+
+---
+
+## SUCCESS CRITERIA
+
+After this patch:
+
+### Hypothesis
+
+* a valid assistant sentence using:
+
+  * `leading to`
+  * `resulting in`
+  * `contributing to`
+  * `which was affecting`
+  * `reduced circulation`
+  * `reduced mobility`
+  * `reduced ... during`
+  * `loss of ... during`
+    can actually be:
+
+1. recognized as mechanism-like
+2. selected as a candidate hypothesis sentence
+3. accepted by `isStrongHypothesisCandidate(...)`
+4. stored in `case_hypotheses`
+
+### Outcome / closure
+
+* all recent outcome/closure expansions remain intact
+* do not revert them
+* do not change them
+
+---
+
+## FILE TO EDIT
+
+* `routes.ts`
+
+---
+
+## OUTPUT FORMAT
+
+Return:
+
+* FULL corrected `routes.ts`
+* preferably in one code block
+* if necessary, in two continuous code blocks only
+* nothing else
+
+---
