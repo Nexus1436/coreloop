@@ -1881,8 +1881,12 @@ function isStrongHypothesisCandidate(
     return false;
   }
 
-  return /\b(?:because|due to|driven by|caused by|coming from|suggests|indicates|means|points to|breaking|collapsing|stalling|opening too early|shifting too early|losing structure|compensating|taking over|bearing the load|leading to|resulting in|contributing to|which was affecting|at rest leading|irritation|pressure|reduced circulation|reduced mobility|limiting|preventing|inhibiting|restricting)\b/i.test(
-    text,
+  return (
+    /\b(?:because|due to|driven by|caused by|coming from|suggests|indicates|means|points to|breaking|collapsing|stalling|opening too early|shifting too early|losing structure|compensating|taking over|bearing the load|leading to|resulting in|contributing to|which was affecting|at rest leading|irritation|pressure|reduced circulation|reduced mobility|limiting|preventing|inhibiting|restricting)\b/i.test(
+      text,
+    ) ||
+    /\breduced\b[^.!?]{1,80}\bduring\b/i.test(text) ||
+    /\bloss of\b[^.!?]{1,80}\bduring\b/i.test(text)
   );
 }
 
@@ -2172,7 +2176,7 @@ function detectOutcomeResult(
   const input = text.trim();
 
   const improved =
-    /\b(helped|worked|better|improved|fixed|that did it|feels better|much better|way better|significantly better|a lot better|relieved|less pain|less tight|lighter|smoother|that helped|this helped|that was helpful|this was helpful|that did help|this did help|you'?ve been helping me|this has been helping|that has been helping|this is helping|that is helping|that makes sense|this makes sense|makes sense now|that was what i needed|that'?s what i needed|that is what i needed)\b/i;
+    /\b(helped|worked|better|improved|fixed|that did it|feels better|much better|way better|significantly better|a lot better|relieved|less pain|less tight|lighter|smoother|that helped|this helped|that was helpful|this was helpful|that did help|this did help|you(?:'|\.)?ve been helping me|this has been helping|that has been helping|this is helping|that is helping|that makes sense|this makes sense|makes sense now|that was what i needed|that(?:'|\.)s what i needed|that is what i needed)\b/i;
 
   const worse =
     /\b(worse|hurt more|hurts more|pain increased|more pain|aggravated|made it worse|tighter|more tight|more strain|more uncomfortable)\b/i;
@@ -2194,7 +2198,7 @@ function looksLikeAdjustment(text: string): boolean {
 }
 
 function looksLikeOutcome(text: string): boolean {
-  return /\b(helped|worked|better|improved|worse|hurt more|hurts more|more pain|aggravated|same|no change|didn't help|didnt help|no difference|unchanged|that helped|this helped|that was helpful|this was helpful|that did help|this did help|you'?ve been helping me|this has been helping|that has been helping|this is helping|that is helping|that makes sense|this makes sense|makes sense now|that was what i needed|that'?s what i needed|that is what i needed)\b/i.test(
+  return /\b(helped|worked|better|improved|worse|hurt more|hurts more|more pain|aggravated|same|no change|didn't help|didnt help|no difference|unchanged|that helped|this helped|that was helpful|this was helpful|that did help|this did help|you(?:'|\.)?ve been helping me|this has been helping|that has been helping|this is helping|that is helping|that makes sense|this makes sense|makes sense now|that was what i needed|that(?:'|\.)s what i needed|that is what i needed)\b/i.test(
     text.trim(),
   );
 }
@@ -2203,7 +2207,7 @@ function detectUserClosureSignal(text: string): boolean {
   const input = text.trim();
   if (!input) return false;
 
-  return /\b(thank you|thanks|that helped|this helped|that was helpful|this was helpful|that makes sense|this makes sense|okay that makes sense|got it that helps|understood that helps|perfect|got it|exactly|that was what i needed|that's what i needed|that is what i needed| that’s what i needed|that’s a great plan|that is a great plan|great plan|understood|makes sense now|all good|we're good|we are good|i'm good|im good|all set|that answers it|that answered it|you've been helping me|you’ve been helping me|this has been helping|that has been helping|this is helping|that is helping)\b/i.test(
+  return /\b(thank you|thanks|that helped|this helped|that was helpful|this was helpful|that makes sense|this makes sense|okay that makes sense|got it that helps|understood that helps|perfect|got it|exactly|that was what i needed|that's what i needed|that is what i needed| that’s what i needed|that’s a great plan|that is a great plan|great plan|understood|makes sense now|all good|we're good|we are good|i'm good|im good|all set|that answers it|that answered it|you(?:'|\.)?ve been helping me|this has been helping|that has been helping|this is helping|that is helping)\b/i.test(
     input,
   );
 }
