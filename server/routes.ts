@@ -1744,9 +1744,26 @@ function isMechanismLikeText(value: string | null | undefined): boolean {
     return false;
   }
 
+  const explanatoryMechanismPatterns = [
+    /\bleading to\b/i,
+    /\bresulting in\b/i,
+    /\bcontributing to\b/i,
+    /\bwhich was affecting\b/i,
+    /\bat rest leading\b/i,
+    /\breduced circulation\b/i,
+    /\breduced mobility\b/i,
+    /\blimiting\b/i,
+    /\bpreventing\b/i,
+    /\binhibiting\b/i,
+    /\brestricting\b/i,
+  ];
+
   return (
     explicitMechanismPatterns.some((pattern) => pattern.test(text)) ||
-    declarativeMechanismPatterns.some((pattern) => pattern.test(text))
+    declarativeMechanismPatterns.some((pattern) => pattern.test(text)) ||
+    explanatoryMechanismPatterns.some((pattern) => pattern.test(text)) ||
+    /\breduced\b[^.!?]{1,80}\bduring\b/i.test(text) ||
+    /\bloss of\b[^.!?]{1,80}\bduring\b/i.test(text)
   );
 }
 
@@ -4488,6 +4505,19 @@ Produce the corrected response now.
             /\bcollapsing under\b/i,
             /\blosing structure once\b/i,
             /\btrying to organize\b/i,
+            /\bleading to\b/i,
+            /\bresulting in\b/i,
+            /\bcontributing to\b/i,
+            /\bwhich was affecting\b/i,
+            /\bat rest leading\b/i,
+            /\breduced circulation\b/i,
+            /\breduced mobility\b/i,
+            /\blimiting\b/i,
+            /\bpreventing\b/i,
+            /\binhibiting\b/i,
+            /\brestricting\b/i,
+            /\breduced\b[^.!?]{1,80}\bduring\b/i,
+            /\bloss of\b[^.!?]{1,80}\bduring\b/i,
           ]);
 
           if (
