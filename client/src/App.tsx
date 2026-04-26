@@ -6,6 +6,14 @@ import Home from "@/pages/home";
 import NotFound from "@/pages/not-found";
 import { useEffect, useState } from "react";
 
+const API_BASE =
+  window.location.protocol === "capacitor:" ||
+  window.location.origin === "capacitor://localhost" ||
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "capacitor.localhost"
+    ? "https://app.getcoreloop.com"
+    : "";
+
 function Router() {
   return (
     <Switch>
@@ -33,7 +41,7 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("/api/auth/login", {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         credentials: "include",
         headers: {
@@ -46,24 +54,31 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) {
       });
 
       if (!response.ok) {
-        const errorBody = await response.json().catch(() => null);
-        setAuthError(errorBody?.message ?? "Authentication failed");
+        const errorText = await response.text().catch(() => "");
+        setAuthError(`Login failed ${response.status}: ${errorText || "No body"}`);
         return;
       }
 
-      const userResponse = await fetch("/api/auth/user", {
+      const userResponse = await fetch(`${API_BASE}/api/auth/user`, {
         credentials: "include",
       });
 
       if (!userResponse.ok) {
-        const errorBody = await userResponse.json().catch(() => null);
-        setAuthError(errorBody?.message ?? "Unable to verify session");
+        const verifyText = await userResponse.text().catch(() => "");
+        setAuthError(
+          `Login succeeded but session verify failed ${userResponse.status}: ${
+            verifyText || "No body"
+          }`
+        );
         return;
       }
 
       onAuthenticated();
-    } catch (_error) {
-      setAuthError("Authentication failed");
+    } catch (error: any) {
+      console.error("LOGIN ERROR:", error);
+      setAuthError(
+        `Network error: ${error?.message || JSON.stringify(error) || "unknown"}`
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -236,7 +251,7 @@ function SignupPage({ onAuthenticated }: { onAuthenticated: () => void }) {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("/api/auth/signup", {
+      const response = await fetch(`${API_BASE}/api/auth/signup`, {
         method: "POST",
         credentials: "include",
         headers: {
@@ -249,24 +264,31 @@ function SignupPage({ onAuthenticated }: { onAuthenticated: () => void }) {
       });
 
       if (!response.ok) {
-        const errorBody = await response.json().catch(() => null);
-        setAuthError(errorBody?.message ?? "Authentication failed");
+        const errorText = await response.text().catch(() => "");
+        setAuthError(`Signup failed ${response.status}: ${errorText || "No body"}`);
         return;
       }
 
-      const userResponse = await fetch("/api/auth/user", {
+      const userResponse = await fetch(`${API_BASE}/api/auth/user`, {
         credentials: "include",
       });
 
       if (!userResponse.ok) {
-        const errorBody = await userResponse.json().catch(() => null);
-        setAuthError(errorBody?.message ?? "Unable to verify session");
+        const verifyText = await userResponse.text().catch(() => "");
+        setAuthError(
+          `Signup succeeded but session verify failed ${userResponse.status}: ${
+            verifyText || "No body"
+          }`
+        );
         return;
       }
 
       onAuthenticated();
-    } catch (_error) {
-      setAuthError("Authentication failed");
+    } catch (error: any) {
+      console.error("SIGNUP ERROR:", error);
+      setAuthError(
+        `Network error: ${error?.message || JSON.stringify(error) || "unknown"}`
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -456,7 +478,7 @@ function App() {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
 
   useEffect(() => {
-    fetch("/api/auth/user", { credentials: "include" })
+    fetch(`${API_BASE}/api/auth/user`, { credentials: "include" })
       .then((res) => {
         if (res.ok) {
           setIsLoggedIn(true);
@@ -502,7 +524,7 @@ function App() {
           zIndex: 1000,
         }}
       >
-        <a href="/api/logout" style={{ textDecoration: "none" }}>
+        <a href={`${API_BASE}/api/logout`} style={{ textDecoration: "none" }}>
           <button
             style={{
               background:

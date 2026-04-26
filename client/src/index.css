@@ -19,7 +19,6 @@
   --background: 0 0% 0%; 
   
   /* Charcoal / graphite text */
-  /* #525252 is Neutral-600. */
   --foreground: 0 0% 32%; 
   
   --card: 0 0% 0%;
@@ -35,11 +34,24 @@
   --radius: 0.5rem;
 }
 
+/* FIX: allow scrolling globally */
+html,
+body,
+#root {
+  height: 100%;
+  overflow: auto;
+  touch-action: auto;
+}
+
 body {
   @apply bg-background text-foreground font-sans antialiased;
-  /* Pure black, no gradients */
   background-color: black;
   min-height: 100vh;
+}
+
+/* Enable smooth iOS scrolling */
+* {
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Remove scrollbars */

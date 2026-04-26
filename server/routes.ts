@@ -10,6 +10,7 @@ import {
   isAuthenticated,
 } from "./replit_integrations/auth/replitAuth";
 import express from "express";
+import cors from "cors";
 import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
 import { promises as fsp } from "fs";
@@ -2850,6 +2851,19 @@ export async function registerRoutes(
   _httpServer: HTTPServer,
   app: Express,
 ): Promise<void> {
+  app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "capacitor://localhost");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(200);
+    }
+
+    next();
+  });
+
   await setupAuth(app);
 
   registerAnalyticsRoutes(app);

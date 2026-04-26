@@ -17,6 +17,11 @@ import { transcribeAudio, streamTTS } from "@/lib/api";
 import { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayback";
 import { useVoiceRecorder } from "../../replit_integrations/audio/useVoiceRecorder";
 
+const API_BASE =
+  window.location.protocol === "capacitor:"
+    ? "https://app.getcoreloop.com"
+    : "";
+
 export interface ChatMessage {
   id: string;
   role: "assistant" | "user";
@@ -501,16 +506,20 @@ export default function Home() {
         completed: true,
       };
 
-      const resp = await fetch("/api/settings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include",
-        body: JSON.stringify(nextSettings),
-      });
+const resp = await fetch(`${API_BASE}/api/settings`, {
+  method: "POST",
+  mode: "cors",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  credentials: "include",
+  body: JSON.stringify(nextSettings),
+});
 
-      if (!resp.ok) throw new Error("Failed to save settings");
+if (!resp.ok) {
+  const errorText = await resp.text().catch(() => "");
+  throw new Error(`SETTINGS SAVE FAILED ${resp.status}: ${errorText}`);
+}
 
       const data = await resp.json();
       const savedSettings: InterloopSettingsValues = {
@@ -988,9 +997,10 @@ export default function Home() {
     );
   }
 
-  return (
-    <>
-      <div className="h-screen w-full bg-black relative overflow-hidden">
+return (
+  <>
+    <div className="min-h-dvh w-full bg-black relative overflow-y-auto overflow-x-hidden">
+
         {mode === "A" ? (
           <>
             <div
@@ -1014,9 +1024,9 @@ export default function Home() {
             />
 
             <div
-              className="absolute left-0 right-0 z-20 px-4 sm:px-8"
+              className="fixed left-0 right-0 z-50 px-4 sm:px-8"
               style={{
-                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
+                top: "max(env(safe-area-inset-top) + 3.5rem, 5rem)",
               }}
             >
               <div className="mx-auto w-full max-w-2xl flex items-center justify-between">
@@ -1051,6 +1061,7 @@ export default function Home() {
               style={{
                 top: "max(env(safe-area-inset-top) + 3.25rem, 4rem)",
                 bottom: "55vh",
+                WebkitOverflowScrolling: "touch",
                 WebkitMaskImage:
                   "linear-gradient(to bottom, transparent 0%, black 9%, black 84%, rgba(0,0,0,0.72) 92%, transparent 100%)",
                 maskImage:
@@ -1285,7 +1296,7 @@ export default function Home() {
             </div>
 
             <div
-              className="absolute left-0 right-0 z-20 px-4 sm:px-8"
+              className="fixed left-0 right-0 z-50 px-4 sm:px-8"
               style={{
                 bottom: "max(env(safe-area-inset-bottom) + 1rem, 1.25rem)",
               }}
@@ -1365,7 +1376,7 @@ export default function Home() {
             </div>
           </>
         ) : (
-          <div className="h-screen w-full bg-black relative overflow-hidden text-white px-6">
+          <div className="min-h-dvh w-full bg-black relative overflow-y-auto overflow-x-hidden text-white px-6">
             <div
               className="pointer-events-none absolute left-1/2 top-[20%] h-[42vh] w-[86vw] max-w-3xl -translate-x-1/2 rounded-full"
               style={{
@@ -1378,7 +1389,7 @@ export default function Home() {
             <div
               className="absolute left-4 z-20"
               style={{
-                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)",
+                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)"
               }}
             >
               <button

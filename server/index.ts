@@ -115,6 +115,24 @@ async function boot() {
        AUTH
     ===================================================== */
 
+    /* =====================================================
+       CORS – must run before setupAuth so auth routes
+       include Access-Control headers on every response
+    ===================================================== */
+
+    app.use((req, res, next) => {
+      res.header("Access-Control-Allow-Origin", "capacitor://localhost");
+      res.header("Access-Control-Allow-Credentials", "true");
+      res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+      res.header("Access-Control-Allow-Headers", "Content-Type");
+
+      if (req.method === "OPTIONS") {
+        return res.sendStatus(200);
+      }
+
+      next();
+    });
+
     await setupAuth(app);
     registerAuthRoutes(app);
 
@@ -201,3 +219,4 @@ const shutdown = (signal: string) => {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+

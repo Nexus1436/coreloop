@@ -141,9 +141,6 @@ export function InterloopSettings({
         return;
       }
 
-      // Immediately push the durable backend URL into live form state
-      // so the avatar bubble can render the new image right away,
-      // without waiting for a full save cycle or a settings refetch.
       setForm((prev) => ({
         ...prev,
         profileImageUrl: uploadedUrl,
@@ -151,35 +148,46 @@ export function InterloopSettings({
     } catch (err) {
       console.error("Profile image upload error:", err);
     } finally {
-      // Reset the input so selecting the same file again still fires onChange.
       if (input) {
         input.value = "";
       }
     }
   };
 
-  const handleSave = () => {
-    onSave({
+const handleSave = async () => {
+  try {
+    await onSave({
       ...form,
       completed: true,
       profileImageUrl: form.profileImageUrl,
     });
-  };
+} catch (err) {
+  const message =
+    err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+
+  console.error("SAVE FAILED REAL ERROR", message, err);
+  alert(`Save failed: ${message}`);
+}
+};
 
   const inputClassName =
     "rounded-xl border border-[#4a3420] bg-[#050403] px-3 py-3 text-[#fff7eb] outline-none shadow-[0_0_0_1px_rgba(255,178,87,0.03),0_0_22px_rgba(255,154,61,0.04)] transition placeholder:text-[#6d6258] focus:border-[#f7a43b] focus:shadow-[0_0_0_1px_rgba(247,164,59,0.25),0_0_24px_rgba(247,164,59,0.14)]";
 
   const labelClassName = "text-sm font-medium text-[#d4ad7a]";
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#030201] text-[#fff7eb]">
-      <div
-        className="w-full px-5 pt-6 pb-24 sm:px-6"
-        style={{
-          paddingTop: "max(env(safe-area-inset-top) + 1.5rem, 2rem)",
-          paddingBottom: "max(env(safe-area-inset-bottom) + 5rem, 6rem)",
-        }}
-      >
+return (
+  <div className="fixed inset-0 z-50 bg-[#030201] text-[#fff7eb]">
+    <div
+      data-settings-scroll
+      className="absolute inset-0 h-dvh w-full overflow-y-scroll px-5 sm:px-6"
+      style={{
+        WebkitOverflowScrolling: "touch",
+        touchAction: "auto",
+        overscrollBehaviorY: "contain",
+        paddingTop: "max(env(safe-area-inset-top) + 1.5rem, 2rem)",
+        paddingBottom: "max(env(safe-area-inset-bottom) + 5rem, 6rem)",
+      }}
+    >
         <div className="mx-auto w-full max-w-xl rounded-2xl border border-[#7a4a22]/60 bg-[#080604] p-6 shadow-[0_0_0_1px_rgba(255,178,87,0.06),0_0_44px_rgba(255,145,38,0.18),inset_0_1px_0_rgba(255,213,158,0.08)] sm:p-8">
           <input
             type="file"

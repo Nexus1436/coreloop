@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.3.0",
-    "@capacitor/cli": "^7.6.1",
     "@capacitor/core": "^8.3.0",
     "@capacitor/ios": "^8.3.0",
     "@hookform/resolvers": "^3.10.0",
@@ -53,6 +52,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "connect-pg-simple": "^10.0.0",
+    "cors": "^2.8.6",
     "date-fns": "^3.6.0",
     "drizzle-orm": "^0.39.3",
     "drizzle-zod": "^0.7.1",
@@ -93,11 +93,13 @@
     "zod-validation-error": "^3.5.4"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.3.0",
     "@replit/vite-plugin-cartographer": "^0.4.4",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.4",
     "@tailwindcss/vite": "^4.1.14",
     "@types/connect-pg-simple": "^7.0.3",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.0",
     "@types/express-session": "^1.18.2",
     "@types/form-data": "^2.2.1",
