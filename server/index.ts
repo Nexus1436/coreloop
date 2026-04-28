@@ -111,6 +111,8 @@ function errorHandler(
 
 async function boot() {
   try {
+    console.log("BOOTING BACKEND DIAGNOSTIC-V2");
+
     /* =====================================================
        AUTH
     ===================================================== */
@@ -133,6 +135,13 @@ async function boot() {
       next();
     });
 
+    app.get("/api/version", (_req: Request, res: Response) => {
+      res.json({
+        version: "diagnostic-v2",
+        commit: "230014a1656f8bd004f63eba72701c2c9206ec28",
+      });
+    });
+
     await setupAuth(app);
     registerAuthRoutes(app);
 
@@ -148,6 +157,13 @@ async function boot() {
 
     app.use(errorHandler);
 
+    app.use("/api/{*path}", (req: Request, res: Response) => {
+      res.status(404).json({
+        error: "API route not found",
+        path: req.originalUrl,
+      });
+    });
+
     /* =====================================================
        DEV / PROD
     ===================================================== */
@@ -162,13 +178,13 @@ async function boot() {
        PORT
     ===================================================== */
 
-    const port = 5000;
+    const port = Number(process.env.PORT) || 3000;
 
     console.log("ENV PORT:", process.env.PORT);
     console.log("USING PORT:", port);
 
-    httpServer.listen(Number(port), "0.0.0.0", () => {
-      console.log("SERVER LISTENING");
+    httpServer.listen(port, () => {
+      console.log("SERVER LISTENING ON PORT:", port);
       log(`server running on port ${port}`);
     });
 
@@ -219,4 +235,3 @@ const shutdown = (signal: string) => {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-

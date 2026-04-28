@@ -2,21 +2,46 @@ PODS:
   - Capacitor (8.3.0):
     - CapacitorCordova
   - CapacitorCordova (8.3.0)
+  - CapacitorFilesystem (8.1.2):
+    - Capacitor
+    - IONFilesystemLib (~> 1.1.1)
+  - CapacitorVoiceRecorder (7.0.6):
+    - Capacitor
+  - CapgoCapacitorAudioRecorder (8.1.0):
+    - Capacitor
+  - IONFilesystemLib (1.1.2)
 
 DEPENDENCIES:
   - "Capacitor (from `../../node_modules/@capacitor/ios`)"
   - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
+  - "CapacitorFilesystem (from `../../node_modules/@capacitor/filesystem`)"
+  - CapacitorVoiceRecorder (from `../../node_modules/capacitor-voice-recorder`)
+  - "CapgoCapacitorAudioRecorder (from `../../node_modules/@capgo/capacitor-audio-recorder`)"
+
+SPEC REPOS:
+  trunk:
+    - IONFilesystemLib
 
 EXTERNAL SOURCES:
   Capacitor:
     :path: "../../node_modules/@capacitor/ios"
   CapacitorCordova:
     :path: "../../node_modules/@capacitor/ios"
+  CapacitorFilesystem:
+    :path: "../../node_modules/@capacitor/filesystem"
+  CapacitorVoiceRecorder:
+    :path: "../../node_modules/capacitor-voice-recorder"
+  CapgoCapacitorAudioRecorder:
+    :path: "../../node_modules/@capgo/capacitor-audio-recorder"
 
 SPEC CHECKSUMS:
   Capacitor: 22e541237135648c9aa736232bb4d2eec35fddcb
   CapacitorCordova: 2e1e2bb93b2f365309dc4ff18b72b9a69a7814a9
+  CapacitorFilesystem: 2db285a1ac6e475cc27cae2e1bea999000f9e2be
+  CapacitorVoiceRecorder: 9158861be982f32d411769723a4d813d6ce46135
+  CapgoCapacitorAudioRecorder: 5ef3c55f02ae5cde2c1de67f3827071691dc1990
+  IONFilesystemLib: 21a63377696b2d8fab5632ecfb7d2ac67bddb68a
 
-PODFILE CHECKSUM: 84ee8333eaf3c4f44013bcb5a170b64f5f06576b
+PODFILE CHECKSUM: 54f95e6d0d8c6b4f07da207c98dac686e400648a
 
 COCOAPODS: 1.16.2

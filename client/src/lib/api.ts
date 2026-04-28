@@ -5,6 +5,14 @@
  * ======================================================
  */
 
+const API_BASE =
+  window.location.protocol === "capacitor:" ||
+  window.location.origin === "capacitor://localhost" ||
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "capacitor.localhost"
+    ? "https://app.getcoreloop.com"
+    : "";
+
 let activeConversationId: number | null = null;
 
 /* ======================================================
@@ -18,7 +26,7 @@ export async function sendMessage(
   onChunk: (text: string) => void,
   options?: { isCaseReview?: boolean },
 ): Promise<void> {
-  const res = await fetch("/api/chat", {
+  const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -88,29 +96,183 @@ export async function sendMessage(
 ====================================================== */
 
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
-  const base64Audio = await new Promise<string>((resolve) => {
+  console.log("transcribeAudio stage:", {
+    stage: "input-blob",
+    size: audioBlob.size,
+    type: audioBlob.type,
+  });
+
+  const base64Audio = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
 
     reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
+      try {
+        const result = reader.result as string;
+        console.log("transcribeAudio stage:", {
+          stage: "file-reader-load",
+          length: result.length,
+          first20: result.slice(0, 20),
+          last20: result.slice(-20),
+          mod4: result.length % 4,
+          mimeType: audioBlob.type,
+        });
+
+        const encoded = result.split(",")[1];
+
+        console.log("transcribeAudio stage:", {
+          stage: "base64-extracted",
+          length: encoded.length,
+          first20: encoded.slice(0, 20),
+          last20: encoded.slice(-20),
+          mod4: encoded.length % 4,
+          mimeType: audioBlob.type,
+        });
+
+        resolve(encoded);
+      } catch (error) {
+        console.error("transcribeAudio error:", {
+          stage: "file-reader-load-handler",
+          name: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        reject(error);
+      }
     };
+
+    reader.onerror = () => {
+      const error = reader.error ?? new Error("FileReader failed");
+      console.error("transcribeAudio error:", {
+        stage: "file-reader-error",
+        name: error.name,
+        message: error.message,
+      });
+      reject(error);
+    };
+
+    console.log("transcribeAudio stage:", {
+      stage: "file-reader-start",
+      size: audioBlob.size,
+      type: audioBlob.type,
+    });
 
     reader.readAsDataURL(audioBlob);
   });
 
-  const res = await fetch("/api/stt", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ audio: base64Audio }),
+  console.log("transcribeAudio stage:", {
+    stage: "fetch-start",
+    length: base64Audio.length,
+    first20: base64Audio.slice(0, 20),
+    last20: base64Audio.slice(-20),
+    mod4: base64Audio.length % 4,
+    mimeType: audioBlob.type,
   });
 
+  const url = `${API_BASE}/api/stt`;
+  const resolvedUrl = new URL(url, window.location.href).toString();
+
+  console.log("transcribeAudio stage:", {
+    stage: "request-prepare",
+    url,
+    resolvedUrl,
+    length: base64Audio.length,
+    first20: base64Audio.slice(0, 20),
+    last20: base64Audio.slice(-20),
+    mod4: base64Audio.length % 4,
+    mimeType: audioBlob.type,
+  });
+
+  let payload: string;
+
+  try {
+    payload = JSON.stringify({
+      audio: base64Audio,
+      mimeType: audioBlob.type || "audio/mp4",
+    });
+
+    console.log("transcribeAudio stage:", {
+      stage: "json-stringify-success",
+      payloadLength: payload.length,
+    });
+  } catch (error) {
+    console.error("transcribeAudio error:", {
+      stage: "json-stringify",
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
+  }
+
+  let res: Response;
+
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: payload,
+    });
+
+    console.log("transcribeAudio stage:", {
+      stage: "fetch-returned",
+      status: res.status,
+      statusText: res.statusText,
+      contentType: res.headers.get("content-type"),
+    });
+  } catch (error) {
+    console.error("transcribeAudio error:", {
+      stage: "fetch-throw",
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
+  }
+
+  let responseText: string;
+
+  try {
+    responseText = await res.text();
+
+    console.log("transcribeAudio stage:", {
+      stage: "response-text",
+      status: res.status,
+      contentType: res.headers.get("content-type"),
+      first300: responseText.slice(0, 300),
+    });
+  } catch (error) {
+    console.error("transcribeAudio error:", {
+      stage: "response-text",
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
+  }
+
   if (!res.ok) {
+    console.error("transcribeAudio error:", {
+      stage: "fetch-response",
+      status: res.status,
+      statusText: res.statusText,
+    });
     throw new Error("Transcription failed");
   }
 
-  const data = await res.json();
+  let data: any;
+
+  try {
+    data = JSON.parse(responseText);
+  } catch (error) {
+    console.error("transcribeAudio error:", {
+      stage: "response-json-parse",
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+      first300: responseText.slice(0, 300),
+    });
+    throw error;
+  }
+
   return typeof data?.transcript === "string" ? data.transcript : "";
 }
 
@@ -158,7 +320,7 @@ export async function streamTTS(
 
   for (const sentence of sentences) {
     try {
-      const res = await fetch("/api/tts", {
+      const res = await fetch(`${API_BASE}/api/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

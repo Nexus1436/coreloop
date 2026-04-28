@@ -197,6 +197,7 @@ export default function Home() {
   const [hasExchanged, setHasExchanged] = useState(false);
 
   const [typedText, setTypedText] = useState("");
+  const [voiceError, setVoiceError] = useState("");
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -835,13 +836,22 @@ if (!resp.ok) {
 
     if (!isRecording) {
       playUITone(880);
-      await recorder.startRecording();
-      setIsRecording(true);
+      setVoiceError("");
+
+      try {
+        await recorder.startRecording();
+        setIsRecording(true);
+      } catch (error) {
+        console.error("Voice recording failed to start:", error);
+        setVoiceError("Microphone unavailable. Check microphone permission and try again.");
+      }
+
       return;
     }
 
     playUITone(660);
     setIsRecording(false);
+    setVoiceError("");
 
     if (acknowledgmentTimeoutRef.current != null) {
       window.clearTimeout(acknowledgmentTimeoutRef.current);
@@ -849,49 +859,63 @@ if (!resp.ok) {
 
     setIsProcessing(true);
 
-    const blob = await recorder.stopRecording();
-    const transcript = await transcribeAudio(blob);
-    if (!transcript) {
+    try {
+      const blob = await recorder.stopRecording();
+
+      if (blob.size === 0) {
+        throw new Error("No audio was recorded. Try again.");
+      }
+
+      const transcript = await transcribeAudio(blob);
+      if (!transcript.trim()) {
+        throw new Error("No speech was detected. Try again.");
+      }
+
+      const userId = nextId();
+      const assistantId = nextId();
+
+      setMessages((prev) => [
+        ...prev,
+        { id: userId, role: "user", text: transcript },
+        { id: assistantId, role: "assistant", text: "" },
+      ]);
+
+      let assistantText = "";
+
+      await sendChat(
+        conversationIdRef.current,
+        transcript,
+        (id) => {
+          conversationIdRef.current = id;
+          setConversationId(id);
+          localStorage.setItem("conversationId", String(id));
+        },
+        (chunk) => {
+          assistantText = mergeStream(assistantText, chunk);
+
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, text: assistantText } : m,
+            ),
+          );
+        },
+      );
+
+      setHasExchanged(true);
+      void loadDashboardData();
+
+      if (assistantText.trim()) {
+        await speakText(assistantId, assistantText, "auto");
+      }
+    } catch (error) {
+      console.error("Voice flow failed:", error);
+      setVoiceError(
+        error instanceof Error
+          ? error.message
+          : "Voice processing failed. Try again.",
+      );
+    } finally {
       setIsProcessing(false);
-      return;
-    }
-
-    const userId = nextId();
-    const assistantId = nextId();
-
-    setMessages((prev) => [
-      ...prev,
-      { id: userId, role: "user", text: transcript },
-      { id: assistantId, role: "assistant", text: "" },
-    ]);
-
-    let assistantText = "";
-
-    await sendChat(
-      conversationIdRef.current,
-      transcript,
-      (id) => {
-        conversationIdRef.current = id;
-        setConversationId(id);
-        localStorage.setItem("conversationId", String(id));
-      },
-      (chunk) => {
-        assistantText = mergeStream(assistantText, chunk);
-
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, text: assistantText } : m,
-          ),
-        );
-      },
-    );
-
-    setHasExchanged(true);
-    setIsProcessing(false);
-    void loadDashboardData();
-
-    if (assistantText.trim()) {
-      await speakText(assistantId, assistantText, "auto");
     }
   }, [
     isRecording,
@@ -1249,7 +1273,21 @@ return (
                           }
                     }
                   >
-                    {isSpeaking ? (
+                    {voiceError ? (
+                      <div
+                        style={{
+                          textAlign: "center",
+                          lineHeight: "1.3",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          transform: "translateY(-12%)",
+                        }}
+                      >
+                        <div>{voiceError}</div>
+                      </div>
+                    ) : isSpeaking ? (
                       "Tap to stop"
                     ) : isProcessing ? (
                       "Thinking..."

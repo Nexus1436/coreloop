@@ -13,8 +13,10 @@ import express from "express";
 import cors from "cors";
 import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
+import { execFile } from "child_process";
 import { promises as fsp } from "fs";
 import path from "path";
+import { promisify } from "util";
 
 import OpenAI from "openai";
 import { ElevenLabsClient } from "elevenlabs";
@@ -66,6 +68,8 @@ const openai = new OpenAI({
 const elevenlabs = new ElevenLabsClient({
   apiKey: process.env.ELEVENLABS_API_KEY!,
 });
+
+const execFileAsync = promisify(execFile);
 
 const INTERLOOP_SETTINGS_VOICE_IDS = {
   female_pilates: "VI2qcJpxMy5M6WFvpIrh",
@@ -2881,6 +2885,13 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  app.get("/api/version", (_req: Request, res: Response) => {
+    res.json({
+      version: "diagnostic-v2",
+      commit: "230014a1656f8bd004f63eba72701c2c9206ec28",
+    });
+  });
+
   app.get("/api/settings", isAuthenticated, async (req: any, res: any) => {
     try {
       const authUser = req.user as any;
@@ -3078,6 +3089,15 @@ export async function registerRoutes(
   );
 
   app.post("/api/stt", async (req: Request, res: Response) => {
+    console.log("STT ROUTE VERSION: diagnostic-v2");
+
+    let sttMimeType = "unknown";
+    let sttBase64Length = 0;
+    let sttExtension = "unknown";
+    let sttInputPath: string | undefined;
+    let sttOutputPath: string | undefined;
+    let sttFailureDetails = "Unknown STT failure";
+
     try {
       const { audio, mimeType } = req.body ?? {};
 
@@ -3085,33 +3105,222 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No audio provided" });
       }
 
+      sttBase64Length = typeof audio === "string" ? audio.length : 0;
+
       const resolvedMimeType =
         typeof mimeType === "string" && mimeType.trim()
           ? mimeType.trim()
           : "audio/webm";
+      sttMimeType = resolvedMimeType;
 
       const extension =
-        resolvedMimeType.includes("mp4") || resolvedMimeType.includes("mpeg")
+        resolvedMimeType.includes("aac")
+          ? "wav"
+          : resolvedMimeType.includes("mp4") ||
+              resolvedMimeType.includes("mpeg")
           ? "mp4"
           : resolvedMimeType.includes("wav")
             ? "wav"
             : resolvedMimeType.includes("ogg")
               ? "ogg"
               : "webm";
+      sttExtension = extension;
 
       const buffer = Buffer.from(audio, "base64");
+      let uploadBuffer = buffer;
+      let uploadMimeType = resolvedMimeType;
 
-      const transcription = await openai.audio.transcriptions.create({
-        file: await toFile(buffer, `speech.${extension}`, {
-          type: resolvedMimeType,
-        }),
-        model: "whisper-1",
+      console.log("STT request received:", {
+        mimeType: resolvedMimeType,
+        base64Length: sttBase64Length,
+        inputBytes: buffer.length,
+      });
+
+      if (resolvedMimeType.includes("aac")) {
+        const tempId = `${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2)}`;
+        sttInputPath = path.join("/tmp", `stt-input-${tempId}.aac`);
+        sttOutputPath = path.join("/tmp", `stt-output-${tempId}.wav`);
+
+        await fsp.writeFile(sttInputPath, buffer);
+
+        console.log("STT ffmpeg convert start:", {
+          inputPath: sttInputPath,
+          outputPath: sttOutputPath,
+          inputBytes: buffer.length,
+        });
+
+        try {
+          const { stdout, stderr } = await execFileAsync("ffmpeg", [
+            "-y",
+            "-i",
+            sttInputPath,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "wav",
+            sttOutputPath,
+          ]);
+
+          console.log("STT ffmpeg convert complete:", {
+            stdout,
+            stderr,
+          });
+        } catch (ffmpegError) {
+          console.error("STT ffmpeg convert failed:", {
+            name:
+              ffmpegError instanceof Error
+                ? ffmpegError.name
+                : typeof ffmpegError,
+            message:
+              ffmpegError instanceof Error
+                ? ffmpegError.message
+                : String(ffmpegError),
+            code:
+              typeof ffmpegError === "object" &&
+              ffmpegError !== null &&
+              "code" in ffmpegError
+                ? (ffmpegError as { code?: unknown }).code
+                : undefined,
+            stdout:
+              typeof ffmpegError === "object" &&
+              ffmpegError !== null &&
+              "stdout" in ffmpegError
+                ? (ffmpegError as { stdout?: unknown }).stdout
+                : undefined,
+            stderr:
+              typeof ffmpegError === "object" &&
+              ffmpegError !== null &&
+              "stderr" in ffmpegError
+                ? (ffmpegError as { stderr?: unknown }).stderr
+                : undefined,
+            stack: ffmpegError instanceof Error ? ffmpegError.stack : undefined,
+          });
+
+          throw ffmpegError;
+        }
+
+        const outputStats = await fsp.stat(sttOutputPath);
+
+        if (!outputStats.isFile() || outputStats.size <= 0) {
+          throw new Error("FFmpeg produced an invalid WAV output file");
+        }
+
+        uploadBuffer = await fsp.readFile(sttOutputPath);
+        uploadMimeType = "audio/wav";
+
+        console.log("STT ffmpeg convert success:", {
+          inputBytes: buffer.length,
+          outputBytes: uploadBuffer.length,
+        });
+      }
+
+      let transcription;
+
+      try {
+        transcription = await openai.audio.transcriptions.create({
+          file: await toFile(uploadBuffer, `speech.${extension}`, {
+            type: uploadMimeType,
+          }),
+          model: "whisper-1",
+        });
+      } catch (openAiError) {
+        console.error("STT OpenAI transcription failed:", {
+          name:
+            openAiError instanceof Error ? openAiError.name : typeof openAiError,
+          message:
+            openAiError instanceof Error
+              ? openAiError.message
+              : String(openAiError),
+          status:
+            typeof openAiError === "object" &&
+            openAiError !== null &&
+            "status" in openAiError
+              ? (openAiError as { status?: unknown }).status
+              : undefined,
+          code:
+            typeof openAiError === "object" &&
+            openAiError !== null &&
+            "code" in openAiError
+              ? (openAiError as { code?: unknown }).code
+              : undefined,
+          response:
+            typeof openAiError === "object" &&
+            openAiError !== null &&
+            "response" in openAiError
+              ? (openAiError as { response?: unknown }).response
+              : undefined,
+          body:
+            typeof openAiError === "object" &&
+            openAiError !== null &&
+            "body" in openAiError
+              ? (openAiError as { body?: unknown }).body
+              : undefined,
+          error:
+            typeof openAiError === "object" &&
+            openAiError !== null &&
+            "error" in openAiError
+              ? (openAiError as { error?: unknown }).error
+              : undefined,
+          stack: openAiError instanceof Error ? openAiError.stack : undefined,
+        });
+
+        throw openAiError;
+      }
+
+      console.log("STT OpenAI response:", {
+        textLength: transcription.text?.length ?? 0,
       });
 
       res.json({ transcript: transcription.text });
     } catch (error) {
-      console.error("STT error:", error);
-      res.status(500).json({ error: "STT failed" });
+      sttFailureDetails =
+        error instanceof Error ? error.message : String(error);
+
+      console.error("STT error:", {
+        mimeType: sttMimeType,
+        base64Length: sttBase64Length,
+        extension: sttExtension,
+        inputPath: sttInputPath,
+        outputPath: sttOutputPath,
+        name: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+        status:
+          typeof error === "object" && error !== null && "status" in error
+            ? (error as { status?: unknown }).status
+            : undefined,
+        code:
+          typeof error === "object" && error !== null && "code" in error
+            ? (error as { code?: unknown }).code
+            : undefined,
+        response:
+          typeof error === "object" && error !== null && "response" in error
+            ? (error as { response?: unknown }).response
+            : undefined,
+        body:
+          typeof error === "object" && error !== null && "body" in error
+            ? (error as { body?: unknown }).body
+            : undefined,
+        error:
+          typeof error === "object" && error !== null && "error" in error
+            ? (error as { error?: unknown }).error
+            : undefined,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      res.status(500).json({
+        error: "STT failed",
+        details: sttFailureDetails,
+        routeVersion: "diagnostic-v2",
+      });
+    } finally {
+      await Promise.allSettled(
+        [sttInputPath, sttOutputPath]
+          .filter((filePath): filePath is string => Boolean(filePath))
+          .map((filePath) => fsp.unlink(filePath)),
+      );
     }
   });
 
