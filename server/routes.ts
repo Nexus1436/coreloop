@@ -3144,11 +3144,17 @@ export async function registerRoutes(
         sttOutputPath = path.join("/tmp", `stt-output-${tempId}.wav`);
 
         await fsp.writeFile(sttInputPath, buffer);
+        const inputStats = await fsp.stat(sttInputPath);
+
+        console.log("STT input file ready:", {
+          inputPath: sttInputPath,
+          inputBytes: inputStats.size,
+        });
 
         console.log("STT ffmpeg convert start:", {
           inputPath: sttInputPath,
           outputPath: sttOutputPath,
-          inputBytes: buffer.length,
+          inputBytes: inputStats.size,
         });
 
         try {
@@ -3169,12 +3175,17 @@ export async function registerRoutes(
             stdout,
             stderr,
           });
+
+          const outputStats = await fsp.stat(sttOutputPath);
+
+          console.log("STT ffmpeg convert success:", {
+            inputPath: sttInputPath,
+            outputPath: sttOutputPath,
+            inputBytes: inputStats.size,
+            outputBytes: outputStats.size,
+          });
         } catch (ffmpegError) {
           console.error("STT ffmpeg convert failed:", {
-            name:
-              ffmpegError instanceof Error
-                ? ffmpegError.name
-                : typeof ffmpegError,
             message:
               ffmpegError instanceof Error
                 ? ffmpegError.message
@@ -3203,19 +3214,24 @@ export async function registerRoutes(
           throw ffmpegError;
         }
 
-        const outputStats = await fsp.stat(sttOutputPath);
+        const outputExists = await fsp
+          .access(sttOutputPath)
+          .then(() => true)
+          .catch(() => false);
+        const outputStats = outputExists ? await fsp.stat(sttOutputPath) : null;
 
-        if (!outputStats.isFile() || outputStats.size <= 0) {
-          throw new Error("FFmpeg produced an invalid WAV output file");
+        console.log("STT WAV validation:", {
+          outputPath: sttOutputPath,
+          exists: outputExists,
+          outputBytes: outputStats?.size ?? 0,
+        });
+
+        if (!outputStats?.isFile() || outputStats.size <= 0) {
+          throw new Error("WAV output invalid or empty");
         }
 
         uploadBuffer = await fsp.readFile(sttOutputPath);
         uploadMimeType = "audio/wav";
-
-        console.log("STT ffmpeg convert success:", {
-          inputBytes: buffer.length,
-          outputBytes: uploadBuffer.length,
-        });
       }
 
       let transcription;
@@ -3310,9 +3326,10 @@ export async function registerRoutes(
             : undefined,
         stack: error instanceof Error ? error.stack : undefined,
       });
-      res.status(500).json({
+      console.error("STT FULL ERROR:", error);
+      return res.status(500).json({
         error: "STT failed",
-        details: sttFailureDetails,
+        details: error?.message || "unknown error",
         routeVersion: "diagnostic-v2",
       });
     } finally {
