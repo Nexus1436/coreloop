@@ -3605,6 +3605,24 @@ ${memoryBlock}
         | undefined;
 
       if (selectedCase) {
+        const rawSignals = await db
+          .select()
+          .from(caseSignals)
+          .where(eq(caseSignals.caseId, selectedCase.id));
+        const rawHypotheses = await db
+          .select()
+          .from(caseHypotheses)
+          .where(eq(caseHypotheses.caseId, selectedCase.id));
+        const rawAdjustments = await db
+          .select()
+          .from(caseAdjustments)
+          .where(eq(caseAdjustments.caseId, selectedCase.id));
+
+        console.log("DASHBOARD SELECTED CASE:", selectedCase);
+        console.log("SIGNALS RAW:", rawSignals);
+        console.log("HYPOTHESES RAW:", rawHypotheses);
+        console.log("ADJUSTMENTS RAW:", rawAdjustments);
+
         [latestAdjustment] = await db
           .select({
             mechanicalFocus: caseAdjustments.mechanicalFocus,
@@ -3654,6 +3672,10 @@ ${memoryBlock}
           .where(eq(caseSignals.caseId, selectedCase.id))
           .orderBy(desc(caseSignals.id))
           .limit(1);
+
+        console.log("LATEST SIGNAL:", latestSignal);
+        console.log("LATEST HYPOTHESIS:", latestHypothesis);
+        console.log("LATEST ADJUSTMENT:", latestAdjustment);
       }
 
       let latestCaseReview:
@@ -3776,6 +3798,12 @@ ${memoryBlock}
         activityType: selectedCase?.activityType ?? null,
         activeCaseTitle,
         investigationState,
+        signal: latestSignal?.description ?? null,
+        hypothesis: latestHypothesis?.hypothesis ?? null,
+        adjustment:
+          [latestAdjustment?.cue, latestAdjustment?.mechanicalFocus]
+            .filter(Boolean)
+            .join(" — ") || null,
         currentMechanism,
         currentTest,
         lastShift,
@@ -3786,6 +3814,12 @@ ${memoryBlock}
       res.json({
         activeCaseTitle,
         investigationState,
+        signal: latestSignal?.description ?? null,
+        hypothesis: latestHypothesis?.hypothesis ?? null,
+        adjustment:
+          [latestAdjustment?.cue, latestAdjustment?.mechanicalFocus]
+            .filter(Boolean)
+            .join(" — ") || null,
         currentMechanism,
         currentTest,
         lastShift,

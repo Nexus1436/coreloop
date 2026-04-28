@@ -18,19 +18,29 @@ import { useAudioPlayback } from "../../replit_integrations/audio/useAudioPlayba
 import { useVoiceRecorder } from "../../replit_integrations/audio/useVoiceRecorder";
 
 const API_BASE =
-  window.location.protocol === "capacitor:"
+  window.location.protocol === "capacitor:" ||
+  window.location.origin === "capacitor://localhost" ||
+  window.location.hostname === "capacitor.localhost"
     ? "https://app.getcoreloop.com"
     : "";
+
+function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
 
 export interface ChatMessage {
   id: string;
   role: "assistant" | "user";
   text: string;
+  source?: "voice" | "typed" | "system";
 }
 
 type DashboardData = {
   activeCaseTitle: string | null;
   investigationState: string | null;
+  signal: string | null;
+  hypothesis: string | null;
+  adjustment: string | null;
   currentMechanism: string | null;
   currentTest: string | null;
   lastShift: string | null;
@@ -41,6 +51,12 @@ type DashboardData = {
     reviewText: string;
     createdAt: string;
   }[];
+};
+
+type ConversationThread = {
+  id: number;
+  title: string;
+  messages: ChatMessage[];
 };
 
 const INTERLOOP_SETTINGS_KEY = "interloopSettings";
@@ -69,6 +85,9 @@ const defaultSettings: InterloopSettingsValues = {
 const defaultDashboardData: DashboardData = {
   activeCaseTitle: null,
   investigationState: null,
+  signal: null,
+  hypothesis: null,
+  adjustment: null,
   currentMechanism: null,
   currentTest: null,
   lastShift: null,
@@ -182,9 +201,57 @@ function normalizeLoadedMessages(payload: unknown): ChatMessage[] {
         id,
         role,
         text: String(text),
+        source: "system",
       } as ChatMessage;
     })
     .filter((msg): msg is ChatMessage => Boolean(msg));
+}
+
+function parseJsonResponseText(text: string, label: string): unknown {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(
+      `${label} returned non-JSON response: ${text.slice(0, 220)}`,
+    );
+  }
+}
+
+function getNestedString(source: unknown, paths: string[][]): string | null {
+  for (const pathParts of paths) {
+    let current: unknown = source;
+
+    for (const part of pathParts) {
+      if (!current || typeof current !== "object" || !(part in current)) {
+        current = null;
+        break;
+      }
+
+      current = (current as Record<string, unknown>)[part];
+    }
+
+    if (typeof current === "string" && current.trim()) {
+      return current.trim();
+    }
+  }
+
+  return null;
+}
+
+function segmentRepeatText(text: string): string[] {
+  if (!text.trim()) return [];
+
+  const normalized = text.replace(/(\d+)\.\s*/g, "\n$1. ");
+  const segments = normalized.split(/(?<=[.!?])\s+/);
+
+  return segments.map((segment) => segment.trim()).filter(Boolean);
+}
+
+function normalizeBase64Audio(input: string): string {
+  return String(input ?? "")
+    .replace(/^data:audio\/[a-zA-Z0-9.+-]+;base64,/, "")
+    .replace(/\s+/g, "")
+    .trim();
 }
 
 export default function Home() {
@@ -198,6 +265,8 @@ export default function Home() {
 
   const [typedText, setTypedText] = useState("");
   const [voiceError, setVoiceError] = useState("");
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -210,6 +279,9 @@ export default function Home() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [dashboardData, setDashboardData] =
     useState<DashboardData>(defaultDashboardData);
+  const [recentConversationThreads, setRecentConversationThreads] = useState<
+    ConversationThread[]
+  >([]);
 
   const playback = useAudioPlayback();
   const recorder = useVoiceRecorder();
@@ -217,6 +289,9 @@ export default function Home() {
   const stopRequestedRef = useRef(false);
   const isReplayingRef = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const repeatAudioRef = useRef<HTMLAudioElement | null>(null);
+  const repeatAudioReleaseRef = useRef<(() => void) | null>(null);
+  const repeatSessionRef = useRef(0);
   const acknowledgmentTimeoutRef = useRef<number | null>(null);
   const speakSessionRef = useRef(0);
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
@@ -224,10 +299,15 @@ export default function Home() {
   const typingInputRef = useRef<HTMLInputElement | null>(null);
   const hasAutoScrolledInitialRef = useRef(false);
   const previousModeRef = useRef<"A" | "C">("A");
+  const whoDebugMessageIdRef = useRef<string | null>(null);
   const lastPlayableMessageRef = useRef<{ id: string; text: string } | null>(
     null,
   );
   const lastAutoPlayedMessageIdRef = useRef<string | null>(null);
+  const [isRepeatPlaying, setIsRepeatPlaying] = useState(false);
+  const [activeRepeatMessageId, setActiveRepeatMessageId] = useState<
+    string | null
+  >(null);
 
   const selectedVoice =
     settingsData.voice in VOICE_AVATAR_MAP ? settingsData.voice : "male_coach";
@@ -365,18 +445,81 @@ export default function Home() {
 
     const loadConversations = async () => {
       try {
-        const resp = await fetch("/api/conversations", {
+        const conversationsUrl = apiUrl("/api/conversations");
+        const resolvedConversationsUrl = new URL(
+          conversationsUrl,
+          window.location.href,
+        ).toString();
+
+        console.log("HOME conversations request:", {
+          url: conversationsUrl,
+          resolvedUrl: resolvedConversationsUrl,
+          credentials: "include",
+          protocol: window.location.protocol,
+          origin: window.location.origin,
+          hostname: window.location.hostname,
+        });
+
+        const resp = await fetch(conversationsUrl, {
           credentials: "include",
         });
 
-        if (!resp.ok) throw new Error("Failed to load conversations");
+        const responseText = await resp.text();
 
-        const data = await resp.json();
+        console.log("HOME conversations response:", {
+          url: conversationsUrl,
+          resolvedUrl: resolvedConversationsUrl,
+          status: resp.status,
+          statusText: resp.statusText,
+          ok: resp.ok,
+          contentType: resp.headers.get("content-type"),
+          bodyPreview: responseText.slice(0, 500),
+        });
+
+        if (!resp.ok) {
+          throw new Error(
+            `Failed to load conversations (${resp.status} ${resp.statusText}): ${responseText.slice(
+              0,
+              220,
+            )}`,
+          );
+        }
+
+        const data = parseJsonResponseText(responseText, "Conversations");
         const conversations = Array.isArray(data)
           ? data
-          : (data.conversations ?? []);
+          : Array.isArray((data as { conversations?: unknown })?.conversations)
+            ? ((data as { conversations: unknown[] }).conversations)
+            : ([] as unknown[]);
+        const conversationRows = conversations as Array<Record<string, any>>;
 
-        const latest = conversations[0] ?? null;
+        console.log("HOME conversations parsed:", {
+          shape: Array.isArray(data) ? "array" : typeof data,
+          hasConversationsProperty:
+            Boolean(data) &&
+            typeof data === "object" &&
+            "conversations" in data,
+          count: conversationRows.length,
+          firstConversationId: conversationRows[0]?.id ?? null,
+        });
+
+        const sortedConversations = [...conversationRows].sort((a, b) => {
+          const aTime = new Date(
+            a?.updatedAt ?? a?.createdAt ?? a?.lastMessageAt ?? 0,
+          ).getTime();
+          const bTime = new Date(
+            b?.updatedAt ?? b?.createdAt ?? b?.lastMessageAt ?? 0,
+          ).getTime();
+
+          if (Number.isFinite(aTime) && Number.isFinite(bTime)) {
+            return bTime - aTime;
+          }
+
+          return Number(b?.id ?? 0) - Number(a?.id ?? 0);
+        });
+
+        const recentConversations = sortedConversations.slice(0, 3);
+        const latest = recentConversations[0] ?? null;
 
         if (!latest?.id) {
           if (cancelled) return;
@@ -384,6 +527,7 @@ export default function Home() {
           conversationIdRef.current = null;
           setConversationId(null);
           setMessages([]);
+          setRecentConversationThreads([]);
           setHasExchanged(false);
           localStorage.removeItem("conversationId");
           hasAutoScrolledInitialRef.current = false;
@@ -398,20 +542,78 @@ export default function Home() {
           conversationIdRef.current = null;
           setConversationId(null);
           setMessages([]);
+          setRecentConversationThreads([]);
           setHasExchanged(false);
           localStorage.removeItem("conversationId");
           hasAutoScrolledInitialRef.current = false;
           return;
         }
 
-        const msgResp = await fetch(`/api/messages/${latestId}`, {
+        const threadResults = await Promise.all(
+          recentConversations.map(async (conversation, index) => {
+            const id = Number(conversation?.id);
+
+            if (!Number.isFinite(id)) return null;
+
+            const messagesUrl = apiUrl(`/api/messages/${id}`);
+            const msgResp = await fetch(messagesUrl, {
+              credentials: "include",
+            });
+
+            const msgText = await msgResp.text();
+
+            if (!msgResp.ok) {
+              throw new Error(
+                `Failed to load messages for ${id} (${msgResp.status} ${msgResp.statusText}): ${msgText.slice(
+                  0,
+                  220,
+                )}`,
+              );
+            }
+
+            const msgData = parseJsonResponseText(
+              msgText,
+              `Messages ${id}`,
+            );
+            const normalizedMessages = normalizeLoadedMessages(msgData);
+            const title =
+              typeof conversation?.title === "string" &&
+              conversation.title.trim()
+                ? conversation.title.trim()
+                : `Conversation ${index + 1}`;
+
+            return {
+              id,
+              title,
+              messages: normalizedMessages,
+            } satisfies ConversationThread;
+          }),
+        );
+
+        const loadedThreads = threadResults.filter(
+          (thread): thread is ConversationThread => Boolean(thread),
+        );
+        const latestMessagesUrl = apiUrl(`/api/messages/${latestId}`);
+        const latestMessagesResponse = await fetch(latestMessagesUrl, {
           credentials: "include",
         });
+        const latestMessagesText = await latestMessagesResponse.text();
 
-        if (!msgResp.ok) throw new Error("Failed to load messages");
+        if (!latestMessagesResponse.ok) {
+          throw new Error(
+            `Failed to load latest messages (${latestMessagesResponse.status} ${latestMessagesResponse.statusText}): ${latestMessagesText.slice(
+              0,
+              220,
+            )}`,
+          );
+        }
 
-        const msgData = await msgResp.json();
-        const normalizedMessages = normalizeLoadedMessages(msgData);
+        const latestMessagesPayload = parseJsonResponseText(
+          latestMessagesText,
+          `Messages ${latestId}`,
+        );
+        const normalizedMessages =
+          normalizeLoadedMessages(latestMessagesPayload);
 
         if (cancelled) return;
 
@@ -419,6 +621,7 @@ export default function Home() {
         conversationIdRef.current = latestId;
         setConversationId(latestId);
         setMessages(normalizedMessages);
+        setRecentConversationThreads(loadedThreads);
         setHasExchanged(normalizedMessages.some((m) => m.role === "user"));
         localStorage.setItem("conversationId", String(latestId));
       } catch (err) {
@@ -429,6 +632,7 @@ export default function Home() {
         conversationIdRef.current = null;
         setConversationId(null);
         setMessages([]);
+        setRecentConversationThreads([]);
         setHasExchanged(false);
         localStorage.removeItem("conversationId");
         hasAutoScrolledInitialRef.current = false;
@@ -444,17 +648,82 @@ export default function Home() {
 
   const loadDashboardData = useCallback(async () => {
     try {
-      const resp = await fetch("/api/dashboard", {
+      const resp = await fetch(apiUrl("/api/dashboard"), {
         credentials: "include",
       });
 
       if (!resp.ok) throw new Error("Failed to load dashboard");
 
       const data = await resp.json();
+      const signal = getNestedString(data, [
+        ["signal"],
+        ["currentCase", "signal"],
+        ["currentCase", "latestSignal"],
+        ["currentCase", "evidence", "signal"],
+        ["activeCase", "signal"],
+        ["activeCase", "latestSignal"],
+        ["activeCase", "evidence", "signal"],
+        ["caseEvidence", "signal"],
+        ["evidence", "signal"],
+      ]);
+      const hypothesis = getNestedString(data, [
+        ["hypothesis"],
+        ["currentCase", "hypothesis"],
+        ["currentCase", "latestHypothesis"],
+        ["currentCase", "evidence", "hypothesis"],
+        ["activeCase", "hypothesis"],
+        ["activeCase", "latestHypothesis"],
+        ["activeCase", "evidence", "hypothesis"],
+        ["caseEvidence", "hypothesis"],
+        ["evidence", "hypothesis"],
+      ]);
+      const adjustment = getNestedString(data, [
+        ["adjustment"],
+        ["nextMove"],
+        ["currentCase", "adjustment"],
+        ["currentCase", "nextMove"],
+        ["currentCase", "latestAdjustment"],
+        ["currentCase", "evidence", "adjustment"],
+        ["activeCase", "adjustment"],
+        ["activeCase", "nextMove"],
+        ["activeCase", "latestAdjustment"],
+        ["activeCase", "evidence", "adjustment"],
+        ["caseEvidence", "adjustment"],
+        ["evidence", "adjustment"],
+      ]);
+
+      console.log("INVESTIGATION dashboard payload shape:", {
+        topLevelKeys:
+          data && typeof data === "object" ? Object.keys(data) : typeof data,
+        currentCaseKeys:
+          data?.currentCase && typeof data.currentCase === "object"
+            ? Object.keys(data.currentCase)
+            : null,
+        activeCaseKeys:
+          data?.activeCase && typeof data.activeCase === "object"
+            ? Object.keys(data.activeCase)
+            : null,
+        caseEvidenceKeys:
+          data?.caseEvidence && typeof data.caseEvidence === "object"
+            ? Object.keys(data.caseEvidence)
+            : null,
+        evidenceKeys:
+          data?.evidence && typeof data.evidence === "object"
+            ? Object.keys(data.evidence)
+            : null,
+        mapped: {
+          signal: Boolean(signal),
+          hypothesis: Boolean(hypothesis),
+          adjustment: Boolean(adjustment),
+        },
+      });
 
       setDashboardData({
         activeCaseTitle: data?.activeCaseTitle ?? null,
         investigationState: data?.investigationState ?? null,
+        signal,
+        hypothesis,
+        adjustment,
         currentMechanism: data?.currentMechanism ?? null,
         currentTest: data?.currentTest ?? null,
         lastShift: data?.lastShift ?? null,
@@ -495,6 +764,11 @@ export default function Home() {
     return () => {
       if (acknowledgmentTimeoutRef.current != null) {
         window.clearTimeout(acknowledgmentTimeoutRef.current);
+      }
+
+      if (repeatAudioRef.current) {
+        repeatAudioRef.current.pause();
+        repeatAudioRef.current.currentTime = 0;
       }
     };
   }, []);
@@ -589,6 +863,24 @@ if (!resp.ok) {
     }
   }, []);
 
+  const stopRepeatPlayback = useCallback(() => {
+    repeatSessionRef.current += 1;
+
+    if (repeatAudioRef.current) {
+      repeatAudioRef.current.onended = null;
+      repeatAudioRef.current.onerror = null;
+      repeatAudioRef.current.pause();
+      repeatAudioRef.current.currentTime = 0;
+      repeatAudioRef.current.src = "";
+    }
+
+    repeatAudioReleaseRef.current?.();
+    repeatAudioReleaseRef.current = null;
+    repeatAudioRef.current = null;
+    setIsRepeatPlaying(false);
+    setActiveRepeatMessageId(null);
+  }, []);
+
   const stopSpeech = useCallback(() => {
     speakSessionRef.current += 1;
     stopRequestedRef.current = true;
@@ -597,7 +889,8 @@ if (!resp.ok) {
     setIsSpeaking(false);
     setIsProcessing(false);
     setIsRecording(false);
-  }, [playback]);
+    stopRepeatPlayback();
+  }, [playback, stopRepeatPlayback]);
 
   const speakText = useCallback(
     async (
@@ -664,11 +957,11 @@ if (!resp.ok) {
       return;
     }
 
-    const assistantId = nextId();
+    const whoAssistantId = nextId();
 
     setMessages((prev) => [
       ...prev,
-      { id: assistantId, role: "assistant", text: "" },
+      { id: whoAssistantId, role: "assistant", text: "" },
     ]);
 
     setIsProcessing(true);
@@ -713,51 +1006,6 @@ if (!resp.ok) {
     speakText,
   ]);
 
-  const handleInterloopExplanation = useCallback(async () => {
-    if (isProcessing || isRecording || isSpeaking) {
-      return;
-    }
-
-    setMode("A");
-
-    const assistantId = nextId();
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantId, role: "assistant", text: "" },
-    ]);
-    setIsProcessing(true);
-
-    try {
-      const resp = await fetch("/api/coreloop-intro", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include",
-        body: JSON.stringify({
-          conversationId: conversationIdRef.current ?? undefined,
-        }),
-      });
-
-      if (!resp.ok) throw new Error("Coreloop intro failed");
-
-      const data = await resp.json();
-      const assistantText = String(data?.text ?? "").trim();
-
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId ? { ...m, text: assistantText } : m,
-        ),
-      );
-
-      if (assistantText) {
-        await speakText(assistantId, assistantText, "auto");
-      }
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [isProcessing, isRecording, isSpeaking, speakText]);
-
   const handleTypedSubmit = useCallback(
     async (event?: FormEvent<HTMLFormElement>) => {
       event?.preventDefault();
@@ -776,7 +1024,7 @@ if (!resp.ok) {
 
       setMessages((prev) => [
         ...prev,
-        { id: userId, role: "user", text },
+        { id: userId, role: "user", text, source: "typed" },
         { id: assistantId, role: "assistant", text: "" },
       ]);
 
@@ -876,7 +1124,7 @@ if (!resp.ok) {
 
       setMessages((prev) => [
         ...prev,
-        { id: userId, role: "user", text: transcript },
+        { id: userId, role: "user", text: transcript, source: "voice" },
         { id: assistantId, role: "assistant", text: "" },
       ]);
 
@@ -928,26 +1176,412 @@ if (!resp.ok) {
     stopSpeech,
   ]);
 
+  const resendTranscript = useCallback(
+    async (text: string) => {
+      const nextText = text.trim();
+
+      if (!nextText || isProcessing || isRecording || isSpeaking) {
+        return;
+      }
+
+      playUITone(720);
+
+      const userId = nextId();
+      const assistantId = nextId();
+
+      setMessages((prev) => [
+        ...prev,
+        { id: userId, role: "user", text: nextText, source: "voice" },
+        { id: assistantId, role: "assistant", text: "" },
+      ]);
+
+      setIsProcessing(true);
+
+      let assistantText = "";
+
+      try {
+        await sendChat(
+          conversationIdRef.current,
+          nextText,
+          (id) => {
+            conversationIdRef.current = id;
+            setConversationId(id);
+            localStorage.setItem("conversationId", String(id));
+          },
+          (chunk) => {
+            assistantText = mergeStream(assistantText, chunk);
+
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, text: assistantText } : m,
+              ),
+            );
+          },
+        );
+
+        setHasExchanged(true);
+        void loadDashboardData();
+
+        if (assistantText.trim()) {
+          await speakText(assistantId, assistantText, "auto");
+        }
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [
+      isProcessing,
+      isRecording,
+      isSpeaking,
+      loadDashboardData,
+      playUITone,
+      speakText,
+    ],
+  );
+
+  const handleEditTranscript = useCallback(
+    (message: ChatMessage) => {
+      if (isProcessing || isRecording || isSpeaking) return;
+
+      playUITone(720);
+      setEditingMessageId(message.id);
+      setEditingText(message.text);
+    },
+    [isProcessing, isRecording, isSpeaking, playUITone],
+  );
+
+  const handleCancelTranscriptEdit = useCallback(() => {
+    playUITone(520);
+    setEditingMessageId(null);
+    setEditingText("");
+  }, [playUITone]);
+
+  const handleSubmitTranscriptEdit = useCallback(async () => {
+    const nextText = editingText.trim();
+    if (!nextText) return;
+
+    setEditingMessageId(null);
+    setEditingText("");
+    await resendTranscript(nextText);
+  }, [editingText, resendTranscript]);
+
+  const handleRetryTranscript = useCallback(async () => {
+    if (isProcessing || isRecording) return;
+
+    if (isSpeaking) {
+      stopSpeech();
+    }
+
+    playUITone(880);
+    setVoiceError("");
+
+    try {
+      await recorder.startRecording();
+      setIsRecording(true);
+    } catch (error) {
+      console.error("Voice recording failed to start:", error);
+      setVoiceError(
+        "Microphone unavailable. Check microphone permission and try again.",
+      );
+    }
+  }, [
+    isProcessing,
+    isRecording,
+    isSpeaking,
+    playUITone,
+    recorder,
+    stopSpeech,
+  ]);
+
   const isPlaybackActive =
     playback.state !== "idle" && playback.state !== "ended";
 
-  const playbackLabel = isPlaybackActive ? "Stop" : "Repeat Response";
-
-  const handlePlaybackControl = useCallback(async () => {
+  const playMessageResponse = useCallback(async (messageId: string, text: string) => {
     playUITone(720);
+
+    const tappedActiveAvatar =
+      isRepeatPlaying && activeRepeatMessageId === messageId;
 
     if (isPlaybackActive) {
       stopSpeech();
+    }
+
+    stopRepeatPlayback();
+
+    if (tappedActiveAvatar) {
       return;
     }
 
-    const lastPlayable = lastPlayableMessageRef.current;
-    if (!lastPlayable) return;
-    if (isReplayingRef.current) return;
+    if (!text.trim()) {
+      console.warn("Model avatar playback skipped: empty response");
+      return;
+    }
 
-    isReplayingRef.current = true;
-    await speakText(lastPlayable.id, lastPlayable.text, "repeat");
-  }, [isPlaybackActive, playUITone, speakText, stopSpeech]);
+    const sessionId = ++repeatSessionRef.current;
+    const responseText = text.trim();
+    const segments = segmentRepeatText(responseText);
+
+    playback.stop();
+    stopRequestedRef.current = true;
+    setIsSpeaking(false);
+    setIsRepeatPlaying(true);
+    setActiveRepeatMessageId(messageId);
+
+    console.log("Model avatar TTS start:", {
+      messageId,
+      voice: selectedVoice,
+      textLength: responseText.length,
+      segments: segments.length,
+    });
+
+    try {
+      for (const segment of segments) {
+        if (sessionId !== repeatSessionRef.current) return;
+
+        const response = await fetch(apiUrl("/api/tts"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            text: segment,
+            voice: selectedVoice,
+          }),
+        });
+
+        const responseText = await response.text();
+
+        if (!response.ok) {
+          console.error("Model avatar TTS request failed:", {
+            status: response.status,
+            statusText: response.statusText,
+            body: responseText.slice(0, 300),
+          });
+          throw new Error(`TTS failed: ${response.status}`);
+        }
+
+        const data = parseJsonResponseText(responseText, "Repeat TTS");
+        const audio = normalizeBase64Audio(
+          typeof (data as { audio?: unknown })?.audio === "string"
+            ? ((data as { audio: string }).audio)
+            : "",
+        );
+
+        if (!audio) {
+          console.error("Model avatar TTS returned no audio:", data);
+          throw new Error("TTS returned no audio");
+        }
+
+        await new Promise<void>((resolve, reject) => {
+          if (sessionId !== repeatSessionRef.current) {
+            resolve();
+            return;
+          }
+
+          if (repeatAudioRef.current) {
+            repeatAudioRef.current.onended = null;
+            repeatAudioRef.current.onerror = null;
+            repeatAudioRef.current.pause();
+            repeatAudioRef.current.currentTime = 0;
+            repeatAudioRef.current.src = "";
+          }
+
+          const player = new Audio(`data:audio/mpeg;base64,${audio}`);
+          repeatAudioRef.current = player;
+          repeatAudioReleaseRef.current = resolve;
+
+          player.onended = () => {
+            if (repeatAudioRef.current === player) {
+              repeatAudioRef.current = null;
+              repeatAudioReleaseRef.current = null;
+            }
+
+            resolve();
+          };
+          player.onerror = () => {
+            console.error("Model avatar playback error:", player.error);
+            if (repeatAudioRef.current === player) {
+              repeatAudioRef.current = null;
+              repeatAudioReleaseRef.current = null;
+              setIsRepeatPlaying(false);
+              setActiveRepeatMessageId(null);
+            }
+            reject(player.error ?? new Error("Audio playback failed"));
+          };
+
+          player.play().catch((error) => {
+            console.error("Model avatar audio.play failed:", error);
+            if (repeatAudioRef.current === player) {
+              repeatAudioRef.current = null;
+              repeatAudioReleaseRef.current = null;
+              setIsRepeatPlaying(false);
+              setActiveRepeatMessageId(null);
+            }
+            reject(error);
+          });
+        });
+      }
+    } catch (error) {
+      console.error("Model avatar playback failed:", error);
+    } finally {
+      if (sessionId === repeatSessionRef.current) {
+        repeatAudioRef.current = null;
+        setIsRepeatPlaying(false);
+        setActiveRepeatMessageId(null);
+      }
+    }
+  }, [
+    activeRepeatMessageId,
+    isPlaybackActive,
+    isRepeatPlaying,
+    playback,
+    playUITone,
+    selectedVoice,
+    stopRepeatPlayback,
+    stopSpeech,
+  ]);
+
+  const handleInterloopExplanation = useCallback(async () => {
+    console.log("WHO_IS_CORELOOP_CLICKED");
+    console.log("WHO_CLICKED");
+
+    if (isProcessing || isRecording) {
+      return;
+    }
+
+    if (isSpeaking || isPlaybackActive || isRepeatPlaying) {
+      stopSpeech();
+      stopRepeatPlayback();
+    }
+
+    playUITone(720);
+    setMode("A");
+
+    const assistantId = nextId();
+    whoDebugMessageIdRef.current = assistantId;
+
+    setMessages((prev) => {
+      const next = [
+        ...prev,
+        { id: assistantId, role: "assistant", text: "" } as ChatMessage,
+      ];
+
+      console.log("WHO_IS_CORELOOP_MESSAGES_AFTER_APPEND", {
+        messageId: assistantId,
+        count: next.length,
+        appended: next[next.length - 1],
+      });
+
+      return next;
+    });
+    setIsProcessing(true);
+
+    try {
+      console.log("WHO_IS_CORELOOP_REQUEST_START");
+
+      const resp = await fetch(apiUrl("/api/coreloop-intro"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          conversationId: conversationIdRef.current ?? undefined,
+        }),
+      });
+
+      const responseText = await resp.text();
+
+      if (!resp.ok) {
+        throw new Error(
+          `Coreloop intro failed (${resp.status} ${resp.statusText}): ${responseText.slice(
+            0,
+            300,
+          )}`,
+        );
+      }
+
+      const data = parseJsonResponseText(responseText, "Coreloop intro");
+      const assistantText = String(data?.text ?? "").trim();
+
+      console.log("WHO_IS_CORELOOP_RESPONSE_RECEIVED", {
+        textLength: assistantText.length,
+      });
+      console.log("WHO_RESPONSE_TEXT", assistantText);
+
+      try {
+        setMessages((prev) => {
+          const next = prev.map((message) =>
+            message.id === assistantId
+              ? { ...message, text: assistantText }
+              : message,
+          );
+
+          console.log("WHO_IS_CORELOOP_MESSAGES_AFTER_TEXT_UPDATE", {
+            messageId: assistantId,
+            count: next.length,
+            updated: next.find((message) => message.id === assistantId) ?? null,
+            last: next[next.length - 1] ?? null,
+          });
+
+          return next;
+        });
+
+        setHasExchanged(true);
+        hasAutoScrolledInitialRef.current = false;
+
+        console.log("WHO_IS_CORELOOP_MESSAGE_INSERTED", {
+          messageId: assistantId,
+          textLength: assistantText.length,
+        });
+      } catch (error) {
+        console.error("WHO_APPEND_ERROR", error);
+      }
+
+      if (assistantText) {
+        window.requestAnimationFrame(() => {
+          try {
+            scrollMessagesToBottom("smooth");
+          } catch (error) {
+            console.error("WHO_SCROLL_ERROR", error);
+          }
+
+          console.log("WHO_IS_CORELOOP_TTS_START", {
+            messageId: assistantId,
+            textLength: assistantText.length,
+          });
+          console.log("WHO_PLAYBACK_START", {
+            messageId: assistantId,
+            textLength: assistantText.length,
+          });
+
+          try {
+            void playMessageResponse(assistantId, assistantText).catch(
+              (error) => {
+                console.error("WHO_TTS_ERROR", error);
+              },
+            );
+          } catch (error) {
+            console.error("WHO_TTS_ERROR", error);
+          }
+        }, 0);
+      }
+    } catch (error) {
+      console.error("WHO_IS_CORELOOP_ERROR", error);
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [
+    isPlaybackActive,
+    isProcessing,
+    isRepeatPlaying,
+    isRecording,
+    isSpeaking,
+    playMessageResponse,
+    playUITone,
+    scrollMessagesToBottom,
+    stopRepeatPlayback,
+    stopSpeech,
+  ]);
 
   const handleOpenCaseReview = useCallback(
     (review: {
@@ -971,27 +1605,131 @@ if (!resp.ok) {
     [playUITone],
   );
 
-  const currentInvestigationState =
-    dashboardData.investigationState ?? "No active case";
-
-  const currentStateRows = [
+  const currentStateValue = dashboardData.investigationState ?? "No active case";
+  const lastUpdatedDate = dashboardData.caseReviewsList?.[0]?.createdAt
+    ? new Date(dashboardData.caseReviewsList[0].createdAt)
+    : null;
+  const lastUpdatedLabel =
+    lastUpdatedDate && Number.isFinite(lastUpdatedDate.getTime())
+      ? lastUpdatedDate.toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        })
+      : "Not captured yet";
+  const normalizedHypothesis = String(dashboardData.hypothesis ?? "")
+    .trim()
+    .toLowerCase();
+  const normalizedCurrentMechanism = String(
+    dashboardData.currentMechanism ?? "",
+  )
+    .trim()
+    .toLowerCase();
+  const shouldShowCurrentMechanism =
+    !normalizedHypothesis ||
+    !normalizedCurrentMechanism ||
+    normalizedHypothesis !== normalizedCurrentMechanism;
+  const compactCaseRows = [
+    {
+      label: "Current State",
+      value: currentStateValue,
+    },
+    {
+      label: "Last Updated",
+      value: lastUpdatedLabel,
+    },
     {
       label: "Active Case",
       value: dashboardData.activeCaseTitle,
     },
     {
-      label: "Current Mechanism",
-      value: dashboardData.currentMechanism,
-    },
-    {
       label: "Current Test",
       value: dashboardData.currentTest,
     },
+  ];
+  const currentCaseRows = [
+    {
+      label: "Signal",
+      value: dashboardData.signal,
+    },
+    {
+      label: "Hypothesis",
+      value: dashboardData.hypothesis,
+    },
+    ...(shouldShowCurrentMechanism
+      ? [
+          {
+            label: "Current Mechanism",
+            value: dashboardData.currentMechanism,
+          },
+        ]
+      : []),
     {
       label: "Last Shift",
       value: dashboardData.lastShift,
     },
-  ].filter((row) => Boolean(row.value));
+    {
+      label: "Adjustment",
+      value: dashboardData.adjustment,
+    },
+    {
+      label: "Next Move",
+      value: dashboardData.adjustment,
+    },
+  ];
+
+  const displayedConversationThreads = (() => {
+    if (messages.length === 0) {
+      return recentConversationThreads;
+    }
+
+    const activeThreadId = conversationId ?? -1;
+
+    return [
+      {
+        id: activeThreadId,
+        title: "Current Conversation",
+        messages,
+      },
+      ...recentConversationThreads.filter(
+        (thread) => thread.id !== activeThreadId,
+      ),
+    ].slice(0, 3);
+  })();
+
+  useEffect(() => {
+    const whoMessageId = whoDebugMessageIdRef.current;
+    if (!whoMessageId) return;
+
+    const visibleThreads =
+      messages.length === 0
+        ? recentConversationThreads
+        : [
+            {
+              id: conversationId ?? -1,
+              title: "Current Conversation",
+              messages,
+            },
+            ...recentConversationThreads.filter(
+              (thread) => thread.id !== (conversationId ?? -1),
+            ),
+          ].slice(0, 3);
+
+    console.log("WHO_IS_CORELOOP_DISPLAY_THREADS_AFTER_UPDATE", {
+      messageId: whoMessageId,
+      messagesCount: messages.length,
+      messageInMessages:
+        messages.find((message) => message.id === whoMessageId) ?? null,
+      threadCount: visibleThreads.length,
+      visibleThreads: visibleThreads.map((thread) => ({
+        id: thread.id,
+        messageCount: thread.messages.length,
+        containsWhoMessage: thread.messages.some(
+          (message) => message.id === whoMessageId,
+        ),
+        last: thread.messages[thread.messages.length - 1] ?? null,
+      })),
+    });
+  }, [conversationId, messages, recentConversationThreads]);
 
   const secondaryMangoStyle = {
     color: "rgba(255,200,61,0.92)",
@@ -1023,16 +1761,22 @@ if (!resp.ok) {
 
 return (
   <>
-    <div className="min-h-dvh w-full bg-black relative overflow-y-auto overflow-x-hidden">
+    <div
+      className={
+        mode === "A"
+          ? "min-h-dvh w-full bg-black relative overflow-y-auto overflow-x-hidden"
+          : "relative h-dvh w-full bg-black overflow-visible"
+      }
+    >
 
         {mode === "A" ? (
           <>
             <div
               className="pointer-events-none absolute left-1/2 z-0 h-[46vh] w-[92vw] max-w-4xl -translate-x-1/2 rounded-full"
               style={{
-                top: "38%",
+                top: "51%",
                 background:
-                  "radial-gradient(ellipse at center, rgba(255,184,0,0.15) 0%, rgba(255,176,0,0.075) 27%, rgba(255,176,0,0.032) 50%, transparent 74%)",
+                  "radial-gradient(ellipse at center, rgba(255,184,0,0.12) 0%, rgba(255,176,0,0.06) 27%, rgba(255,176,0,0.026) 50%, transparent 74%)",
                 filter: "blur(30px)",
               }}
             />
@@ -1040,9 +1784,9 @@ return (
             <div
               className="pointer-events-none absolute left-1/2 z-0 h-[34vh] w-[64vw] max-w-2xl -translate-x-1/2 rounded-full"
               style={{
-                top: "50%",
+                top: "57%",
                 background:
-                  "radial-gradient(ellipse at center, rgba(255,200,61,0.11) 0%, rgba(255,176,0,0.047) 44%, transparent 74%)",
+                  "radial-gradient(ellipse at center, rgba(255,200,61,0.095) 0%, rgba(255,176,0,0.04) 44%, transparent 74%)",
                 filter: "blur(19px)",
               }}
             />
@@ -1050,7 +1794,7 @@ return (
             <div
               className="fixed left-0 right-0 z-50 px-4 sm:px-8"
               style={{
-                top: "max(env(safe-area-inset-top) + 3.5rem, 5rem)",
+                top: "calc(env(safe-area-inset-top) + 0.35rem)",
               }}
             >
               <div className="mx-auto w-full max-w-2xl flex items-center justify-between">
@@ -1083,8 +1827,8 @@ return (
               ref={messageScrollRef}
               className="absolute left-0 right-0 z-10 overflow-y-auto overflow-x-hidden px-5 sm:px-8"
               style={{
-                top: "max(env(safe-area-inset-top) + 3.25rem, 4rem)",
-                bottom: "55vh",
+                top: "calc(env(safe-area-inset-top) + 3rem)",
+                bottom: "34vh",
                 WebkitOverflowScrolling: "touch",
                 WebkitMaskImage:
                   "linear-gradient(to bottom, transparent 0%, black 9%, black 84%, rgba(0,0,0,0.72) 92%, transparent 100%)",
@@ -1093,8 +1837,8 @@ return (
               }}
             >
               <div className="mx-auto w-full max-w-[700px] py-8">
-                <div className="flex w-full flex-col gap-6">
-                  {messages.length === 0 ? (
+                <div className="flex w-full flex-col gap-7">
+                  {displayedConversationThreads.length === 0 ? (
                     <div className="pb-4 text-center">
                       <div
                         className="text-sm"
@@ -1110,122 +1854,266 @@ return (
                       </div>
                     </div>
                   ) : (
-                    messages.map((message) => {
-                      const isUser = message.role === "user";
-
-                      return (
-                        <div
-                          key={message.id}
-                          className={`flex items-start ${
-                            isUser
-                              ? "justify-end gap-2.5"
-                              : "justify-start gap-3"
-                          }`}
-                        >
-                          {!isUser && (
-                            <div className="relative mt-1.5 h-9 w-9 shrink-0 rounded-full">
-                              <div
-                                className="absolute inset-[-5px] rounded-full"
-                                style={{
-                                  background:
-                                    "radial-gradient(circle, rgba(255,200,61,0.14) 0%, rgba(255,176,0,0.075) 42%, transparent 72%)",
-                                  boxShadow: "0 0 18px rgba(255,184,0,0.16)",
-                                }}
-                              />
-                              <div
-                                className="absolute inset-0 overflow-hidden rounded-full border"
-                                style={{
-                                  borderColor: "rgba(255,200,61,0.48)",
-                                  background: "rgba(10,10,10,0.98)",
-                                  boxShadow:
-                                    "inset 0 0 10px rgba(255,200,61,0.12), 0 0 0 1px rgba(255,176,0,0.065)",
-                                }}
-                              >
-                                <img
-                                  src={selectedVoiceAvatar}
-                                  alt=""
-                                  className="h-full w-full object-cover"
-                                />
-                              </div>
-                            </div>
-                          )}
-
+                    displayedConversationThreads.map((thread, threadIndex) => (
+                      <section
+                        key={thread.id}
+                        className="flex flex-col gap-4"
+                        aria-label={`Conversation ${threadIndex + 1}`}
+                      >
+                        {threadIndex > 0 && (
                           <div
-                            className={`relative whitespace-pre-wrap ${
-                              isUser
-                                ? "order-first max-w-[58%] rounded-[8px] rounded-tr-[3px] px-4 py-3 text-right text-[13px] leading-relaxed"
-                                : "max-w-[82%] rounded-[10px] rounded-tl-[3px] px-5 py-4 text-[15px] leading-7 sm:text-base"
-                            }`}
-                            style={
-                              isUser
-                                ? {
-                                    color: "rgba(255,200,61,0.74)",
-                                    background:
-                                      "linear-gradient(180deg, rgba(255,176,0,0.06), rgba(255,176,0,0.022))",
-                                    border: "1px solid rgba(255,176,0,0.105)",
-                                    boxShadow:
-                                      "0 10px 22px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.02)",
-                                  }
-                                : {
-                                    color: "rgba(229,231,235,0.89)",
-                                    background:
-                                      "linear-gradient(180deg, rgba(18,18,18,0.98), rgba(8,8,8,0.96))",
-                                    border: "1px solid rgba(255,176,0,0.15)",
-                                    borderLeft:
-                                      "2px solid rgba(255,200,61,0.44)",
-                                    boxShadow:
-                                      "0 18px 40px rgba(0,0,0,0.34), 0 0 20px rgba(255,176,0,0.04), inset 0 1px 0 rgba(255,255,255,0.035)",
-                                  }
-                            }
-                          >
-                            {!isUser && (
-                              <div
-                                className="pointer-events-none absolute inset-x-4 top-0 h-px"
-                                style={{
-                                  background:
-                                    "linear-gradient(90deg, rgba(255,200,61,0.32), rgba(255,200,61,0.045), transparent)",
-                                }}
-                              />
-                            )}
-                            {message.text}
-                          </div>
+                            className="h-px w-full"
+                            style={{
+                              background:
+                                "linear-gradient(90deg, transparent, rgba(255,200,61,0.16), transparent)",
+                            }}
+                          />
+                        )}
 
-                          {isUser && (
-                            <div className="relative mt-1 h-8 w-8 shrink-0 overflow-hidden rounded-full">
-                              {settingsData.profileImageUrl ? (
-                                <img
-                                  src={settingsData.profileImageUrl}
-                                  alt="User"
-                                  className="h-full w-full object-cover rounded-full"
-                                />
-                              ) : (
-                                <>
-                                  <div
-                                    className="absolute inset-0 rounded-full border"
-                                    style={{
-                                      borderColor: "rgba(255,176,0,0.32)",
-                                      background:
-                                        "linear-gradient(145deg, rgba(255,176,0,0.12), rgba(22,22,22,0.95))",
-                                      boxShadow:
-                                        "0 0 13px rgba(255,176,0,0.08), inset 0 0 8px rgba(255,176,0,0.06)",
-                                    }}
-                                  />
-                                  <div
-                                    className="absolute inset-[5px] rounded-full"
-                                    style={{
-                                      background:
-                                        "linear-gradient(145deg, rgba(255,200,61,0.18), rgba(255,176,0,0.035), rgba(8,8,8,0.96))",
-                                      boxShadow:
-                                        "inset 0 0 8px rgba(255,200,61,0.08)",
-                                    }}
-                                  />
-                                </>
-                              )}
-                            </div>
-                          )}
+                        <div className="flex flex-col gap-5">
+                          {thread.messages.map((message) => {
+                            const isUser = message.role === "user";
+                            const messagePlaybackId = `${thread.id}-${message.id}`;
+                            const isActiveRepeatAvatar =
+                              !isUser &&
+                              isRepeatPlaying &&
+                              activeRepeatMessageId === messagePlaybackId;
+                            const isCurrentThread = thread.id === conversationId;
+                            const isEditingCurrentMessage =
+                              isCurrentThread &&
+                              isUser &&
+                              editingMessageId === message.id;
+
+                            return (
+                              <div
+                                key={`${thread.id}-${message.id}`}
+                                className={`flex items-start ${
+                                  isUser
+                                    ? "justify-end gap-2.5"
+                                    : "justify-start gap-3"
+                                }`}
+                              >
+                                {!isUser && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      playMessageResponse(
+                                        messagePlaybackId,
+                                        message.text,
+                                      )
+                                    }
+                                    className="relative mt-1.5 h-9 w-9 shrink-0 rounded-full transition-transform active:scale-95"
+                                    aria-label={
+                                      isActiveRepeatAvatar
+                                        ? "Stop CoreLoop response"
+                                        : "Play CoreLoop response"
+                                    }
+                                  >
+                                    <div
+                                      className={`absolute inset-[-5px] rounded-full ${
+                                        isActiveRepeatAvatar
+                                          ? "animate-pulse"
+                                          : ""
+                                      }`}
+                                      style={{
+                                        background:
+                                          isActiveRepeatAvatar
+                                            ? "radial-gradient(circle, rgba(255,213,87,0.36) 0%, rgba(255,176,0,0.18) 42%, transparent 74%)"
+                                            : "radial-gradient(circle, rgba(255,200,61,0.14) 0%, rgba(255,176,0,0.075) 42%, transparent 72%)",
+                                        boxShadow:
+                                          isActiveRepeatAvatar
+                                            ? "0 0 22px rgba(255,200,61,0.38)"
+                                            : "0 0 18px rgba(255,184,0,0.16)",
+                                      }}
+                                    />
+                                    <div
+                                      className="absolute inset-0 overflow-hidden rounded-full border"
+                                      style={{
+                                        borderColor: "rgba(255,200,61,0.48)",
+                                        background: "rgba(10,10,10,0.98)",
+                                        boxShadow:
+                                          isActiveRepeatAvatar
+                                            ? "inset 0 0 10px rgba(255,200,61,0.18), 0 0 0 1px rgba(255,200,61,0.26), 0 0 14px rgba(255,184,0,0.2)"
+                                            : "inset 0 0 10px rgba(255,200,61,0.12), 0 0 0 1px rgba(255,176,0,0.065)",
+                                      }}
+                                    >
+                                      <img
+                                        src={selectedVoiceAvatar}
+                                        alt=""
+                                        className="h-full w-full object-cover"
+                                      />
+                                    </div>
+                                  </button>
+                                )}
+
+                                <div
+                                  className={`relative whitespace-pre-wrap ${
+                                    isUser
+                                      ? "order-first max-w-[72%] rounded-[8px] rounded-tr-[3px] px-4 py-3 text-right"
+                                      : "max-w-[88%] rounded-[10px] rounded-tl-[3px] px-5 py-4"
+                                  }`}
+                                  style={
+                                    isUser
+                                      ? {
+                                          fontSize: "10.5px",
+                                          lineHeight: "1.28",
+                                          color: "rgba(255,200,61,0.74)",
+                                          background:
+                                            "linear-gradient(180deg, rgba(255,176,0,0.06), rgba(255,176,0,0.022))",
+                                          border:
+                                            "1px solid rgba(255,176,0,0.105)",
+                                          boxShadow:
+                                            "0 10px 22px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.02)",
+                                        }
+                                      : {
+                                          fontSize: "11.5px",
+                                          lineHeight: "1.32",
+                                          color: "rgba(229,231,235,0.89)",
+                                          background:
+                                            "linear-gradient(180deg, rgba(18,18,18,0.98), rgba(8,8,8,0.96))",
+                                          border:
+                                            "1px solid rgba(255,176,0,0.15)",
+                                          borderLeft:
+                                            "2px solid rgba(255,200,61,0.44)",
+                                          boxShadow:
+                                            "0 18px 40px rgba(0,0,0,0.34), 0 0 20px rgba(255,176,0,0.04), inset 0 1px 0 rgba(255,255,255,0.035)",
+                                        }
+                                  }
+                                >
+                                  {!isUser && (
+                                    <div
+                                      className="pointer-events-none absolute inset-x-4 top-0 h-px"
+                                      style={{
+                                        background:
+                                          "linear-gradient(90deg, rgba(255,200,61,0.32), rgba(255,200,61,0.045), transparent)",
+                                      }}
+                                    />
+                                  )}
+
+                                  {isEditingCurrentMessage ? (
+                                    <div className="flex flex-col gap-2 text-left">
+                                      <input
+                                        value={editingText}
+                                        onChange={(event) =>
+                                          setEditingText(event.target.value)
+                                        }
+                                        className="w-full rounded-[6px] border bg-black/40 px-2.5 py-2 text-sm text-gray-100 outline-none"
+                                        style={{
+                                          borderColor: "rgba(255,176,0,0.28)",
+                                        }}
+                                        autoFocus
+                                      />
+                                      <div className="flex justify-end gap-3 text-xs">
+                                        <button
+                                          type="button"
+                                          onClick={handleCancelTranscriptEdit}
+                                          className="transition-opacity hover:opacity-80"
+                                          style={softMangoControlStyle}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={handleSubmitTranscriptEdit}
+                                          className="transition-opacity hover:opacity-90"
+                                          style={secondaryMangoStyle}
+                                        >
+                                          Resend
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    message.text
+                                  )}
+
+                                  {isCurrentThread &&
+                                    isUser &&
+                                    message.source === "voice" &&
+                                    editingMessageId !== message.id && (
+                                      <div className="mt-2 flex justify-end gap-3 text-[11px] leading-none">
+                                        <button
+                                          type="button"
+                                          disabled={
+                                            isProcessing ||
+                                            isRecording ||
+                                            isSpeaking
+                                          }
+                                          onClick={() =>
+                                            handleEditTranscript(message)
+                                          }
+                                          className="transition-opacity hover:opacity-90 disabled:opacity-35"
+                                          style={softMangoControlStyle}
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={isProcessing || isRecording}
+                                          onClick={handleRetryTranscript}
+                                          className="transition-opacity hover:opacity-90 disabled:opacity-35"
+                                          style={softMangoControlStyle}
+                                        >
+                                          Retry
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={
+                                            isProcessing ||
+                                            isRecording ||
+                                            isSpeaking
+                                          }
+                                          onClick={() =>
+                                            resendTranscript(message.text)
+                                          }
+                                          className="transition-opacity hover:opacity-90 disabled:opacity-35"
+                                          style={secondaryMangoStyle}
+                                        >
+                                          Resend
+                                        </button>
+                                      </div>
+                                    )}
+                                </div>
+
+                                {isUser && (
+                                  <div className="relative mt-1 h-8 w-8 shrink-0 overflow-hidden rounded-full">
+                                    {settingsData.profileImageUrl ? (
+                                      <img
+                                        src={settingsData.profileImageUrl}
+                                        alt="User"
+                                        className="h-full w-full rounded-full object-cover"
+                                      />
+                                    ) : (
+                                      <>
+                                        <div
+                                          className="absolute inset-0 rounded-full border"
+                                          style={{
+                                            borderColor:
+                                              "rgba(255,176,0,0.32)",
+                                            background:
+                                              "linear-gradient(145deg, rgba(255,176,0,0.12), rgba(22,22,22,0.95))",
+                                            boxShadow:
+                                              "0 0 13px rgba(255,176,0,0.08), inset 0 0 8px rgba(255,176,0,0.06)",
+                                          }}
+                                        />
+                                        <div
+                                          className="absolute inset-[5px] rounded-full"
+                                          style={{
+                                            background:
+                                              "linear-gradient(145deg, rgba(255,200,61,0.18), rgba(255,176,0,0.035), rgba(8,8,8,0.96))",
+                                            boxShadow:
+                                              "inset 0 0 8px rgba(255,200,61,0.08)",
+                                          }}
+                                        />
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })
+                      </section>
+                    ))
                   )}
                   <div ref={messageEndRef} />
                 </div>
@@ -1235,12 +2123,12 @@ return (
             <div
               className="absolute left-0 right-0 z-10 flex items-center justify-center px-4"
               style={{
-                top: "60%",
+                top: "74%",
                 transform: "translateY(-50%)",
               }}
             >
               <div
-                className="relative mx-auto h-[min(780px,92vw)] w-[min(780px,92vw)] sm:h-[min(580px,92vw)] sm:w-[min(580px,92vw)]"
+                className="relative mx-auto h-[min(370px,52vw)] w-[min(370px,52vw)] sm:h-[min(320px,42vw)] sm:w-[min(320px,42vw)]"
                 onClick={handleTap}
               >
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -1256,7 +2144,7 @@ return (
 
                 <div className="absolute inset-0 flex items-center justify-center px-10 sm:px-14 pointer-events-none">
                   <span
-                    className="text-[18px] font-medium"
+                    className="text-[14px] font-medium sm:text-[16px]"
                     style={
                       isSpeaking
                         ? {
@@ -1394,27 +2282,18 @@ return (
                   >
                     Who is Coreloop?
                   </button>
-
-                  <button
-                    onClick={handlePlaybackControl}
-                    className="transition-opacity hover:opacity-95"
-                    style={
-                      isPlaybackActive
-                        ? {
-                            color: "#ffc83d",
-                            textShadow: "0 0 10px rgba(255,184,0,0.28)",
-                          }
-                        : undefined
-                    }
-                  >
-                    {playbackLabel}
-                  </button>
                 </div>
               </div>
             </div>
           </>
         ) : (
-          <div className="min-h-dvh w-full bg-black relative overflow-y-auto overflow-x-hidden text-white px-6">
+          <div
+            className="relative flex h-[100dvh] w-full flex-col bg-black text-white"
+            style={{
+              height: "100dvh",
+              minHeight: "100dvh",
+            }}
+          >
             <div
               className="pointer-events-none absolute left-1/2 top-[20%] h-[42vh] w-[86vw] max-w-3xl -translate-x-1/2 rounded-full"
               style={{
@@ -1427,7 +2306,7 @@ return (
             <div
               className="absolute left-4 z-20"
               style={{
-                top: "max(env(safe-area-inset-top) + 0.75rem, 1.25rem)"
+                top: "calc(env(safe-area-inset-top) + 0.75rem)",
               }}
             >
               <button
@@ -1442,10 +2321,19 @@ return (
               </button>
             </div>
 
-            <div className="relative z-10 flex h-full w-full flex-col items-center justify-center">
-              <div className="w-full max-w-xl mx-auto flex flex-col items-center text-center">
+            <div
+              className="relative z-10 min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6"
+              style={{
+                flex: "1 1 auto",
+                WebkitOverflowScrolling: "touch",
+                touchAction: "pan-y",
+                paddingTop: "calc(env(safe-area-inset-top) + 4.25rem)",
+                paddingBottom: "calc(env(safe-area-inset-bottom) + 80px)",
+              }}
+            >
+              <div className="w-full max-w-xl mx-auto flex flex-col items-stretch text-left">
                 <h1
-                  className="text-3xl font-semibold tracking-tight"
+                  className="text-2xl font-semibold tracking-tight"
                   style={{
                     color: "#ffc83d",
                     textShadow: "0 0 14px rgba(255,184,0,0.22)",
@@ -1454,39 +2342,43 @@ return (
                   Your Investigation
                 </h1>
 
-                <p className="mt-4 text-sm text-gray-500">
+                <p className="mt-4 text-[13px] leading-[1.4] text-gray-500">
                   Run focused reviews on your current case.
                 </p>
 
-                <div className="w-full mt-10 text-left">
-                  <div className="flex flex-col gap-5">
-                    <div>
-                      <div
-                        className="text-xs uppercase tracking-[0.14em]"
-                        style={brightMangoLabelStyle}
-                      >
-                        Current State
-                      </div>
-                      <div className="mt-1 text-sm leading-relaxed text-gray-300">
-                        {currentInvestigationState}
-                      </div>
+                <div className="w-full mt-6">
+                  <div className="flex flex-col gap-3">
+                    <div className="grid w-full grid-cols-2 gap-x-4 gap-y-3">
+                      {compactCaseRows.map((row) => (
+                        <div key={row.label} className="min-w-0">
+                          <div
+                            className="text-[11px] uppercase tracking-[0.12em]"
+                            style={brightMangoLabelStyle}
+                          >
+                            {row.label}
+                          </div>
+                          <div className="mt-0.5 text-[13px] leading-[1.35] text-gray-300">
+                            {row.value || "Not captured yet"}
+                          </div>
+                        </div>
+                      ))}
                     </div>
 
-                    {currentStateRows.map((row) => (
+                    {currentCaseRows.map((row) => (
                       <div key={row.label} className="w-full">
                         <div
-                          className="text-xs uppercase tracking-[0.12em]"
+                          className="text-[11px] uppercase tracking-[0.12em]"
                           style={brightMangoLabelStyle}
                         >
                           {row.label}
                         </div>
-                        <div className="mt-1 text-sm leading-relaxed text-gray-300">
-                          {row.value}
+                        <div className="mt-0.5 text-[13px] leading-[1.35] text-gray-300">
+                          {row.value || "Not captured yet"}
                         </div>
                       </div>
                     ))}
 
-                    <div className="w-full mt-6">
+                    <div className="w-full mt-3">
                       <button
                         onClick={() => {
                           playUITone(720);
@@ -1495,7 +2387,7 @@ return (
                             void runCaseReview();
                           }, 50);
                         }}
-                        className="w-full text-center py-5 transition-opacity hover:opacity-90 cursor-pointer rounded-2xl border"
+                        className="w-full cursor-pointer rounded-2xl border py-3.5 text-center transition-opacity hover:opacity-90"
                         style={{
                           borderColor: "rgba(255,176,0,0.86)",
                           background:
@@ -1505,7 +2397,7 @@ return (
                         }}
                       >
                         <div
-                          className="text-lg font-medium"
+                          className="text-[15px] font-medium leading-[1.35]"
                           style={{
                             color: "#ffc83d",
                             textShadow: "0 0 12px rgba(255,184,0,0.26)",
@@ -1513,7 +2405,7 @@ return (
                         >
                           Get New Case Review
                         </div>
-                        <div className="mt-2 text-sm text-gray-400">
+                        <div className="mt-1 text-[12px] leading-[1.35] text-gray-400">
                           Break down the current mechanism and identify the next
                           move.
                         </div>
@@ -1523,7 +2415,7 @@ return (
                     {dashboardData.caseReviewsList?.length > 0 && (
                       <div>
                         <div
-                          className="text-xs uppercase tracking-[0.12em]"
+                          className="text-[11px] uppercase tracking-[0.12em]"
                           style={brightMangoLabelStyle}
                         >
                           Case Reviews
@@ -1547,7 +2439,7 @@ return (
                                 className="text-left hover:opacity-80 transition"
                               >
                                 <div
-                                  className="text-sm font-medium"
+                                  className="text-[14px] font-medium leading-[1.35]"
                                   style={{
                                     color: "rgba(255,200,61,0.86)",
                                     textShadow: "0 0 9px rgba(255,184,0,0.12)",
@@ -1556,7 +2448,7 @@ return (
                                   Case Review — {date}
                                 </div>
 
-                                <div className="text-sm text-gray-400 mt-1">
+                                <div className="mt-1 text-[13px] leading-[1.4] text-gray-400">
                                   {preview}
                                 </div>
                               </button>
