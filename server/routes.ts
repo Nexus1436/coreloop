@@ -13,7 +13,7 @@ import express from "express";
 import cors from "cors";
 import type { Express, Request, Response } from "express";
 import type { Server as HTTPServer } from "http";
-import { execFile } from "child_process";
+import { execFile, execSync } from "child_process";
 import { promises as fsp } from "fs";
 import path from "path";
 import { promisify } from "util";
@@ -70,6 +70,22 @@ const elevenlabs = new ElevenLabsClient({
 });
 
 const execFileAsync = promisify(execFile);
+
+process.env.PATH = `${process.env.PATH ?? ""}:/nix/store`;
+
+function resolveFfmpegPath(): string {
+  if (process.env.FFMPEG_PATH?.trim()) {
+    return process.env.FFMPEG_PATH.trim();
+  }
+
+  try {
+    return execSync("which ffmpeg").toString().trim() || "ffmpeg";
+  } catch {
+    return "ffmpeg";
+  }
+}
+
+const FFMPEG_PATH = resolveFfmpegPath();
 
 const INTERLOOP_SETTINGS_VOICE_IDS = {
   female_pilates: "VI2qcJpxMy5M6WFvpIrh",
@@ -3158,7 +3174,7 @@ export async function registerRoutes(
         });
 
         try {
-          const { stdout, stderr } = await execFileAsync("ffmpeg", [
+          const { stdout, stderr } = await execFileAsync(FFMPEG_PATH, [
             "-y",
             "-i",
             sttInputPath,
@@ -3329,7 +3345,7 @@ export async function registerRoutes(
       console.error("STT FULL ERROR:", error);
       return res.status(500).json({
         error: "STT failed",
-        details: error?.message || "unknown error",
+        details: error instanceof Error ? error.message : String(error),
         routeVersion: "diagnostic-v2",
       });
     } finally {
