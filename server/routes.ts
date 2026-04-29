@@ -1699,6 +1699,41 @@ async function writeCaseSignalIfNew({
   return true;
 }
 
+async function getLatestCaseSignalSnapshot(
+  caseId: number,
+  currentCase?: ResolvedCaseRow | null,
+): Promise<{
+  bodyRegion: string | null;
+  signalType: string | null;
+  movementContext: string | null;
+  activityType: string | null;
+}> {
+  const [latestSignal] = await db
+    .select({
+      bodyRegion: caseSignals.bodyRegion,
+      signalType: caseSignals.signalType,
+      movementContext: caseSignals.movementContext,
+      activityType: caseSignals.activityType,
+      description: caseSignals.description,
+    })
+    .from(caseSignals)
+    .where(eq(caseSignals.caseId, caseId))
+    .orderBy(desc(caseSignals.id))
+    .limit(1);
+
+  return {
+    bodyRegion:
+      latestSignal?.bodyRegion ??
+      deriveBodyRegion(latestSignal?.description ?? ""),
+    signalType:
+      latestSignal?.signalType ??
+      deriveSignalType(latestSignal?.description ?? ""),
+    movementContext:
+      latestSignal?.movementContext ?? currentCase?.movementContext ?? null,
+    activityType: latestSignal?.activityType ?? currentCase?.activityType ?? null,
+  };
+}
+
 async function resolveCaseReviewTargetCase({
   userId,
   conversationId,
@@ -2381,6 +2416,12 @@ function cleanDashboardTitlePart(
     "not right",
     "bad",
     "unspecified",
+    "go faster",
+    "try it",
+    "tried it",
+    "helped",
+    "that helped",
+    "this helped",
   ]);
 
   const cleanedKey = normalizeCaseKey(cleaned);
@@ -2474,12 +2515,52 @@ function getDisplayableActivityType(
 function buildActiveCaseTitle(
   movementContext: string | null | undefined,
   activityType: string | null | undefined,
+  bodyRegion?: string | null | undefined,
 ): string | null {
   const movement = getDisplayableMovementContext(movementContext);
   const activity = getDisplayableActivityType(activityType);
+  const region = cleanDashboardTitlePart(bodyRegion);
 
-  if (movement && activity) return `${movement} — ${activity}`;
+  if (activity && region) return `${activity} — ${region}`;
+  if (movement && region) return `${movement} — ${region}`;
+  if (movement && activity) return `${activity} — ${movement}`;
   return movement ?? activity ?? null;
+}
+
+function pickDashboardDisplayValue(
+  values: Array<string | null | undefined>,
+): string | null {
+  const normalizedValues = values
+    .map((value) => normalizePreviewValue(value))
+    .filter((value): value is string => Boolean(value));
+
+  if (normalizedValues.length === 0) return null;
+
+  const deduped: string[] = [];
+
+  for (const value of normalizedValues) {
+    const existingIndex = deduped.findIndex(
+      (existing) =>
+        areEquivalentDashboardCandidates(existing, value) ||
+        normalizeDashboardCandidate(existing).includes(
+          normalizeDashboardCandidate(value),
+        ) ||
+        normalizeDashboardCandidate(value).includes(
+          normalizeDashboardCandidate(existing),
+        ),
+    );
+
+    if (existingIndex === -1) {
+      deduped.push(value);
+      continue;
+    }
+
+    if (value.length < deduped[existingIndex].length) {
+      deduped[existingIndex] = value;
+    }
+  }
+
+  return deduped.join(" — ") || null;
 }
 
 function qualifiesForTimelineSignal(text: string): boolean {
@@ -4042,6 +4123,7 @@ ${memoryBlock}
 
       let latestAdjustment:
         | {
+            caseId: number | null;
             mechanicalFocus: string | null;
             cue: string | null;
             hypothesisId: number | null;
@@ -4049,23 +4131,30 @@ ${memoryBlock}
         | undefined;
       let latestHypothesis:
         | {
+            caseId: number | null;
             hypothesis: string | null;
           }
         | undefined;
       let latestOutcome:
         | {
+            caseId: number | null;
             userFeedback: string | null;
           }
         | undefined;
       let latestSignal:
         | {
+            caseId: number | null;
             description: string | null;
+            bodyRegion: string | null;
+            movementContext: string | null;
+            activityType: string | null;
           }
         | undefined;
 
       if (selectedCase) {
         [latestAdjustment] = await db
           .select({
+            caseId: caseAdjustments.caseId,
             mechanicalFocus: caseAdjustments.mechanicalFocus,
             cue: caseAdjustments.cue,
             hypothesisId: caseAdjustments.hypothesisId,
@@ -4081,6 +4170,7 @@ ${memoryBlock}
 
         [latestHypothesis] = await db
           .select({
+            caseId: caseHypotheses.caseId,
             hypothesis: caseHypotheses.hypothesis,
           })
           .from(caseHypotheses)
@@ -4090,6 +4180,7 @@ ${memoryBlock}
 
         [latestOutcome] = await db
           .select({
+            caseId: caseOutcomes.caseId,
             userFeedback: caseOutcomes.userFeedback,
           })
           .from(caseOutcomes)
@@ -4107,12 +4198,68 @@ ${memoryBlock}
 
         [latestSignal] = await db
           .select({
+            caseId: caseSignals.caseId,
             description: caseSignals.description,
+            bodyRegion: caseSignals.bodyRegion,
+            movementContext: caseSignals.movementContext,
+            activityType: caseSignals.activityType,
           })
           .from(caseSignals)
           .where(eq(caseSignals.caseId, selectedCase.id))
           .orderBy(desc(caseSignals.id))
           .limit(1);
+
+        console.log("DASHBOARD_SELECTED_CASE", {
+          userId,
+          selectedCaseId: selectedCase.id,
+          movementContext: selectedCase.movementContext,
+          activityType: selectedCase.activityType,
+          status: selectedCase.status,
+        });
+        console.log("DASHBOARD_LATEST_SIGNAL", {
+          selectedCaseId: selectedCase.id,
+          signalCaseId: latestSignal?.caseId ?? null,
+          bodyRegion: latestSignal?.bodyRegion ?? null,
+          movementContext: latestSignal?.movementContext ?? null,
+          activityType: latestSignal?.activityType ?? null,
+          descriptionPreview: clampText(latestSignal?.description ?? "", 160),
+        });
+        console.log("DASHBOARD_LATEST_HYPOTHESIS", {
+          selectedCaseId: selectedCase.id,
+          hypothesisCaseId: latestHypothesis?.caseId ?? null,
+          hypothesisPreview: clampText(latestHypothesis?.hypothesis ?? "", 160),
+        });
+        console.log("DASHBOARD_LATEST_ADJUSTMENT", {
+          selectedCaseId: selectedCase.id,
+          adjustmentCaseId: latestAdjustment?.caseId ?? null,
+          cuePreview: clampText(latestAdjustment?.cue ?? "", 160),
+          mechanicalFocusPreview: clampText(
+            latestAdjustment?.mechanicalFocus ?? "",
+            160,
+          ),
+        });
+
+        const scopedRows = [
+          { label: "signal", caseId: latestSignal?.caseId ?? null },
+          { label: "hypothesis", caseId: latestHypothesis?.caseId ?? null },
+          { label: "adjustment", caseId: latestAdjustment?.caseId ?? null },
+          { label: "outcome", caseId: latestOutcome?.caseId ?? null },
+        ];
+
+        for (const row of scopedRows) {
+          if (row.caseId != null && row.caseId !== selectedCase.id) {
+            console.warn("DASHBOARD_CASE_SCOPE_MISMATCH_BLOCKED", {
+              selectedCaseId: selectedCase.id,
+              rowType: row.label,
+              rowCaseId: row.caseId,
+            });
+
+            if (row.label === "signal") latestSignal = undefined;
+            if (row.label === "hypothesis") latestHypothesis = undefined;
+            if (row.label === "adjustment") latestAdjustment = undefined;
+            if (row.label === "outcome") latestOutcome = undefined;
+          }
+        }
       }
 
       let latestCaseReview:
@@ -4147,6 +4294,7 @@ ${memoryBlock}
       const activeCaseTitle = buildActiveCaseTitle(
         selectedCase?.movementContext,
         selectedCase?.activityType,
+        latestSignal?.bodyRegion,
       );
       const investigationState = !selectedCase
         ? null
@@ -4175,8 +4323,10 @@ ${memoryBlock}
       );
 
       const testSourceCandidates = [
-        normalizePreviewValue(latestAdjustment?.cue),
-        normalizePreviewValue(latestAdjustment?.mechanicalFocus),
+        pickDashboardDisplayValue([
+          latestAdjustment?.cue,
+          latestAdjustment?.mechanicalFocus,
+        ]),
       ].filter((candidate): candidate is string => Boolean(candidate));
       const selectedTestSource =
         testSourceCandidates.find(
@@ -4191,7 +4341,10 @@ ${memoryBlock}
 
       const shiftSourceCandidates = [
         {
-          value: normalizePreviewValue(latestAdjustment?.cue),
+          value: pickDashboardDisplayValue([
+            latestAdjustment?.cue,
+            latestAdjustment?.mechanicalFocus,
+          ]),
           allowLowSignalFallback: false,
         },
         {
@@ -4233,10 +4386,10 @@ ${memoryBlock}
         investigationState,
         signal: latestSignal?.description ?? null,
         hypothesis: latestHypothesis?.hypothesis ?? null,
-        adjustment:
-          [latestAdjustment?.cue, latestAdjustment?.mechanicalFocus]
-            .filter(Boolean)
-            .join(" — ") || null,
+        adjustment: pickDashboardDisplayValue([
+          latestAdjustment?.cue,
+          latestAdjustment?.mechanicalFocus,
+        ]),
         currentMechanism,
         currentTest,
         lastShift,
@@ -4620,6 +4773,10 @@ Produce the response now.
         ? "depends_on_prior_conversation"
         : "no_case_fit_established";
       let returnToCaseMatched = false;
+      let continuityLatestBodyRegion: string | null = null;
+      let continuityLatestMovementContext: string | null = null;
+      let continuityLatestActivityType: string | null = null;
+      let continuityLatestSignalType: string | null = null;
 
       try {
         if (shouldCreateCase && derivedCaseContext) {
@@ -4634,6 +4791,10 @@ Produce the response now.
             });
 
             if (matchedCase) {
+              const matchedCaseSignal = await getLatestCaseSignalSnapshot(
+                matchedCase.id,
+                matchedCase,
+              );
               console.log("CASE_RETURN_MATCH", {
                 userId,
                 conversationId: convoId,
@@ -4647,6 +4808,11 @@ Produce the response now.
               returnToCaseMatched = true;
               continuityContextAllowed = true;
               continuityContextReason = "explicit_return_to_case";
+              continuityLatestBodyRegion = matchedCaseSignal.bodyRegion;
+              continuityLatestMovementContext =
+                matchedCaseSignal.movementContext;
+              continuityLatestActivityType = matchedCaseSignal.activityType;
+              continuityLatestSignalType = matchedCaseSignal.signalType;
             }
           }
 
@@ -4674,6 +4840,15 @@ Produce the response now.
               derivedActivityType: boundaryDecision.activityType,
               previousActivityType: boundaryDecision.previousActivityType,
             });
+
+            continuityLatestBodyRegion =
+              boundaryDecision.previousBodyRegion ?? null;
+            continuityLatestMovementContext =
+              boundaryDecision.previousMovementContext ?? null;
+            continuityLatestActivityType =
+              boundaryDecision.previousActivityType ?? null;
+            continuityLatestSignalType =
+              boundaryDecision.previousSignalType ?? null;
 
             if (boundaryDecision.shouldStartNewCase) {
               console.log("CASE_BOUNDARY_NEW_CASE", {
@@ -4781,9 +4956,31 @@ Produce the response now.
         resolvedActiveCase = await getConversationOpenCase(userId, convoId);
       }
 
-      const memoryBlock = buildMemoryPromptBlock(memory);
+      if (
+        !shouldCreateCase &&
+        resolvedActiveCase &&
+        continuityContextAllowed
+      ) {
+        const latestContinuitySignal = await getLatestCaseSignalSnapshot(
+          resolvedActiveCase.id,
+          resolvedActiveCase,
+        );
+        continuityLatestBodyRegion = latestContinuitySignal.bodyRegion;
+        continuityLatestMovementContext =
+          latestContinuitySignal.movementContext;
+        continuityLatestActivityType = latestContinuitySignal.activityType;
+        continuityLatestSignalType = latestContinuitySignal.signalType;
+      }
+
+      const shouldInjectStoredContext =
+        !shouldCreateCase || continuityContextAllowed;
+      const memoryBlock = shouldInjectStoredContext
+        ? buildMemoryPromptBlock(memory)
+        : "";
       const currentConversationSummaryBlock =
-        await getCurrentConversationSummaryBlock(convoId);
+        shouldInjectStoredContext
+          ? await getCurrentConversationSummaryBlock(convoId)
+          : "";
 
       const continuityCaseId =
         continuityContextAllowed && resolvedActiveCase
@@ -4796,7 +4993,13 @@ Produce the response now.
           currentCaseId: continuityCaseId,
           reason: continuityContextReason,
           derivedBodyRegion,
+          latestCaseBodyRegion: continuityLatestBodyRegion,
+          derivedActivityType: derivedCaseContext?.activityType ?? null,
+          latestCaseActivityType: continuityLatestActivityType,
           derivedMovementContext: derivedCaseContext?.movementContext ?? null,
+          latestCaseMovementContext: continuityLatestMovementContext,
+          derivedSignalType,
+          latestCaseSignalType: continuityLatestSignalType,
         });
       } else {
         console.log("CONTINUITY_CONTEXT_BLOCKED", {
@@ -4805,7 +5008,13 @@ Produce the response now.
           currentCaseId: resolvedActiveCase?.id ?? null,
           reason: continuityContextReason,
           derivedBodyRegion,
+          latestCaseBodyRegion: continuityLatestBodyRegion,
+          derivedActivityType: derivedCaseContext?.activityType ?? null,
+          latestCaseActivityType: continuityLatestActivityType,
           derivedMovementContext: derivedCaseContext?.movementContext ?? null,
+          latestCaseMovementContext: continuityLatestMovementContext,
+          derivedSignalType,
+          latestCaseSignalType: continuityLatestSignalType,
         });
       }
 
@@ -5324,6 +5533,20 @@ Produce the corrected response now.
           violates: finalArcViolationReasons.length > 0,
           reasons: finalArcViolationReasons,
         });
+        if (
+          finalArcViolationReasons.some((reason) =>
+            reason.startsWith("banned_coach_language:"),
+          )
+        ) {
+          console.warn("ARC_VALIDATOR_BLOCKED_EXERCISE_PRESCRIPTION", {
+            stage: "final_before_stream",
+            finalTextLength: finalText.length,
+            reasons: finalArcViolationReasons.filter((reason) =>
+              reason.startsWith("banned_coach_language:"),
+            ),
+            preview: clampText(finalText, 220),
+          });
+        }
 
         if (finalArcViolationReasons.length > 0) {
           console.log("ARC_RETRY_START", {
