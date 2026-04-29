@@ -3032,6 +3032,9 @@ function getResponseArcViolationReasons(text: string): string[] {
     { label: "exercise_language", pattern: /\bexercises?\b/ },
     { label: "perform_exercise", pattern: /\bperform .*exercise\b/ },
     { label: "do_exercise", pattern: /\bdo .*exercises?\b/ },
+    { label: "substitute_marching", pattern: /\bmarching\b/ },
+    { label: "drill_language", pattern: /\bdrills?\b/ },
+    { label: "step_down_substitution", pattern: /\bstep[-\s]?down\b/ },
     {
       label: "sets_or_programming",
       pattern: /\b\d+\s*sets?\b|\bsets\b|\breps\b|\bprogram\b|\broutine\b/,
@@ -3059,6 +3062,33 @@ function getResponseArcViolationReasons(text: string): string[] {
     }
   }
 
+  const hasProbe =
+    /\b(?:do|try|test|repeat)\s+one\b/.test(normalized) ||
+    /\btake\b[^.!?]{0,60}\bsteps?\b/.test(normalized) ||
+    /\btest one\b/.test(normalized);
+  const hasSpecificObservation =
+    /\btell me whether\b/.test(normalized) ||
+    /\btell me if\b/.test(normalized) ||
+    /\bnotice whether\b/.test(normalized) ||
+    /\bcheck whether\b/.test(normalized) ||
+    /\bwatch whether\b/.test(normalized) ||
+    /\bwhether\b[^.!?]{0,120}\b(?:changes?|happens?|tightens?|shortens?|takes over|shows up|stays quiet)\b/i.test(
+      text,
+    );
+  const isProbeFirst = hasProbe && hasSpecificObservation;
+
+  if (!/(?:do one|try one|test one|take .*steps?|tell me whether)/i.test(text)) {
+    reasons.push("missing_required_test");
+  }
+
+  if (
+    /\bstabilizers?\b|\bcontrol under load\b|\bdynamic stability\b|\bnot strong enough\b|\bnot stable enough\b|\blacking control\b/i.test(
+      text,
+    )
+  ) {
+    reasons.push("abstract_language");
+  }
+
   if (
     /\bhigher speeds\b|\bas speed increases\b|\bwhen you go faster\b|\bfaster movement\b|\bunder load\b/i.test(
       text,
@@ -3079,7 +3109,7 @@ function getResponseArcViolationReasons(text: string): string[] {
     /\bdue to\b/.test(normalized) ||
     /\bbecause\b/.test(normalized);
 
-  if (!hasMechanism) reasons.push("missing_mechanism");
+  if (!hasMechanism && !isProbeFirst) reasons.push("missing_mechanism");
 
   const hasFailurePrediction =
     /\bwill likely\b/.test(normalized) ||
@@ -3096,7 +3126,9 @@ function getResponseArcViolationReasons(text: string): string[] {
     /\bduring transfer\b/.test(normalized) ||
     /\bafter release begins\b/.test(normalized);
 
-  if (!hasFailurePrediction) reasons.push("missing_failure_prediction");
+  if (!hasFailurePrediction && !isProbeFirst) {
+    reasons.push("missing_failure_prediction");
+  }
 
   const hasLocalizedFailure =
     /\binitial load\b/.test(normalized) ||
@@ -3110,20 +3142,21 @@ function getResponseArcViolationReasons(text: string): string[] {
     /\bbefore .*accept/i.test(text) ||
     /\bduring .*transfer/i.test(text);
 
-  if (!hasLocalizedFailure) reasons.push("missing_failure_localization");
+  if (!hasLocalizedFailure && !isProbeFirst) {
+    reasons.push("missing_failure_localization");
+  }
 
   const hasLever =
     /\b(?:stay|keep|shift|let|load|hold|reduce|slow|soften|allow)\b/.test(
       normalized,
     );
 
-  if (!hasLever) reasons.push("missing_movement_lever");
-
-  const hasProbe =
-    /\b(?:do|try|test|repeat)\s+one\b/.test(normalized) ||
-    /\btake\b[^.!?]{0,60}\bsteps?\b/.test(normalized);
+  if (!hasLever && !isProbeFirst) reasons.push("missing_movement_lever");
 
   if (!hasProbe) reasons.push("missing_single_rep_probe");
+  if (hasProbe && !hasSpecificObservation) {
+    reasons.push("missing_specific_probe_observation");
+  }
 
   if (text.length > 850) reasons.push("too_long");
 
@@ -5360,90 +5393,30 @@ That response drifted from the active narrative. Rewrite it so the execution sta
 
 === RETRY PRIORITY ===
 
-Your first job is to produce one extractor-friendly hypothesis sentence.
+Do not default to immediate diagnosis.
+Do not force the phrase "The issue is..."
+Do not make every response diagnosis-first.
 
-If the user is describing a concrete physical or mechanical issue, the rewritten response must include exactly one standalone hypothesis sentence in the first 1–3 sentences.
+Choose the right shape:
 
-Concrete physical or mechanical issues include:
-- pain
-- tightness
-- instability
-- timing breakdown
-- movement problem
-- physical complaint
-- loss of control
-- collapse
-- compensation
-- coordination issue
-- breakdown under load
-- something physically feeling off
+1. Mechanism-led:
+- name one specific mechanism
+- correct the user's interpretation
+- predict a localized failure point
+- give one movement-based lever
+- end with one single-rep probe
 
-Do not wait for perfect certainty. Commit to the strongest mechanism even if some uncertainty remains.
+2. Probe-first:
+- briefly name the uncertainty
+- give one single-rep probe that separates two possible failure points
+- ask for one specific observable result
 
-No hypothesis = invalid retry output.
-
-=== HYPOTHESIS SENTENCE RULE ===
-
-The hypothesis sentence must be:
-- singular
-- causal
-- mechanical
-- directly extractable
-- one complete sentence
-- stated early
-- not implied across multiple sentences
-
-The mechanism cannot be split across sentences. Do not introduce it partially, complete it later, or build toward it gradually.
-
-Approved forms:
-- "The issue is that ..."
-- "This is happening because ..."
-- "What is breaking is ..."
-- "This pattern is being driven by ..."
-- "Your trunk is collapsing before ..."
-- "Your front side is opening too early, which is forcing ..."
-- "Your shoulder is taking over because ..."
-
-Only use "What is happening is ..." if it immediately states a concrete mechanical failure, such as:
-- "What is happening is your ribcage is losing structure before rotation."
-- "What is happening is your hip is shifting before the trunk can hold position."
-
-Do not use "What is happening is ..." for vague summaries, abstract progress, or generic interpretation.
-
-Use causal/mechanical language from this family when natural:
-- "because"
-- "due to"
-- "driven by"
-- "caused by"
-- "comes from"
-- "the issue is"
-- "the problem is"
-- "is breaking"
-- "is collapsing"
-- "is stalling"
-- "is shifting too early"
-- "is opening too early"
-- "is losing structure"
-- "is compensating"
-- "is taking over"
-- "is bearing the load"
-- "is driving the issue"
-
-Invalid language:
-- "could be"
-- "might be"
-- "possibly"
-- "a few things"
-- "the key is"
-- "this is working"
-- "this is aligning"
-- "good sign"
-- vague progress language
-- generic interpretation language
+If the mechanism is not fully clear, start with a targeted probe instead.
+If the previous response identified a mechanism, refine or test it instead of restating it.
 
 === MECHANISM ENFORCEMENT ===
 
-All explanations must resolve to a physical or mechanical cause.
+All explanations, when given, must resolve to a physical or mechanical cause.
 
 Do NOT say:
 - this is working
@@ -5458,9 +5431,9 @@ Instead:
 - explain the mechanism directly
 
 When the user reports improvement:
-- translate it into a confirmed mechanism
-- explain WHY it improved physically
-- identify the next likely breakdown, overcorrection, or relapse point
+- refine the current mechanism instead of restating it
+- narrow where the failure moved
+- change the lever or probe to target the new failure point
 
 Do not collapse success into praise, reassurance, or closure.
 
@@ -5469,10 +5442,10 @@ Do not collapse success into praise, reassurance, or closure.
 Preserve the natural Interloop arc:
 
 1. Validate only what is actually correct
-2. Commit immediately to the single mechanism in extractor-friendly language
-3. Correct the user's misunderstanding directly
-4. Predict likely failure, regression, or overcorrection
-5. Reduce to one lever
+2. Decide whether this turn needs mechanism-led or probe-first handling
+3. If mechanism-led, correct the mechanism and predict a localized failure
+4. If probe-first, isolate the missing variable
+5. Reduce to one lever or one probe
 6. End according to state, with at most one final question only if needed
 
 Keep one dominant mechanism only.
@@ -5483,10 +5456,11 @@ Do not use bolded headers, titled sections, bullets, or packaged formatting in t
 
 If the mechanism is already established, advance it instead of restating it.
 If new evidence breaks the mechanism, replace it rather than stacking explanations.
+If feedback says it helped first and failed later, localize the later failure instead of repeating the first explanation.
 
 The response must read as one continuous explanation with natural paragraphing.
 
-Style flexibility is subordinate to hypothesis compliance. Natural phrasing, variable length, and flow are allowed only after the early standalone hypothesis sentence is satisfied.
+Natural phrasing is allowed. The response is valid if it either gives a specific mechanism or asks a targeted probe that will reveal the mechanism.
 
 === ENDING STATE ===
 
@@ -5569,16 +5543,21 @@ Your previous response is still invalid.
 Rewrite it as a tight Coreloop investigation response.
 
 Required:
-- one specific mechanism
-- one interpretation correction
-- one predicted failure or overcorrection localized to initial load, mid-stance, transition, push-off, release phase, before weight acceptance, during transfer, or after release begins
-- one movement cue that starts with Stay, Keep, Shift, Let, Load, Hold, Reduce, Slow, Soften, or Allow
-- one single-rep probe using "Do one", "Try one", "Test one", or "Take ... steps"
-- what specific failure signal the user should report back
+- one short, concrete mechanism
+- one movement-based lever
+- one test using "Do one", "Try one", "Test one", or "Take ... steps"
+- one outcome request using "tell me whether" or equivalent
 - no training prescription
 - no generic coaching
 - no broad advice
+- no substitute movement or drill; test inside the original movement
+- no abstract phrasing like "stabilizers", "control under load", "dynamic stability", "not strong enough", "not stable enough", or "lacking control"
+- no repeated explanation from the prior turn
 - no generic failure fallback like "higher speeds", "faster movement", or "under load"
+
+Probe-first is allowed.
+Do not force "The issue is..."
+Do not turn every response into diagnosis first.
 
 Never say:
 - focus on exercises
@@ -5592,6 +5571,15 @@ Never say:
 - practice
 - higher speeds
 - under load
+- stabilizers
+- control under load
+- dynamic stability
+- marching
+- drill
+- step-down
+- not strong enough
+- not stable enough
+- lacking control
 
 Return only the corrected response.
               `.trim(),
@@ -5615,7 +5603,7 @@ Return only the corrected response.
           });
 
           finalText =
-            "The issue is that the target joint is releasing before it controls the transition into the next phase, so the nearby area is finishing the transfer. If it releases before weight acceptance, the compensation will likely show up during transition. Do one slow version of the same movement. Let the target joint accept weight before moving on, and tell me whether the original tightness or shortening changes.";
+            "Your hip is letting go before the step finishes. Stay on the right side until the step is complete. Take three slow steps and tell me whether the shortening still happens or if it holds.";
         }
       }
 
