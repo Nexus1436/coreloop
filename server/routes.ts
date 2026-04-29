@@ -1645,6 +1645,60 @@ async function shouldStartNewCaseForSignal({
   };
 }
 
+async function writeCaseSignalIfNew({
+  userId,
+  caseId,
+  description,
+  activityType,
+  movementContext,
+  bodyRegion,
+  signalType,
+}: {
+  userId: string;
+  caseId: number;
+  description: string;
+  activityType: string;
+  movementContext: string;
+  bodyRegion: string | null;
+  signalType: string | null;
+}): Promise<boolean> {
+  const normalizedDescription = clampText(description, 800);
+  const [lastSignal] = await db
+    .select({
+      description: caseSignals.description,
+    })
+    .from(caseSignals)
+    .where(eq(caseSignals.caseId, caseId))
+    .orderBy(desc(caseSignals.id))
+    .limit(1);
+
+  if (
+    areEquivalentDashboardCandidates(
+      normalizedDescription,
+      lastSignal?.description,
+    )
+  ) {
+    console.log("CASE_SIGNAL_DUPLICATE_SKIPPED", {
+      caseId,
+      signalPreview: clampText(normalizedDescription, 120),
+    });
+
+    return false;
+  }
+
+  await db.insert(caseSignals).values({
+    userId,
+    caseId,
+    description: normalizedDescription,
+    activityType,
+    movementContext,
+    bodyRegion,
+    signalType,
+  });
+
+  return true;
+}
+
 async function resolveCaseReviewTargetCase({
   userId,
   conversationId,
@@ -2894,9 +2948,13 @@ function getResponseArcViolationReasons(text: string): string[] {
     { label: "strengthen", pattern: /\bstrengthen\b/ },
     { label: "improve_stability", pattern: /\bimprove stability\b/ },
     { label: "improve_control", pattern: /\bimprove control\b/ },
+    { label: "exercise_language", pattern: /\bexercises?\b/ },
     { label: "perform_exercise", pattern: /\bperform .*exercise\b/ },
     { label: "do_exercise", pattern: /\bdo .*exercises?\b/ },
-    { label: "sets_or_programming", pattern: /\b\d+\s*sets?\b|\bprogram\b/ },
+    {
+      label: "sets_or_programming",
+      pattern: /\b\d+\s*sets?\b|\bsets\b|\breps\b|\bprogram\b|\broutine\b/,
+    },
     { label: "practice_drill", pattern: /\bpractice\b/ },
   ];
 
@@ -2920,6 +2978,18 @@ function getResponseArcViolationReasons(text: string): string[] {
     }
   }
 
+  if (
+    /\bhigher speeds\b|\bas speed increases\b|\bwhen you go faster\b|\bfaster movement\b|\bunder load\b/i.test(
+      text,
+    )
+  ) {
+    reasons.push("generic_failure_localization");
+  }
+
+  if (/\bthe issue is that your\b[^.!?]{0,140}\bagain\b/i.test(text)) {
+    reasons.push("repeated_explanation_iteration_failure");
+  }
+
   const hasMechanism =
     /\bthe issue is\b/.test(normalized) ||
     /\bthis is happening because\b/.test(normalized) ||
@@ -2936,11 +3006,30 @@ function getResponseArcViolationReasons(text: string): string[] {
     /\bthe risk is\b/.test(normalized) ||
     /\byou'll start\b/.test(normalized) ||
     /\byou will start\b/.test(normalized) ||
-    /\bwhen you speed up\b/.test(normalized) ||
-    /\bunder load\b/.test(normalized) ||
-    /\bwhen fatigue\b/.test(normalized);
+    /\binitial load\b/.test(normalized) ||
+    /\bmid[-\s]?stance\b/.test(normalized) ||
+    /\btransition\b/.test(normalized) ||
+    /\bpush[-\s]?off\b/.test(normalized) ||
+    /\brelease phase\b/.test(normalized) ||
+    /\bbefore weight acceptance\b/.test(normalized) ||
+    /\bduring transfer\b/.test(normalized) ||
+    /\bafter release begins\b/.test(normalized);
 
   if (!hasFailurePrediction) reasons.push("missing_failure_prediction");
+
+  const hasLocalizedFailure =
+    /\binitial load\b/.test(normalized) ||
+    /\bmid[-\s]?stance\b/.test(normalized) ||
+    /\btransition\b/.test(normalized) ||
+    /\bpush[-\s]?off\b/.test(normalized) ||
+    /\brelease phase\b/.test(normalized) ||
+    /\bbefore weight acceptance\b/.test(normalized) ||
+    /\bduring transfer\b/.test(normalized) ||
+    /\bafter release begins\b/.test(normalized) ||
+    /\bbefore .*accept/i.test(text) ||
+    /\bduring .*transfer/i.test(text);
+
+  if (!hasLocalizedFailure) reasons.push("missing_failure_localization");
 
   const hasLever =
     /\b(?:stay|keep|shift|let|load|hold|reduce|slow|soften|allow)\b/.test(
@@ -2948,6 +3037,12 @@ function getResponseArcViolationReasons(text: string): string[] {
     );
 
   if (!hasLever) reasons.push("missing_movement_lever");
+
+  const hasProbe =
+    /\b(?:do|try|test|repeat)\s+one\b/.test(normalized) ||
+    /\btake\b[^.!?]{0,60}\bsteps?\b/.test(normalized);
+
+  if (!hasProbe) reasons.push("missing_single_rep_probe");
 
   if (text.length > 850) reasons.push("too_long");
 
@@ -4603,10 +4698,10 @@ Produce the response now.
           }
 
           if (resolvedActiveCase) {
-            await db.insert(caseSignals).values({
+            await writeCaseSignalIfNew({
               userId,
               caseId: resolvedActiveCase.id,
-              description: clampText(userText, 800),
+              description: userText,
               activityType: derivedCaseContext.activityType,
               movementContext: derivedCaseContext.movementContext,
               bodyRegion: derivedBodyRegion,
@@ -4640,10 +4735,10 @@ Produce the response now.
               resolvedActiveCase = newCase;
 
               try {
-                await db.insert(caseSignals).values({
+                await writeCaseSignalIfNew({
                   userId,
                   caseId: newCase.id,
-                  description: clampText(userText, 800),
+                  description: userText,
                   activityType: derivedCaseContext.activityType,
                   movementContext: derivedCaseContext.movementContext,
                   bodyRegion: derivedBodyRegion,
@@ -5253,12 +5348,14 @@ Rewrite it as a tight Coreloop investigation response.
 Required:
 - one specific mechanism
 - one interpretation correction
-- one predicted failure or overcorrection
+- one predicted failure or overcorrection localized to initial load, mid-stance, transition, push-off, release phase, before weight acceptance, during transfer, or after release begins
 - one movement cue that starts with Stay, Keep, Shift, Let, Load, Hold, Reduce, Slow, Soften, or Allow
+- one single-rep probe using "Do one", "Try one", "Test one", or "Take ... steps"
+- what specific failure signal the user should report back
 - no training prescription
 - no generic coaching
 - no broad advice
-- single-rep diagnostic probes are allowed only when they test the mechanism and include what to report
+- no generic failure fallback like "higher speeds", "faster movement", or "under load"
 
 Never say:
 - focus on exercises
@@ -5270,6 +5367,8 @@ Never say:
 - perform exercises
 - do 3 sets
 - practice
+- higher speeds
+- under load
 
 Return only the corrected response.
               `.trim(),
@@ -5285,15 +5384,15 @@ Return only the corrected response.
           });
         }
 
-        if (containsBannedCoachLanguage(finalText)) {
-          console.error("ARC_FINAL_BANNED_BLOCKED", {
+        if (finalArcViolationReasons.length > 0) {
+          console.error("ARC_FINAL_INVALID_BLOCKED", {
             finalTextLength: finalText.length,
-            reasons: getResponseArcViolationReasons(finalText),
+            reasons: finalArcViolationReasons,
             preview: clampText(finalText, 220),
           });
 
           finalText =
-            "The issue is that the movement is shifting into compensation before the target joint controls the load. If you chase more range or speed, that compensation will likely show up sooner under load. Slow the motion and keep the involved side loaded one beat longer before moving on.";
+            "The issue is that the target joint is releasing before it controls the transition into the next phase, so the nearby area is finishing the transfer. If it releases before weight acceptance, the compensation will likely show up during transition. Do one slow version of the same movement. Let the target joint accept weight before moving on, and tell me whether the original tightness or shortening changes.";
         }
       }
 
