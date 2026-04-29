@@ -2876,6 +2876,60 @@ function isValidResponse(text: string): boolean {
   return true;
 }
 
+function violatesResponseArc(text: string): boolean {
+  if (!text?.trim()) return true;
+
+  const normalized = text.toLowerCase();
+
+  const genericCoachPatterns = [
+    /\bfocus on strengthening\b/,
+    /\bwork on\b/,
+    /\bstrengthen\b/,
+    /\bimprove stability\b/,
+    /\bimprove control\b/,
+    /\bperform .*exercise\b/,
+    /\bdo .*exercise\b/,
+    /\bwall slide\b/,
+  ];
+
+  if (genericCoachPatterns.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+
+  const hasMechanism =
+    /\bthe issue is\b/.test(normalized) ||
+    /\bthis is happening because\b/.test(normalized) ||
+    /\bwhat is breaking is\b/.test(normalized) ||
+    /\bdriven by\b/.test(normalized) ||
+    /\bdue to\b/.test(normalized) ||
+    /\bbecause\b/.test(normalized);
+
+  if (!hasMechanism) return true;
+
+  const hasFailurePrediction =
+    /\bwill likely\b/.test(normalized) ||
+    /\bthe likely failure\b/.test(normalized) ||
+    /\bthe risk is\b/.test(normalized) ||
+    /\byou'll start\b/.test(normalized) ||
+    /\byou will start\b/.test(normalized) ||
+    /\bwhen you speed up\b/.test(normalized) ||
+    /\bunder load\b/.test(normalized) ||
+    /\bwhen fatigue\b/.test(normalized);
+
+  if (!hasFailurePrediction) return true;
+
+  const hasLever =
+    /\b(?:stay|keep|shift|let|load|hold|reduce|slow|soften|allow)\b/.test(
+      normalized,
+    );
+
+  if (!hasLever) return true;
+
+  if (text.length > 850) return true;
+
+  return false;
+}
+
 type ExtractableResponseType = "investigation" | "case_review" | "system";
 
 function classifyAssistantResponseForExtraction({
@@ -4843,6 +4897,54 @@ ${ACTIVE_PROMPT}
       ];
 
       let assistantText = await runCompletion(openai, chatMessages);
+
+      if (!isCaseReview && violatesResponseArc(assistantText)) {
+        console.log("RESPONSE_ARC_VIOLATION_RETRY", {
+          assistantTextLength: assistantText.length,
+        });
+
+        assistantText = await runCompletion(openai, [
+          ...chatMessages,
+          {
+            role: "assistant",
+            content: assistantText,
+          },
+          {
+            role: "user",
+            content: `
+Your previous response violated the Interloop response arc.
+
+Rewrite it now.
+
+Required:
+
+* controlled validation only if earned
+* one mechanism
+* one interpretation correction
+* one predicted failure or overcorrection
+* one movement-based lever
+* no exercise prescription
+* no generic coaching
+* no broad advice
+* no multiple levers
+* one sharp question only if useful
+
+The response must not say:
+
+* focus on strengthening
+* work on stability
+* improve control
+* perform exercises
+* do wall slides
+
+The lever must be a movement cue, not a training recommendation.
+
+Produce the corrected response only.
+            `.trim(),
+          },
+        ]);
+      }
+
       let finalText = assistantText;
 
       if (!isCaseReview) {
