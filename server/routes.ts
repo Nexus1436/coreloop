@@ -2882,6 +2882,10 @@ function getResponseArcViolationReasons(text: string): string[] {
   if (!text?.trim()) return ["empty_response"];
 
   const normalized = text.toLowerCase();
+  const isSingleRepProbe =
+    /\b(?:do|try|test|repeat)\s+one\b/.test(normalized) ||
+    /\bone\s+(?:rep|slow|controlled|brief)\b/.test(normalized) ||
+    /\bonce\b/.test(normalized);
 
   const genericCoachPatterns = [
     { label: "focus_on_exercises", pattern: /\bfocus on exercises\b/ },
@@ -2891,15 +2895,28 @@ function getResponseArcViolationReasons(text: string): string[] {
     { label: "improve_stability", pattern: /\bimprove stability\b/ },
     { label: "improve_control", pattern: /\bimprove control\b/ },
     { label: "perform_exercise", pattern: /\bperform .*exercise\b/ },
-    { label: "do_exercise", pattern: /\bdo .*exercise\b/ },
-    { label: "single_leg_bridge", pattern: /\bsingle[-\s]?leg bridge\b/ },
-    { label: "bridge_exercise", pattern: /\bbridge exercise\b/ },
-    { label: "wall_slide", pattern: /\bwall slide\b/ },
+    { label: "do_exercise", pattern: /\bdo .*exercises?\b/ },
+    { label: "sets_or_programming", pattern: /\b\d+\s*sets?\b|\bprogram\b/ },
+    { label: "practice_drill", pattern: /\bpractice\b/ },
   ];
 
   for (const entry of genericCoachPatterns) {
     if (entry.pattern.test(normalized)) {
       reasons.push(`banned_coach_language:${entry.label}`);
+    }
+  }
+
+  const movementProbePatterns = [
+    { label: "single_leg_bridge", pattern: /\bsingle[-\s]?leg bridge\b/ },
+    { label: "bridge", pattern: /\bbridge\b/ },
+    { label: "wall_slide", pattern: /\bwall slide\b/ },
+    { label: "step_down", pattern: /\bstep[-\s]?down\b/ },
+    { label: "stair_step", pattern: /\bstair step\b|\bstep from a stair\b/ },
+  ];
+
+  for (const entry of movementProbePatterns) {
+    if (entry.pattern.test(normalized) && !isSingleRepProbe) {
+      reasons.push(`banned_coach_language:${entry.label}_prescription`);
     }
   }
 
@@ -5238,9 +5255,10 @@ Required:
 - one interpretation correction
 - one predicted failure or overcorrection
 - one movement cue that starts with Stay, Keep, Shift, Let, Load, Hold, Reduce, Slow, Soften, or Allow
-- no exercise prescription
+- no training prescription
 - no generic coaching
 - no broad advice
+- single-rep diagnostic probes are allowed only when they test the mechanism and include what to report
 
 Never say:
 - focus on exercises
@@ -5250,8 +5268,8 @@ Never say:
 - improve stability
 - improve control
 - perform exercises
-- single-leg bridge
-- wall slide
+- do 3 sets
+- practice
 
 Return only the corrected response.
               `.trim(),
