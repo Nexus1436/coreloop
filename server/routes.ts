@@ -3020,7 +3020,8 @@ function getResponseArcViolationReasons(text: string): string[] {
   const isSingleRepProbe =
     /\b(?:do|try|test|repeat)\s+one\b/.test(normalized) ||
     /\bone\s+(?:rep|slow|controlled|brief)\b/.test(normalized) ||
-    /\bonce\b/.test(normalized);
+    /\bonce\b/.test(normalized) ||
+    /\bone[-\s]?time\b/.test(normalized);
 
   const genericCoachPatterns = [
     { label: "focus_on_exercises", pattern: /\bfocus on exercises\b/ },
@@ -3029,12 +3030,8 @@ function getResponseArcViolationReasons(text: string): string[] {
     { label: "strengthen", pattern: /\bstrengthen\b/ },
     { label: "improve_stability", pattern: /\bimprove stability\b/ },
     { label: "improve_control", pattern: /\bimprove control\b/ },
-    { label: "exercise_language", pattern: /\bexercises?\b/ },
     { label: "perform_exercise", pattern: /\bperform .*exercise\b/ },
     { label: "do_exercise", pattern: /\bdo .*exercises?\b/ },
-    { label: "substitute_marching", pattern: /\bmarching\b/ },
-    { label: "drill_language", pattern: /\bdrills?\b/ },
-    { label: "step_down_substitution", pattern: /\bstep[-\s]?down\b/ },
     {
       label: "sets_or_programming",
       pattern: /\b\d+\s*sets?\b|\bsets\b|\breps\b|\bprogram\b|\broutine\b/,
@@ -3052,6 +3049,8 @@ function getResponseArcViolationReasons(text: string): string[] {
     { label: "single_leg_bridge", pattern: /\bsingle[-\s]?leg bridge\b/ },
     { label: "bridge", pattern: /\bbridge\b/ },
     { label: "wall_slide", pattern: /\bwall slide\b/ },
+    { label: "drill", pattern: /\bdrills?\b/ },
+    { label: "marching", pattern: /\bmarching\b/ },
     { label: "step_down", pattern: /\bstep[-\s]?down\b/ },
     { label: "stair_step", pattern: /\bstair step\b|\bstep from a stair\b/ },
   ];
@@ -3062,100 +3061,23 @@ function getResponseArcViolationReasons(text: string): string[] {
     }
   }
 
-  const hasProbe =
-    /\b(?:do|try|test|repeat)\s+one\b/.test(normalized) ||
-    /\btake\b[^.!?]{0,60}\bsteps?\b/.test(normalized) ||
-    /\btest one\b/.test(normalized);
-  const hasSpecificObservation =
-    /\btell me whether\b/.test(normalized) ||
-    /\btell me if\b/.test(normalized) ||
-    /\bnotice whether\b/.test(normalized) ||
-    /\bcheck whether\b/.test(normalized) ||
-    /\bwatch whether\b/.test(normalized) ||
-    /\bwhether\b[^.!?]{0,120}\b(?:changes?|happens?|tightens?|shortens?|takes over|shows up|stays quiet)\b/i.test(
-      text,
-    );
-  const isProbeFirst = hasProbe && hasSpecificObservation;
-
-  if (!/(?:do one|try one|test one|take .*steps?|tell me whether)/i.test(text)) {
-    reasons.push("missing_required_test");
-  }
-
   if (
-    /\bstabilizers?\b|\bcontrol under load\b|\bdynamic stability\b|\bnot strong enough\b|\bnot stable enough\b|\blacking control\b/i.test(
-      text,
-    )
-  ) {
-    reasons.push("abstract_language");
-  }
-
-  if (
-    /\bhigher speeds\b|\bas speed increases\b|\bwhen you go faster\b|\bfaster movement\b|\bunder load\b/i.test(
+    /\bhigher speeds\b|\bas speed increases\b|\bwhen you go faster\b|\bfaster movement\b/i.test(
       text,
     )
   ) {
     reasons.push("generic_failure_localization");
   }
 
+  if (
+    /\bthe issue is\b/i.test(text) &&
+    /\bthe issue is\b[\s\S]{0,260}\bthe issue is\b/i.test(text)
+  ) {
+    reasons.push("repeated_template_language");
+  }
+
   if (/\bthe issue is that your\b[^.!?]{0,140}\bagain\b/i.test(text)) {
     reasons.push("repeated_explanation_iteration_failure");
-  }
-
-  const hasMechanism =
-    /\bthe issue is\b/.test(normalized) ||
-    /\bthis is happening because\b/.test(normalized) ||
-    /\bwhat is breaking is\b/.test(normalized) ||
-    /\bdriven by\b/.test(normalized) ||
-    /\bdue to\b/.test(normalized) ||
-    /\bbecause\b/.test(normalized);
-
-  if (!hasMechanism && !isProbeFirst) reasons.push("missing_mechanism");
-
-  const hasFailurePrediction =
-    /\bwill likely\b/.test(normalized) ||
-    /\bthe likely failure\b/.test(normalized) ||
-    /\bthe risk is\b/.test(normalized) ||
-    /\byou'll start\b/.test(normalized) ||
-    /\byou will start\b/.test(normalized) ||
-    /\binitial load\b/.test(normalized) ||
-    /\bmid[-\s]?stance\b/.test(normalized) ||
-    /\btransition\b/.test(normalized) ||
-    /\bpush[-\s]?off\b/.test(normalized) ||
-    /\brelease phase\b/.test(normalized) ||
-    /\bbefore weight acceptance\b/.test(normalized) ||
-    /\bduring transfer\b/.test(normalized) ||
-    /\bafter release begins\b/.test(normalized);
-
-  if (!hasFailurePrediction && !isProbeFirst) {
-    reasons.push("missing_failure_prediction");
-  }
-
-  const hasLocalizedFailure =
-    /\binitial load\b/.test(normalized) ||
-    /\bmid[-\s]?stance\b/.test(normalized) ||
-    /\btransition\b/.test(normalized) ||
-    /\bpush[-\s]?off\b/.test(normalized) ||
-    /\brelease phase\b/.test(normalized) ||
-    /\bbefore weight acceptance\b/.test(normalized) ||
-    /\bduring transfer\b/.test(normalized) ||
-    /\bafter release begins\b/.test(normalized) ||
-    /\bbefore .*accept/i.test(text) ||
-    /\bduring .*transfer/i.test(text);
-
-  if (!hasLocalizedFailure && !isProbeFirst) {
-    reasons.push("missing_failure_localization");
-  }
-
-  const hasLever =
-    /\b(?:stay|keep|shift|let|load|hold|reduce|slow|soften|allow)\b/.test(
-      normalized,
-    );
-
-  if (!hasLever && !isProbeFirst) reasons.push("missing_movement_lever");
-
-  if (!hasProbe) reasons.push("missing_single_rep_probe");
-  if (hasProbe && !hasSpecificObservation) {
-    reasons.push("missing_specific_probe_observation");
   }
 
   if (text.length > 850) reasons.push("too_long");
@@ -5540,24 +5462,26 @@ Produce the corrected response now.
               content: `
 Your previous response is still invalid.
 
-Rewrite it as a tight Coreloop investigation response.
+Rewrite it from the hidden reasoning arc, then express only what is needed.
 
-Required:
-- one short, concrete mechanism
-- one movement-based lever
-- one test using "Do one", "Try one", "Test one", or "Take ... steps"
-- one outcome request using "tell me whether" or equivalent
-- no training prescription
-- no generic coaching
-- no broad advice
-- no substitute movement or drill; test inside the original movement
-- no abstract phrasing like "stabilizers", "control under load", "dynamic stability", "not strong enough", "not stable enough", or "lacking control"
-- no repeated explanation from the prior turn
-- no generic failure fallback like "higher speeds", "faster movement", or "under load"
+Internal arc:
+1. Extract the real signal
+2. Test multiple interpretations
+3. Identify the mechanism
+4. Correct the user's interpretation if needed
+5. Predict the likely failure or overcorrection if useful
+6. Extract one lever if useful
 
-Probe-first is allowed.
+Visible output may be:
+- full breakdown
+- tight correction
+- single lever
+- probe
+
+Do not force all arc components into the visible response.
 Do not force "The issue is..."
-Do not turn every response into diagnosis first.
+Do not use the same rhythm every time.
+Only ask a question if it sharpens the model.
 
 Never say:
 - focus on exercises
@@ -5570,16 +5494,6 @@ Never say:
 - do 3 sets
 - practice
 - higher speeds
-- under load
-- stabilizers
-- control under load
-- dynamic stability
-- marching
-- drill
-- step-down
-- not strong enough
-- not stable enough
-- lacking control
 
 Return only the corrected response.
               `.trim(),
@@ -5603,7 +5517,7 @@ Return only the corrected response.
           });
 
           finalText =
-            "Your hip is letting go before the step finishes. Stay on the right side until the step is complete. Take three slow steps and tell me whether the shortening still happens or if it holds.";
+            "Does it break before the weight shift or after?";
         }
       }
 
