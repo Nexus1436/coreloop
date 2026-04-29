@@ -1444,6 +1444,158 @@ async function getConversationOpenCase(
   return conversationOpenCase;
 }
 
+function hasExplicitNewCaseLanguage(text: string): boolean {
+  return /\b(?:by the way|btw|another thing|another issue|separately|separate thing|different thing|something else|something different|new issue|new problem|also noticing|also noticed|now i'?m noticing|switching gears)\b/i.test(
+    text.trim(),
+  );
+}
+
+function isMeaningfulCaseBoundaryValue(value: string | null | undefined) {
+  const normalized = normalizeOptionalLabel(value);
+  return (
+    normalized !== "" &&
+    normalized !== "general movement" &&
+    normalized !== "unspecified"
+  );
+}
+
+async function shouldStartNewCaseForSignal({
+  userText,
+  currentCase,
+  derivedMovementContext,
+  derivedActivityType,
+  derivedBodyRegion,
+  derivedSignalType,
+}: {
+  userText: string;
+  currentCase: ResolvedCaseRow;
+  derivedMovementContext: string;
+  derivedActivityType: string;
+  derivedBodyRegion: string | null;
+  derivedSignalType: string | null;
+}): Promise<{
+  shouldStartNewCase: boolean;
+  reason: string | null;
+  bodyRegion?: string | null;
+  signalType?: string | null;
+  movementContext?: string | null;
+  activityType?: string | null;
+  previousBodyRegion?: string | null;
+  previousSignalType?: string | null;
+  previousMovementContext?: string | null;
+  previousActivityType?: string | null;
+}> {
+  const derived = {
+    bodyRegion: derivedBodyRegion,
+    signalType: derivedSignalType,
+    movementContext: derivedMovementContext,
+    activityType: derivedActivityType,
+  };
+
+  if (hasExplicitNewCaseLanguage(userText)) {
+    return {
+      shouldStartNewCase: true,
+      reason: "explicit_new_case_language",
+      ...derived,
+    };
+  }
+
+  const [latestSignal] = await db
+    .select({
+      bodyRegion: caseSignals.bodyRegion,
+      signalType: caseSignals.signalType,
+      movementContext: caseSignals.movementContext,
+      activityType: caseSignals.activityType,
+      description: caseSignals.description,
+    })
+    .from(caseSignals)
+    .where(eq(caseSignals.caseId, currentCase.id))
+    .orderBy(desc(caseSignals.id))
+    .limit(1);
+
+  if (!latestSignal) {
+    return { shouldStartNewCase: false, reason: null, ...derived };
+  }
+
+  const previousBodyRegion =
+    latestSignal.bodyRegion ?? deriveBodyRegion(latestSignal.description ?? "");
+  const previousSignalType =
+    latestSignal.signalType ?? deriveSignalType(latestSignal.description ?? "");
+  const previousMovementContext =
+    latestSignal.movementContext ?? currentCase.movementContext;
+  const previousActivityType =
+    latestSignal.activityType ?? currentCase.activityType;
+  const previous = {
+    previousBodyRegion,
+    previousSignalType,
+    previousMovementContext,
+    previousActivityType,
+  };
+
+  if (
+    isMeaningfulCaseBoundaryValue(previousBodyRegion) &&
+    isMeaningfulCaseBoundaryValue(derivedBodyRegion) &&
+    normalizeOptionalLabel(previousBodyRegion) !==
+      normalizeOptionalLabel(derivedBodyRegion)
+  ) {
+    return {
+      shouldStartNewCase: true,
+      reason: `body_region_shift:${previousBodyRegion}->${derivedBodyRegion}`,
+      ...derived,
+      ...previous,
+    };
+  }
+
+  if (
+    isMeaningfulCaseBoundaryValue(previousSignalType) &&
+    isMeaningfulCaseBoundaryValue(derivedSignalType) &&
+    normalizeOptionalLabel(previousSignalType) !==
+      normalizeOptionalLabel(derivedSignalType)
+  ) {
+    return {
+      shouldStartNewCase: true,
+      reason: `signal_type_shift:${previousSignalType}->${derivedSignalType}`,
+      ...derived,
+      ...previous,
+    };
+  }
+
+  if (
+    isMeaningfulCaseBoundaryValue(previousMovementContext) &&
+    isMeaningfulCaseBoundaryValue(derivedMovementContext) &&
+    normalizeOptionalLabel(previousMovementContext) !==
+      normalizeOptionalLabel(derivedMovementContext)
+  ) {
+    return {
+      shouldStartNewCase: true,
+      reason: `movement_context_shift:${previousMovementContext}->${derivedMovementContext}`,
+      ...derived,
+      ...previous,
+    };
+  }
+
+  if (
+    isMeaningfulCaseBoundaryValue(previousActivityType) &&
+    isMeaningfulCaseBoundaryValue(derivedActivityType) &&
+    normalizeOptionalLabel(previousActivityType) !==
+      normalizeOptionalLabel(derivedActivityType)
+  ) {
+    return {
+      shouldStartNewCase: true,
+      reason: `activity_type_shift:${previousActivityType}->${derivedActivityType}`,
+      ...derived,
+      ...previous,
+    };
+  }
+
+  return {
+    shouldStartNewCase: false,
+    reason: "same_case_fit",
+    ...derived,
+    ...previous,
+  };
+}
+
 async function resolveCaseReviewTargetCase({
   userId,
   conversationId,
@@ -1797,13 +1949,13 @@ function hasRealMechanicalLever(value: string | null | undefined): boolean {
   if (isLowSignalShiftText(text)) return false;
 
   const actionPattern =
-    /^\s*(?:try|make sure|let|allow|shift|load|relax|drive|rotate|control|stack|move|press|pull|push|hinge|brace|stabilize|stabilise|hold|clear|stay)\b/i;
+    /^\s*(?:try|test|use|focus on|keep|make sure|let|allow|shift|load|relax|drive|rotate|control|stack|move|press|pull|push|hinge|brace|stabilize|stabilise|hold|clear|stay|reduce|increase|shorten|lengthen|soften|slow)\b/i;
 
   const mechanicalObjectPattern =
-    /\b(?:hip|hips|rib|ribs|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|rotation|hinge|foot|feet|ankle|knee|knees|glute|glutes|serve|swing|contact|backswing|pressure|weight|chest|torso|lat|lats|core|elbow|wrist)\b/i;
+    /\b(?:hip|hips|rib|ribs|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|rotation|hinge|foot|feet|ankle|knee|knees|glute|glutes|serve|swing|contact|backswing|pressure|weight|chest|torso|lat|lats|core|elbow|wrist|stride|step|gait|walk|walking|tension|range|position|speed|tempo)\b/i;
 
   const changePattern =
-    /\b(?:instead of|rather than|before|after|through|under|until|as you|while you|during|into|out of|against|toward|away|forward|back|down|up|open|closed|hold|release|load|shift|drive|rotate|brace|stack|hinge|press|pull|push|clear)\b/i;
+    /\b(?:instead of|rather than|before|after|through|under|until|as you|while you|during|into|out of|against|toward|away|forward|back|down|up|open|closed|hold|release|load|shift|drive|rotate|brace|stack|hinge|press|pull|push|clear|with|without|for|across|between|from|reduced|increased|shorter|longer|slow|slower|observe|notice|feel)\b/i;
 
   return (
     actionPattern.test(text) &&
@@ -1819,6 +1971,10 @@ function isTestLikeText(value: string | null | undefined): boolean {
 
   const concreteActionStartPatterns = [
     /^\s*try\b/i,
+    /^\s*test\b/i,
+    /^\s*use\b/i,
+    /^\s*focus on\b/i,
+    /^\s*keep\b/i,
     /^\s*make sure\b/i,
     /^\s*let\b/i,
     /^\s*allow\b/i,
@@ -1835,6 +1991,12 @@ function isTestLikeText(value: string | null | undefined): boolean {
     /^\s*hinge\b/i,
     /^\s*hold\b/i,
     /^\s*stay\b/i,
+    /^\s*reduce\b/i,
+    /^\s*increase\b/i,
+    /^\s*shorten\b/i,
+    /^\s*lengthen\b/i,
+    /^\s*soften\b/i,
+    /^\s*slow\b/i,
   ];
 
   const diagnosisPatterns = [
@@ -1943,6 +2105,10 @@ function isStrongAdjustmentCandidate(
 
   const actionStartPatterns = [
     /^\s*try\b/i,
+    /^\s*test\b/i,
+    /^\s*use\b/i,
+    /^\s*focus on\b/i,
+    /^\s*keep\b/i,
     /^\s*make sure\b/i,
     /^\s*let\b/i,
     /^\s*allow\b/i,
@@ -1964,6 +2130,12 @@ function isStrongAdjustmentCandidate(
     /^\s*hold\b/i,
     /^\s*clear\b/i,
     /^\s*stay\b/i,
+    /^\s*reduce\b/i,
+    /^\s*increase\b/i,
+    /^\s*shorten\b/i,
+    /^\s*lengthen\b/i,
+    /^\s*soften\b/i,
+    /^\s*slow\b/i,
   ];
 
   const rejectMixedPatterns = [
@@ -1978,7 +2150,6 @@ function isStrongAdjustmentCandidate(
     /\bthe problem is\b/i,
     /\bthis is happening\b/i,
     /\bwhich means\b/i,
-    /\bso that\b/i,
   ];
 
   const concreteBodyActionPatterns = [
@@ -2004,6 +2175,16 @@ function isStrongAdjustmentCandidate(
     /\bcontact\b/i,
     /\bbackswing\b/i,
     /\bpressure\b/i,
+    /\bstride\b/i,
+    /\bstep\b/i,
+    /\bgait\b/i,
+    /\bwalk\b/i,
+    /\bwalking\b/i,
+    /\btension\b/i,
+    /\brange\b/i,
+    /\bposition\b/i,
+    /\bspeed\b/i,
+    /\btempo\b/i,
   ];
 
   if (!actionStartPatterns.some((pattern) => pattern.test(text))) {
@@ -2564,7 +2745,10 @@ async function getStoredSessionHistory(
 // ACTIVE HYPOTHESIS LOOKUP
 // ==============================
 
-async function getActiveHypothesisBlock(userId: string): Promise<string> {
+async function getActiveHypothesisBlock(
+  userId: string,
+  caseId?: number | null,
+): Promise<string> {
   const unresolved = await db
     .select({
       caseId: caseAdjustments.caseId,
@@ -2579,7 +2763,13 @@ async function getActiveHypothesisBlock(userId: string): Promise<string> {
       eq(caseAdjustments.hypothesisId, caseHypotheses.id),
     )
     .leftJoin(caseOutcomes, eq(caseAdjustments.id, caseOutcomes.adjustmentId))
-    .where(and(eq(cases.userId, userId), isNull(caseOutcomes.id)))
+    .where(
+      and(
+        eq(cases.userId, userId),
+        isNull(caseOutcomes.id),
+        ...(caseId ? [eq(cases.id, caseId)] : []),
+      ),
+    )
     .orderBy(desc(caseAdjustments.id))
     .limit(5);
 
@@ -2594,7 +2784,8 @@ async function getActiveHypothesisBlock(userId: string): Promise<string> {
 
   return `
 === ACTIVE HYPOTHESIS (PRIORITY) ===
-This is your active working hypothesis. Do not open new investigations until this is resolved or explicitly replaced.
+Use this only if the current user signal clearly belongs to the same case.
+If the current signal shifts body region, movement context, activity, or signal type, do not force continuity and do not explain it through this hypothesis.
 
 Adjustment: ${latest.cue ?? "Previous movement adjustment"}
 Mechanical focus: ${latest.mechanicalFocus ?? "Not specified"}
@@ -2636,6 +2827,35 @@ function isValidResponse(text: string): boolean {
   return true;
 }
 
+type ExtractableResponseType = "investigation" | "case_review" | "system";
+
+function classifyAssistantResponseForExtraction({
+  isCaseReview,
+  text,
+}: {
+  isCaseReview: boolean;
+  text: string;
+}): ExtractableResponseType {
+  if (isCaseReview) return "case_review";
+
+  const normalized = String(text ?? "").trim();
+
+  if (
+    /---\s*(?:KEY DEVELOPMENTS OVER TIME|ORIGIN PROBLEM)\s*---/i.test(
+      normalized,
+    ) ||
+    /\bcase review\b/i.test(normalized)
+  ) {
+    return "case_review";
+  }
+
+  if (/^I am Coreloop\./i.test(normalized)) {
+    return "system";
+  }
+
+  return "investigation";
+}
+
 async function runCompletion(
   openaiClient: OpenAI,
   messages: ChatCompletionMessageParam[],
@@ -2649,7 +2869,10 @@ async function runCompletion(
   return resp.choices?.[0]?.message?.content ?? "";
 }
 
-async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
+async function getDominantRuntimePatternBlock(
+  userId: string,
+  caseId?: number | null,
+): Promise<string> {
   const recentCases = await db
     .select({
       id: cases.id,
@@ -2660,7 +2883,11 @@ async function getDominantRuntimePatternBlock(userId: string): Promise<string> {
       status: cases.status,
     })
     .from(cases)
-    .where(eq(cases.userId, userId))
+    .where(
+      caseId
+        ? and(eq(cases.userId, userId), eq(cases.id, caseId))
+        : eq(cases.userId, userId),
+    )
     .orderBy(desc(cases.updatedAt), desc(cases.id))
     .limit(6);
 
@@ -3605,24 +3832,6 @@ ${memoryBlock}
         | undefined;
 
       if (selectedCase) {
-        const rawSignals = await db
-          .select()
-          .from(caseSignals)
-          .where(eq(caseSignals.caseId, selectedCase.id));
-        const rawHypotheses = await db
-          .select()
-          .from(caseHypotheses)
-          .where(eq(caseHypotheses.caseId, selectedCase.id));
-        const rawAdjustments = await db
-          .select()
-          .from(caseAdjustments)
-          .where(eq(caseAdjustments.caseId, selectedCase.id));
-
-        console.log("DASHBOARD SELECTED CASE:", selectedCase);
-        console.log("SIGNALS RAW:", rawSignals);
-        console.log("HYPOTHESES RAW:", rawHypotheses);
-        console.log("ADJUSTMENTS RAW:", rawAdjustments);
-
         [latestAdjustment] = await db
           .select({
             mechanicalFocus: caseAdjustments.mechanicalFocus,
@@ -3672,10 +3881,6 @@ ${memoryBlock}
           .where(eq(caseSignals.caseId, selectedCase.id))
           .orderBy(desc(caseSignals.id))
           .limit(1);
-
-        console.log("LATEST SIGNAL:", latestSignal);
-        console.log("LATEST HYPOTHESIS:", latestHypothesis);
-        console.log("LATEST ADJUSTMENT:", latestAdjustment);
       }
 
       let latestCaseReview:
@@ -3791,26 +3996,6 @@ ${memoryBlock}
         220,
       );
 
-      console.log("DASHBOARD DEBUG:", {
-        userId,
-        selectedCaseId: selectedCase?.id ?? null,
-        movementContext: selectedCase?.movementContext ?? null,
-        activityType: selectedCase?.activityType ?? null,
-        activeCaseTitle,
-        investigationState,
-        signal: latestSignal?.description ?? null,
-        hypothesis: latestHypothesis?.hypothesis ?? null,
-        adjustment:
-          [latestAdjustment?.cue, latestAdjustment?.mechanicalFocus]
-            .filter(Boolean)
-            .join(" — ") || null,
-        currentMechanism,
-        currentTest,
-        lastShift,
-        hasLatestCaseReview: Boolean(latestCaseReview?.reviewText),
-        lastCaseReviewSnippet,
-      });
-
       res.json({
         activeCaseTitle,
         investigationState,
@@ -3881,8 +4066,6 @@ ${memoryBlock}
 
   app.post("/api/chat", isAuthenticated, async (req: any, res: Response) => {
     try {
-      console.log("CHAT STAGE: auth");
-
       const authUser = req.user as any;
       const userId = authUser?.claims?.sub;
 
@@ -3890,8 +4073,6 @@ ${memoryBlock}
         res.status(401).json({ error: "Unauthorized" });
         return;
       }
-
-      console.log("CHAT STAGE: request-parse");
 
       const body = req.body ?? {};
       const incomingRaw = body.messages;
@@ -3926,7 +4107,7 @@ ${memoryBlock}
       }
 
       const isCaseReview = Boolean(body.isCaseReview);
-      console.log("CHAT MODE:", isCaseReview ? "CASE_REVIEW" : "STANDARD");
+      const conversationId = body.conversationId;
 
       // ==============================
       // DOMAIN BOUNDARY GATE
@@ -3943,8 +4124,6 @@ ${memoryBlock}
         });
       }
 
-      const conversationId = body.conversationId;
-
       let [existingUser] = await db
         .select()
         .from(users)
@@ -3952,12 +4131,6 @@ ${memoryBlock}
         .limit(1);
 
       const dbFirstName = normalizeStoredFirstName(existingUser?.firstName);
-
-      console.log("NAME DEBUG:", {
-        userId,
-        rawFirstName: existingUser?.firstName,
-        normalizedFirstName: dbFirstName,
-      });
 
       if (!existingUser) {
         await db
@@ -3989,8 +4162,6 @@ ${memoryBlock}
       }
 
       let convoId = Number(conversationId);
-
-      console.log("CHAT STAGE: conversation-lookup");
 
       if (Number.isFinite(convoId)) {
         const [existing] = await db
@@ -4052,8 +4223,6 @@ ${memoryBlock}
         }
       }
 
-      console.log("CHAT STAGE: conversation-create");
-
       if (!Number.isFinite(convoId)) {
         const [row] = await db
           .insert(conversations)
@@ -4066,8 +4235,6 @@ ${memoryBlock}
         convoId = row.id;
       }
 
-      console.log("CHAT STAGE: prior-message-fetch");
-
       let previous = await db
         .select()
         .from(messages)
@@ -4076,12 +4243,14 @@ ${memoryBlock}
       const storedMessagesBeforeCurrentTurn = previous;
       let storedFirstName = dbFirstName;
 
-      await db.insert(messages).values({
-        conversationId: convoId,
-        userId: userId,
-        role: "user",
-        content: userText,
-      });
+      if (!isCaseReview) {
+        await db.insert(messages).values({
+          conversationId: convoId,
+          userId: userId,
+          role: "user",
+          content: userText,
+        });
+      }
 
       previous = [
         ...previous,
@@ -4166,8 +4335,6 @@ Produce the response now.
             res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
           }
 
-          console.log("CHAT STAGE: medical-systemic-assistant-message-insert");
-
           await db.insert(messages).values({
             conversationId: convoId,
             userId: userId,
@@ -4204,20 +4371,74 @@ Produce the response now.
         memory,
         (existingUser as any)?.profileImageUrl,
       );
+      const shouldCreateCase =
+        !isCaseReview && qualifiesForTimelineSignal(userText);
+      const derivedCaseContext = shouldCreateCase
+        ? deriveCaseContext(userText, persistedSettingsForContext)
+        : null;
+      const derivedBodyRegion = shouldCreateCase
+        ? deriveBodyRegion(userText)
+        : null;
+      const derivedSignalType = shouldCreateCase
+        ? deriveSignalType(userText)
+        : null;
+      let continuityContextAllowed =
+        !isCaseReview && !shouldCreateCase && dependsOnPriorConversationContext(userText);
+      let continuityContextReason = continuityContextAllowed
+        ? "depends_on_prior_conversation"
+        : "no_case_fit_established";
 
       try {
-        const shouldCreateCase =
-          !isCaseReview && qualifiesForTimelineSignal(userText);
-
-        if (shouldCreateCase) {
-          const derivedCaseContext = deriveCaseContext(
-            userText,
-            persistedSettingsForContext,
-          );
-          const derivedBodyRegion = deriveBodyRegion(userText);
-          const derivedSignalType = deriveSignalType(userText);
+        if (shouldCreateCase && derivedCaseContext) {
           if (!resolvedActiveCase) {
             resolvedActiveCase = await getConversationOpenCase(userId, convoId);
+          }
+
+          if (resolvedActiveCase) {
+            const boundaryDecision = await shouldStartNewCaseForSignal({
+              userText,
+              currentCase: resolvedActiveCase,
+              derivedMovementContext: derivedCaseContext.movementContext,
+              derivedActivityType: derivedCaseContext.activityType,
+              derivedBodyRegion,
+              derivedSignalType,
+            });
+            console.log("CASE_BOUNDARY_DECISION", {
+              userId,
+              conversationId: convoId,
+              currentCaseId: resolvedActiveCase.id,
+              shouldStartNewCase: boundaryDecision.shouldStartNewCase,
+              reason: boundaryDecision.reason,
+              derivedBodyRegion: boundaryDecision.bodyRegion,
+              previousBodyRegion: boundaryDecision.previousBodyRegion,
+              derivedMovementContext: boundaryDecision.movementContext,
+              previousMovementContext: boundaryDecision.previousMovementContext,
+              derivedSignalType: boundaryDecision.signalType,
+              previousSignalType: boundaryDecision.previousSignalType,
+              derivedActivityType: boundaryDecision.activityType,
+              previousActivityType: boundaryDecision.previousActivityType,
+            });
+
+            if (boundaryDecision.shouldStartNewCase) {
+              console.log("CASE_BOUNDARY_NEW_CASE", {
+                userId,
+                conversationId: convoId,
+                previousCaseId: resolvedActiveCase.id,
+                reason: boundaryDecision.reason,
+                derivedCaseContext,
+                derivedBodyRegion,
+                derivedSignalType,
+              });
+              resolvedActiveCase = null;
+              continuityContextAllowed = false;
+              continuityContextReason = boundaryDecision.reason ?? "case_boundary_split";
+            } else {
+              continuityContextAllowed = true;
+              continuityContextReason = boundaryDecision.reason ?? "same_case_fit";
+            }
+          } else {
+            continuityContextAllowed = false;
+            continuityContextReason = "new_case_no_prior_case_fit";
           }
 
           if (resolvedActiveCase) {
@@ -4303,8 +4524,36 @@ Produce the response now.
       const currentConversationSummaryBlock =
         await getCurrentConversationSummaryBlock(convoId);
 
-      const activeHypothesisBlock = await getActiveHypothesisBlock(userId);
-      const runtimePatternBlock = await getDominantRuntimePatternBlock(userId);
+      const continuityCaseId =
+        continuityContextAllowed && resolvedActiveCase
+          ? resolvedActiveCase.id
+          : null;
+      if (continuityCaseId) {
+        console.log("CONTINUITY_CONTEXT_ALLOWED", {
+          userId,
+          conversationId: convoId,
+          currentCaseId: continuityCaseId,
+          reason: continuityContextReason,
+          derivedBodyRegion,
+          derivedMovementContext: derivedCaseContext?.movementContext ?? null,
+        });
+      } else {
+        console.log("CONTINUITY_CONTEXT_BLOCKED", {
+          userId,
+          conversationId: convoId,
+          currentCaseId: resolvedActiveCase?.id ?? null,
+          reason: continuityContextReason,
+          derivedBodyRegion,
+          derivedMovementContext: derivedCaseContext?.movementContext ?? null,
+        });
+      }
+
+      const activeHypothesisBlock = continuityCaseId
+        ? await getActiveHypothesisBlock(userId, continuityCaseId)
+        : "";
+      const runtimePatternBlock = continuityCaseId
+        ? await getDominantRuntimePatternBlock(userId, continuityCaseId)
+        : "";
       const continuityBlock = activeHypothesisBlock || runtimePatternBlock;
       const settingsContextBlock = !isCaseReview
         ? buildSettingsContextBlock(persistedSettingsForContext)
@@ -4350,8 +4599,6 @@ Identity authority rule:
       const ACTIVE_PROMPT = isCaseReview
         ? CASE_REVIEW_NARRATIVE
         : ACTIVE_BASE_NARRATIVE;
-
-      console.log("CHAT STAGE: prompt-assembly");
 
       const patternPriorityBlock = !isCaseReview
         ? `
@@ -4516,8 +4763,6 @@ ${ACTIVE_PROMPT}
           content: String(m.content ?? ""),
         })),
       ];
-
-      console.log("CHAT STAGE: openai-completion");
 
       let assistantText = await runCompletion(openai, chatMessages);
       let finalText = assistantText;
@@ -4743,22 +4988,48 @@ Produce the corrected response now.
         res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
       }
 
-      console.log("CHAT STAGE: assistant-message-insert");
+      if (!isCaseReview) {
+        await db.insert(messages).values({
+          conversationId: convoId,
+          userId: userId,
+          role: "assistant",
+          content: finalText,
+        });
+      }
 
-      await db.insert(messages).values({
-        conversationId: convoId,
-        userId: userId,
-        role: "assistant",
-        content: finalText,
+      const extractionResponseType = classifyAssistantResponseForExtraction({
+        isCaseReview,
+        text: finalText,
       });
 
-      try {
-        if (resolvedActiveCase && isOpenCaseStatus(resolvedActiveCase.status)) {
-          let validHypothesis = await getLatestValidHypothesisForCase(
-            resolvedActiveCase.id,
-          );
+      console.log("EXTRACT_TYPE_DETECTED", {
+        type: extractionResponseType,
+        isCaseReview,
+        assistantTextLength: finalText.length,
+      });
 
-          const hypothesisSentence = extractFirstMatchingSentence(finalText, [
+      if (extractionResponseType === "case_review") {
+        console.log("EXTRACT_SKIPPED_CASE_REVIEW", {
+          assistantTextLength: finalText.length,
+        });
+      }
+
+      if (extractionResponseType === "investigation") {
+        try {
+          if (
+            resolvedActiveCase &&
+            isOpenCaseStatus(resolvedActiveCase.status)
+          ) {
+            console.log("EXTRACT_START", {
+              caseId: resolvedActiveCase.id,
+              assistantTextLength: finalText.length,
+            });
+
+            let validHypothesis = await getLatestValidHypothesisForCase(
+              resolvedActiveCase.id,
+            );
+
+            const hypothesisSentence = extractFirstMatchingSentence(finalText, [
             /\bbecause\b/i,
             /\bdue to\b/i,
             /\bdriven by\b/i,
@@ -4808,54 +5079,65 @@ Produce the corrected response now.
             /\brestricting\b/i,
             /\breduced\b[^.!?]{1,80}\bduring\b/i,
             /\bloss of\b[^.!?]{1,80}\bduring\b/i,
-          ]);
-
-          if (
-            hypothesisSentence &&
-            isStrongHypothesisCandidate(hypothesisSentence)
-          ) {
-            const [latestStoredHypothesis] = await db
-              .select({
-                id: caseHypotheses.id,
-                hypothesis: caseHypotheses.hypothesis,
-              })
-              .from(caseHypotheses)
-              .where(eq(caseHypotheses.caseId, resolvedActiveCase.id))
-              .orderBy(desc(caseHypotheses.id))
-              .limit(1);
+            ]);
 
             if (
-              !areEquivalentDashboardCandidates(
-                hypothesisSentence,
-                latestStoredHypothesis?.hypothesis,
-              )
+              hypothesisSentence &&
+              isStrongHypothesisCandidate(hypothesisSentence)
             ) {
-              const [insertedHypothesis] = await db
-                .insert(caseHypotheses)
-                .values({
-                  caseId: resolvedActiveCase.id,
-                  hypothesis: hypothesisSentence,
-                })
-                .returning({
+              const [latestStoredHypothesis] = await db
+                .select({
                   id: caseHypotheses.id,
                   hypothesis: caseHypotheses.hypothesis,
-                });
+                })
+                .from(caseHypotheses)
+                .where(eq(caseHypotheses.caseId, resolvedActiveCase.id))
+                .orderBy(desc(caseHypotheses.id))
+                .limit(1);
 
-              if (isValidStoredHypothesis(insertedHypothesis)) {
-                validHypothesis = insertedHypothesis;
+              if (
+                !areEquivalentDashboardCandidates(
+                  hypothesisSentence,
+                  latestStoredHypothesis?.hypothesis,
+                )
+              ) {
+                const [insertedHypothesis] = await db
+                  .insert(caseHypotheses)
+                  .values({
+                    caseId: resolvedActiveCase.id,
+                    hypothesis: hypothesisSentence,
+                  })
+                  .returning({
+                    id: caseHypotheses.id,
+                    hypothesis: caseHypotheses.hypothesis,
+                  });
+
+                if (isValidStoredHypothesis(insertedHypothesis)) {
+                  validHypothesis = insertedHypothesis;
+                  console.log("EXTRACT_WRITE_SUCCESS", {
+                    type: "hypothesis",
+                    caseId: resolvedActiveCase.id,
+                    hypothesisId: insertedHypothesis.id,
+                  });
+                }
+              } else if (isValidStoredHypothesis(latestStoredHypothesis)) {
+                validHypothesis = latestStoredHypothesis;
               }
-            } else if (isValidStoredHypothesis(latestStoredHypothesis)) {
-              validHypothesis = latestStoredHypothesis;
             }
-          }
 
-          if (!validHypothesis) {
-            console.log("CASE ADJUSTMENT SKIPPED: no valid hypothesis", {
-              caseId: resolvedActiveCase.id,
-            });
-          } else {
-            const adjustmentSentence = extractFirstMatchingSentence(finalText, [
+            if (!validHypothesis) {
+              console.log("EXTRACT_WRITE_FAIL", {
+                type: "adjustment",
+                caseId: resolvedActiveCase.id,
+                reason: "no_valid_hypothesis",
+              });
+            } else {
+              const adjustmentSentence = extractFirstMatchingSentence(finalText, [
               /^\s*try\b/i,
+              /^\s*test\b/i,
+              /^\s*use\b/i,
+              /^\s*focus on\b/i,
+              /^\s*keep\b/i,
               /^\s*make sure\b/i,
               /^\s*let\b/i,
               /^\s*allow\b/i,
@@ -4872,141 +5154,195 @@ Produce the corrected response now.
               /^\s*hinge\b/i,
               /^\s*hold\b/i,
               /^\s*stay\b/i,
-            ]);
+              /^\s*reduce\b/i,
+              /^\s*increase\b/i,
+              /^\s*shorten\b/i,
+              /^\s*lengthen\b/i,
+              /^\s*soften\b/i,
+              /^\s*slow\b/i,
+              /\b(?:try|test|use|focus on|keep|make sure|let|allow|shift|load|relax|drive|control|rotate|brace|stack|press|pull|push|hinge|hold|stay|reduce|increase|shorten|lengthen|soften|slow)\b/i,
+              ]);
 
-            const mechanicalFocus =
-              extractFirstMatchingSentence(finalText, [
-                /\b(?:change|shift|load|brace|stack|rotate|hold|release|drive|hinge|press|pull|push|clear)\b/i,
-                /\b(?:hip|hips|rib|ribs|pelvis|trunk|shoulder|shoulders|back|spine|foot|feet|ankle|knee|knees|glute|glutes|serve|swing|contact|backswing|pressure|weight|chest|torso|lat|lats|core|elbow|wrist)\b/i,
-              ]) ?? null;
+              const mechanicalFocusCandidate =
+                extractFirstMatchingSentence(finalText, [
+                  /\b(?:change|shift|load|brace|stack|rotate|hold|release|drive|hinge|press|pull|push|clear)\b/i,
+                  /\b(?:hip|hips|rib|ribs|pelvis|trunk|shoulder|shoulders|back|spine|foot|feet|ankle|knee|knees|glute|glutes|serve|swing|contact|backswing|pressure|weight|chest|torso|lat|lats|core|elbow|wrist|stride|step|gait|walk|walking|tension|range|position|speed|tempo)\b/i,
+                ]) ?? adjustmentSentence;
+              const mechanicalFocus =
+                mechanicalFocusCandidate &&
+                hasRealMechanicalLever(mechanicalFocusCandidate)
+                  ? mechanicalFocusCandidate
+                  : adjustmentSentence;
 
-            if (
-              adjustmentSentence &&
-              mechanicalFocus &&
-              isValidMechanicalAdjustmentPair({
-                cue: adjustmentSentence,
-                mechanicalFocus,
-              }) &&
-              !areEquivalentDashboardCandidates(
-                adjustmentSentence,
-                hypothesisSentence,
-              )
-            ) {
-              const [latestStoredAdjustment] = await db
-                .select({
-                  cue: caseAdjustments.cue,
-                  mechanicalFocus: caseAdjustments.mechanicalFocus,
-                  hypothesisId: caseAdjustments.hypothesisId,
-                })
-                .from(caseAdjustments)
-                .where(eq(caseAdjustments.caseId, resolvedActiveCase.id))
-                .orderBy(desc(caseAdjustments.id))
-                .limit(1);
-
-              const isDuplicateAdjustment =
-                areEquivalentDashboardCandidates(
-                  adjustmentSentence,
-                  latestStoredAdjustment?.cue,
-                ) ||
-                areEquivalentDashboardCandidates(
-                  adjustmentSentence,
-                  latestStoredAdjustment?.mechanicalFocus,
-                );
-
-              if (!isDuplicateAdjustment) {
-                await db.insert(caseAdjustments).values({
+              if (adjustmentSentence) {
+                console.log("EXTRACT_ADJUSTMENT_FOUND", {
                   caseId: resolvedActiveCase.id,
-                  hypothesisId: validHypothesis.id,
-                  cue: adjustmentSentence,
-                  mechanicalFocus,
+                  adjustmentSentence,
                 });
               }
+
+              if (adjustmentSentence && isTestLikeText(adjustmentSentence)) {
+                console.log("EXTRACT_TEST_FOUND", {
+                  caseId: resolvedActiveCase.id,
+                  currentTest: adjustmentSentence,
+                });
+              }
+
+              if (
+                adjustmentSentence &&
+                mechanicalFocus &&
+                isValidMechanicalAdjustmentPair({
+                  cue: adjustmentSentence,
+                  mechanicalFocus,
+                }) &&
+                !areEquivalentDashboardCandidates(
+                  adjustmentSentence,
+                  hypothesisSentence,
+                )
+              ) {
+                const [latestStoredAdjustment] = await db
+                  .select({
+                    cue: caseAdjustments.cue,
+                    mechanicalFocus: caseAdjustments.mechanicalFocus,
+                    hypothesisId: caseAdjustments.hypothesisId,
+                  })
+                  .from(caseAdjustments)
+                  .where(eq(caseAdjustments.caseId, resolvedActiveCase.id))
+                  .orderBy(desc(caseAdjustments.id))
+                  .limit(1);
+
+                const isDuplicateAdjustment =
+                  areEquivalentDashboardCandidates(
+                    adjustmentSentence,
+                    latestStoredAdjustment?.cue,
+                  ) ||
+                  areEquivalentDashboardCandidates(
+                    adjustmentSentence,
+                    latestStoredAdjustment?.mechanicalFocus,
+                  );
+
+                if (!isDuplicateAdjustment) {
+                  const [insertedAdjustment] = await db
+                    .insert(caseAdjustments)
+                    .values({
+                      caseId: resolvedActiveCase.id,
+                      hypothesisId: validHypothesis.id,
+                      cue: adjustmentSentence,
+                      mechanicalFocus,
+                    })
+                    .returning({
+                      id: caseAdjustments.id,
+                    });
+                  console.log("EXTRACT_WRITE_SUCCESS", {
+                    type: "adjustment",
+                    caseId: resolvedActiveCase.id,
+                    adjustmentId: insertedAdjustment?.id ?? null,
+                  });
+              }
             } else if (adjustmentSentence || mechanicalFocus) {
-              console.log("CASE ADJUSTMENT SKIPPED: weak adjustment", {
-                caseId: resolvedActiveCase.id,
-                hypothesisId: validHypothesis.id,
-                adjustmentSentence,
-                mechanicalFocus,
-              });
+                console.log("EXTRACT_WRITE_FAIL", {
+                  type: "adjustment",
+                  caseId: resolvedActiveCase.id,
+                  hypothesisId: validHypothesis.id,
+                  adjustmentSentence,
+                  mechanicalFocus,
+                  reason: "candidate_failed_validation",
+                });
+              }
             }
           }
+        } catch (err) {
+          console.error("EXTRACT_WRITE_FAIL", {
+            type: "case_extraction",
+            error: err,
+          });
         }
-      } catch (err) {
-        console.error("Case extraction write failed:", err);
-      }
 
-      try {
-        const outcomeResult = detectOutcomeResult(userText);
+        try {
+          const outcomeResult = detectOutcomeResult(userText);
 
-        if (outcomeResult) {
-          if (!resolvedActiveCase) {
-            resolvedActiveCase = await getConversationOpenCase(userId, convoId);
-          }
+          if (outcomeResult) {
+            if (!resolvedActiveCase) {
+              resolvedActiveCase = await getConversationOpenCase(userId, convoId);
+            }
 
-          const activeCase = resolvedActiveCase;
+            const activeCase = resolvedActiveCase;
 
-          if (activeCase && isOpenCaseStatus(activeCase.status)) {
-            const validAdjustment = await getValidAdjustmentForOutcomeWrite({
-              caseId: activeCase.id,
-            });
-
-            if (!validAdjustment) {
-              console.log("AUTO OUTCOME SKIPPED: no valid adjustment", {
+            if (activeCase && isOpenCaseStatus(activeCase.status)) {
+              const validAdjustment = await getValidAdjustmentForOutcomeWrite({
                 caseId: activeCase.id,
               });
-            } else {
-              const [latestOutcome] = await db
-                .select({
-                  id: caseOutcomes.id,
-                  result: caseOutcomes.result,
-                  adjustmentId: caseOutcomes.adjustmentId,
-                  createdAt: caseOutcomes.createdAt,
-                })
-                .from(caseOutcomes)
-                .where(eq(caseOutcomes.adjustmentId, validAdjustment.id))
-                .orderBy(desc(caseOutcomes.id))
-                .limit(1);
 
-              const latestCreatedAtMs = latestOutcome?.createdAt
-                ? new Date(latestOutcome.createdAt).getTime()
-                : 0;
-
-              const isDuplicateRecentOutcome =
-                Boolean(latestOutcome) &&
-                String(latestOutcome.result ?? "") === outcomeResult &&
-                latestOutcome?.adjustmentId === validAdjustment.id &&
-                latestCreatedAtMs > 0 &&
-                Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
-
-              if (!isDuplicateRecentOutcome) {
-                await db.insert(caseOutcomes).values({
+              if (!validAdjustment) {
+                console.log("EXTRACT_WRITE_FAIL", {
+                  type: "outcome",
                   caseId: activeCase.id,
-                  adjustmentId: validAdjustment.id,
                   result: outcomeResult,
-                  userFeedback: userText,
+                  reason: "no_valid_adjustment",
                 });
+              } else {
+                const [latestOutcome] = await db
+                  .select({
+                    id: caseOutcomes.id,
+                    result: caseOutcomes.result,
+                    adjustmentId: caseOutcomes.adjustmentId,
+                    createdAt: caseOutcomes.createdAt,
+                  })
+                  .from(caseOutcomes)
+                  .where(eq(caseOutcomes.adjustmentId, validAdjustment.id))
+                  .orderBy(desc(caseOutcomes.id))
+                  .limit(1);
 
-                if (outcomeResult === "Improved") {
-                  await db
-                    .update(cases)
-                    .set({ status: "resolved" })
-                    .where(eq(cases.id, activeCase.id));
+                const latestCreatedAtMs = latestOutcome?.createdAt
+                  ? new Date(latestOutcome.createdAt).getTime()
+                  : 0;
+
+                const isDuplicateRecentOutcome =
+                  Boolean(latestOutcome) &&
+                  String(latestOutcome.result ?? "") === outcomeResult &&
+                  latestOutcome?.adjustmentId === validAdjustment.id &&
+                  latestCreatedAtMs > 0 &&
+                  Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
+
+                if (!isDuplicateRecentOutcome) {
+                  const [insertedOutcome] = await db
+                    .insert(caseOutcomes)
+                    .values({
+                      caseId: activeCase.id,
+                      adjustmentId: validAdjustment.id,
+                      result: outcomeResult,
+                      userFeedback: userText,
+                    })
+                    .returning({
+                      id: caseOutcomes.id,
+                    });
+                  console.log("EXTRACT_OUTCOME_FOUND", {
+                    caseId: activeCase.id,
+                    adjustmentId: validAdjustment.id,
+                    result: outcomeResult,
+                  });
+                  console.log("EXTRACT_WRITE_SUCCESS", {
+                    type: "outcome",
+                    caseId: activeCase.id,
+                    outcomeId: insertedOutcome?.id ?? null,
+                  });
+
+                  if (outcomeResult === "Improved") {
+                    await db
+                      .update(cases)
+                      .set({ status: "resolved" })
+                      .where(eq(cases.id, activeCase.id));
+                  }
                 }
               }
             }
           }
+        } catch (err) {
+          console.error("Auto outcome capture failed:", err);
         }
-      } catch (err) {
-        console.error("Auto outcome capture failed:", err);
       }
 
       try {
-        console.log("CASE REVIEW WRITE CHECK:", {
-          isCaseReview,
-          assistantLength: finalText.length,
-          userId,
-        });
-
         if (isCaseReview && finalText.length > 60) {
           const caseReviewTarget = await resolveCaseReviewTargetCase({
             userId,
@@ -5014,16 +5350,12 @@ Produce the corrected response now.
             currentCase: resolvedActiveCase,
           });
 
-          console.log("CASE REVIEW TARGET:", caseReviewTarget?.id ?? null);
-
           if (caseReviewTarget) {
             await writeCaseReview({
               userId,
               caseId: caseReviewTarget.id,
               reviewText: finalText,
             });
-
-            console.log("CASE REVIEW STORED:", caseReviewTarget.id);
           } else {
             console.warn(
               "CASE REVIEW SKIPPED: no valid case target found for user",

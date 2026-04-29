@@ -7,6 +7,7 @@ import {
 } from "react";
 
 import { CentralForm } from "@/components/central-form";
+import { ChatView } from "@/components/chat-view";
 import {
   InterloopSettings,
   type InterloopSettingsValues,
@@ -35,6 +36,12 @@ export interface ChatMessage {
   source?: "voice" | "typed" | "system";
 }
 
+export type ConversationThread = {
+  id: number | string;
+  messages: ChatMessage[];
+  isCurrent?: boolean;
+};
+
 type DashboardData = {
   activeCaseTitle: string | null;
   investigationState: string | null;
@@ -51,12 +58,6 @@ type DashboardData = {
     reviewText: string;
     createdAt: string;
   }[];
-};
-
-type ConversationThread = {
-  id: number;
-  title: string;
-  messages: ChatMessage[];
 };
 
 const INTERLOOP_SETTINGS_KEY = "interloopSettings";
@@ -123,7 +124,9 @@ async function sendChat(
   onChunk: (chunk: string) => void,
   isCaseReview: boolean = false,
 ) {
-  const resp = await fetch("/api/chat", {
+  const url = apiUrl("/api/chat");
+
+  const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -134,7 +137,18 @@ async function sendChat(
     }),
   });
 
-  if (!resp.ok || !resp.body) throw new Error("Chat failed");
+  if (!resp.ok || !resp.body) {
+    const bodyText = await resp.text().catch(() => "");
+    if (isCaseReview) {
+      console.error("Case review chat request failed:", {
+        stage: "chat_fetch",
+        url,
+        status: resp.status,
+        body: bodyText,
+      });
+    }
+    throw new Error("Chat failed");
+  }
 
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
@@ -261,6 +275,9 @@ export default function Home() {
   const conversationIdRef = useRef<number | null>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [recentConversationThreads, setRecentConversationThreads] = useState<
+    ConversationThread[]
+  >([]);
   const [hasExchanged, setHasExchanged] = useState(false);
 
   const [typedText, setTypedText] = useState("");
@@ -279,10 +296,6 @@ export default function Home() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [dashboardData, setDashboardData] =
     useState<DashboardData>(defaultDashboardData);
-  const [recentConversationThreads, setRecentConversationThreads] = useState<
-    ConversationThread[]
-  >([]);
-
   const playback = useAudioPlayback();
   const recorder = useVoiceRecorder();
 
@@ -294,15 +307,7 @@ export default function Home() {
   const repeatSessionRef = useRef(0);
   const acknowledgmentTimeoutRef = useRef<number | null>(null);
   const speakSessionRef = useRef(0);
-  const messageScrollRef = useRef<HTMLDivElement | null>(null);
-  const messageEndRef = useRef<HTMLDivElement | null>(null);
   const typingInputRef = useRef<HTMLInputElement | null>(null);
-  const hasAutoScrolledInitialRef = useRef(false);
-  const previousModeRef = useRef<"A" | "C">("A");
-  const whoDebugMessageIdRef = useRef<string | null>(null);
-  const lastPlayableMessageRef = useRef<{ id: string; text: string } | null>(
-    null,
-  );
   const lastAutoPlayedMessageIdRef = useRef<string | null>(null);
   const [isRepeatPlaying, setIsRepeatPlaying] = useState(false);
   const [activeRepeatMessageId, setActiveRepeatMessageId] = useState<
@@ -313,59 +318,9 @@ export default function Home() {
     settingsData.voice in VOICE_AVATAR_MAP ? settingsData.voice : "male_coach";
   const selectedVoiceAvatar = VOICE_AVATAR_MAP[selectedVoice];
 
-  const scrollMessagesToBottom = useCallback(
-    (behavior: ScrollBehavior = "auto") => {
-      const scrollEl = messageScrollRef.current;
-      if (!scrollEl) return;
-
-      scrollEl.scrollTo({
-        top: scrollEl.scrollHeight,
-        behavior,
-      });
-    },
-    [],
-  );
-
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
-
-  useEffect(() => {
-    const scrollEl = messageScrollRef.current;
-    if (!scrollEl || messages.length === 0) return;
-
-    if (!hasAutoScrolledInitialRef.current) {
-      window.requestAnimationFrame(() => {
-        scrollMessagesToBottom("auto");
-
-        window.requestAnimationFrame(() => {
-          scrollMessagesToBottom("auto");
-          hasAutoScrolledInitialRef.current = true;
-        });
-      });
-
-      return;
-    }
-
-    const distanceFromBottom =
-      scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
-    const shouldAutoScroll = distanceFromBottom < 140;
-
-    if (shouldAutoScroll) {
-      messageEndRef.current?.scrollIntoView({ block: "end" });
-    }
-  }, [messages, scrollMessagesToBottom]);
-
-  useEffect(() => {
-    const previousMode = previousModeRef.current;
-    previousModeRef.current = mode;
-
-    if (previousMode !== "A" && mode === "A" && messages.length > 0) {
-      window.requestAnimationFrame(() => {
-        scrollMessagesToBottom("auto");
-      });
-    }
-  }, [mode, messages.length, scrollMessagesToBottom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -446,35 +401,11 @@ export default function Home() {
     const loadConversations = async () => {
       try {
         const conversationsUrl = apiUrl("/api/conversations");
-        const resolvedConversationsUrl = new URL(
-          conversationsUrl,
-          window.location.href,
-        ).toString();
-
-        console.log("HOME conversations request:", {
-          url: conversationsUrl,
-          resolvedUrl: resolvedConversationsUrl,
-          credentials: "include",
-          protocol: window.location.protocol,
-          origin: window.location.origin,
-          hostname: window.location.hostname,
-        });
-
         const resp = await fetch(conversationsUrl, {
           credentials: "include",
         });
 
         const responseText = await resp.text();
-
-        console.log("HOME conversations response:", {
-          url: conversationsUrl,
-          resolvedUrl: resolvedConversationsUrl,
-          status: resp.status,
-          statusText: resp.statusText,
-          ok: resp.ok,
-          contentType: resp.headers.get("content-type"),
-          bodyPreview: responseText.slice(0, 500),
-        });
 
         if (!resp.ok) {
           throw new Error(
@@ -493,16 +424,6 @@ export default function Home() {
             : ([] as unknown[]);
         const conversationRows = conversations as Array<Record<string, any>>;
 
-        console.log("HOME conversations parsed:", {
-          shape: Array.isArray(data) ? "array" : typeof data,
-          hasConversationsProperty:
-            Boolean(data) &&
-            typeof data === "object" &&
-            "conversations" in data,
-          count: conversationRows.length,
-          firstConversationId: conversationRows[0]?.id ?? null,
-        });
-
         const sortedConversations = [...conversationRows].sort((a, b) => {
           const aTime = new Date(
             a?.updatedAt ?? a?.createdAt ?? a?.lastMessageAt ?? 0,
@@ -518,8 +439,8 @@ export default function Home() {
           return Number(b?.id ?? 0) - Number(a?.id ?? 0);
         });
 
-        const recentConversations = sortedConversations.slice(0, 3);
-        const latest = recentConversations[0] ?? null;
+        const latest = sortedConversations[0] ?? null;
+        const priorConversations = sortedConversations.slice(1, 3);
 
         if (!latest?.id) {
           if (cancelled) return;
@@ -530,7 +451,6 @@ export default function Home() {
           setRecentConversationThreads([]);
           setHasExchanged(false);
           localStorage.removeItem("conversationId");
-          hasAutoScrolledInitialRef.current = false;
           return;
         }
 
@@ -545,54 +465,44 @@ export default function Home() {
           setRecentConversationThreads([]);
           setHasExchanged(false);
           localStorage.removeItem("conversationId");
-          hasAutoScrolledInitialRef.current = false;
           return;
         }
 
-        const threadResults = await Promise.all(
-          recentConversations.map(async (conversation, index) => {
+        const priorThreadResults = await Promise.all(
+          priorConversations.map(async (conversation) => {
             const id = Number(conversation?.id);
-
             if (!Number.isFinite(id)) return null;
 
             const messagesUrl = apiUrl(`/api/messages/${id}`);
-            const msgResp = await fetch(messagesUrl, {
+            const messagesResponse = await fetch(messagesUrl, {
               credentials: "include",
             });
+            const messagesText = await messagesResponse.text();
 
-            const msgText = await msgResp.text();
-
-            if (!msgResp.ok) {
+            if (!messagesResponse.ok) {
               throw new Error(
-                `Failed to load messages for ${id} (${msgResp.status} ${msgResp.statusText}): ${msgText.slice(
+                `Failed to load prior messages (${messagesResponse.status} ${messagesResponse.statusText}): ${messagesText.slice(
                   0,
                   220,
                 )}`,
               );
             }
 
-            const msgData = parseJsonResponseText(
-              msgText,
+            const messagesPayload = parseJsonResponseText(
+              messagesText,
               `Messages ${id}`,
             );
-            const normalizedMessages = normalizeLoadedMessages(msgData);
-            const title =
-              typeof conversation?.title === "string" &&
-              conversation.title.trim()
-                ? conversation.title.trim()
-                : `Conversation ${index + 1}`;
+            const threadMessages = normalizeLoadedMessages(messagesPayload);
+
+            if (threadMessages.length === 0) return null;
 
             return {
               id,
-              title,
-              messages: normalizedMessages,
+              messages: threadMessages,
             } satisfies ConversationThread;
           }),
         );
 
-        const loadedThreads = threadResults.filter(
-          (thread): thread is ConversationThread => Boolean(thread),
-        );
         const latestMessagesUrl = apiUrl(`/api/messages/${latestId}`);
         const latestMessagesResponse = await fetch(latestMessagesUrl, {
           credentials: "include",
@@ -617,11 +527,14 @@ export default function Home() {
 
         if (cancelled) return;
 
-        hasAutoScrolledInitialRef.current = false;
         conversationIdRef.current = latestId;
         setConversationId(latestId);
         setMessages(normalizedMessages);
-        setRecentConversationThreads(loadedThreads);
+        setRecentConversationThreads(
+          priorThreadResults.filter(
+            (thread): thread is ConversationThread => Boolean(thread),
+          ),
+        );
         setHasExchanged(normalizedMessages.some((m) => m.role === "user"));
         localStorage.setItem("conversationId", String(latestId));
       } catch (err) {
@@ -635,7 +548,6 @@ export default function Home() {
         setRecentConversationThreads([]);
         setHasExchanged(false);
         localStorage.removeItem("conversationId");
-        hasAutoScrolledInitialRef.current = false;
       }
     };
 
@@ -691,32 +603,6 @@ export default function Home() {
         ["caseEvidence", "adjustment"],
         ["evidence", "adjustment"],
       ]);
-
-      console.log("INVESTIGATION dashboard payload shape:", {
-        topLevelKeys:
-          data && typeof data === "object" ? Object.keys(data) : typeof data,
-        currentCaseKeys:
-          data?.currentCase && typeof data.currentCase === "object"
-            ? Object.keys(data.currentCase)
-            : null,
-        activeCaseKeys:
-          data?.activeCase && typeof data.activeCase === "object"
-            ? Object.keys(data.activeCase)
-            : null,
-        caseEvidenceKeys:
-          data?.caseEvidence && typeof data.caseEvidence === "object"
-            ? Object.keys(data.caseEvidence)
-            : null,
-        evidenceKeys:
-          data?.evidence && typeof data.evidence === "object"
-            ? Object.keys(data.evidence)
-            : null,
-        mapped: {
-          signal: Boolean(signal),
-          hypothesis: Boolean(hypothesis),
-          adjustment: Boolean(adjustment),
-        },
-      });
 
       setDashboardData({
         activeCaseTitle: data?.activeCaseTitle ?? null,
@@ -904,8 +790,6 @@ if (!resp.ok) {
         return;
       }
 
-      lastPlayableMessageRef.current = { id: messageId, text };
-
       if (mode === "auto") {
         lastAutoPlayedMessageIdRef.current = messageId;
       }
@@ -957,11 +841,13 @@ if (!resp.ok) {
       return;
     }
 
-    const whoAssistantId = nextId();
+    setMode("A");
+
+    const assistantId = `case-review-temp-${nextId()}`;
 
     setMessages((prev) => [
       ...prev,
-      { id: whoAssistantId, role: "assistant", text: "" },
+      { id: assistantId, role: "assistant", text: "", source: "system" },
     ]);
 
     setIsProcessing(true);
@@ -990,11 +876,28 @@ if (!resp.ok) {
       );
 
       if (assistantText.trim()) {
-        await speakText(assistantId, assistantText, "auto");
+        await new Promise<void>((resolve) => {
+          window.requestAnimationFrame(() => resolve());
+        });
+
+        try {
+          await playMessageResponse(assistantId, assistantText);
+        } catch (error) {
+          console.error("Case review playback failed:", error);
+        }
       }
 
       await loadDashboardData();
+    } catch (error) {
+      console.error("Case review failed:", {
+        assistantId,
+        assistantTextLength: assistantText.length,
+        error,
+      });
     } finally {
+      setMessages((prev) =>
+        prev.filter((message) => message.id !== assistantId),
+      );
       setIsProcessing(false);
     }
   }, [
@@ -1003,7 +906,6 @@ if (!resp.ok) {
     isSpeaking,
     loadDashboardData,
     playUITone,
-    speakText,
   ]);
 
   const handleTypedSubmit = useCallback(
@@ -1327,13 +1229,6 @@ if (!resp.ok) {
     setIsRepeatPlaying(true);
     setActiveRepeatMessageId(messageId);
 
-    console.log("Model avatar TTS start:", {
-      messageId,
-      voice: selectedVoice,
-      textLength: responseText.length,
-      segments: segments.length,
-    });
-
     try {
       for (const segment of segments) {
         if (sessionId !== repeatSessionRef.current) return;
@@ -1441,9 +1336,6 @@ if (!resp.ok) {
   ]);
 
   const handleInterloopExplanation = useCallback(async () => {
-    console.log("WHO_IS_CORELOOP_CLICKED");
-    console.log("WHO_CLICKED");
-
     if (isProcessing || isRecording) {
       return;
     }
@@ -1457,27 +1349,14 @@ if (!resp.ok) {
     setMode("A");
 
     const assistantId = nextId();
-    whoDebugMessageIdRef.current = assistantId;
 
-    setMessages((prev) => {
-      const next = [
-        ...prev,
-        { id: assistantId, role: "assistant", text: "" } as ChatMessage,
-      ];
-
-      console.log("WHO_IS_CORELOOP_MESSAGES_AFTER_APPEND", {
-        messageId: assistantId,
-        count: next.length,
-        appended: next[next.length - 1],
-      });
-
-      return next;
-    });
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantId, role: "assistant", text: "" },
+    ]);
     setIsProcessing(true);
 
     try {
-      console.log("WHO_IS_CORELOOP_REQUEST_START");
-
       const resp = await fetch(apiUrl("/api/coreloop-intro"), {
         method: "POST",
         headers: {
@@ -1503,70 +1382,35 @@ if (!resp.ok) {
       const data = parseJsonResponseText(responseText, "Coreloop intro");
       const assistantText = String(data?.text ?? "").trim();
 
-      console.log("WHO_IS_CORELOOP_RESPONSE_RECEIVED", {
-        textLength: assistantText.length,
-      });
-      console.log("WHO_RESPONSE_TEXT", assistantText);
-
       try {
-        setMessages((prev) => {
-          const next = prev.map((message) =>
+        setMessages((prev) =>
+          prev.map((message) =>
             message.id === assistantId
               ? { ...message, text: assistantText }
               : message,
-          );
-
-          console.log("WHO_IS_CORELOOP_MESSAGES_AFTER_TEXT_UPDATE", {
-            messageId: assistantId,
-            count: next.length,
-            updated: next.find((message) => message.id === assistantId) ?? null,
-            last: next[next.length - 1] ?? null,
-          });
-
-          return next;
-        });
+          ),
+        );
 
         setHasExchanged(true);
-        hasAutoScrolledInitialRef.current = false;
-
-        console.log("WHO_IS_CORELOOP_MESSAGE_INSERTED", {
-          messageId: assistantId,
-          textLength: assistantText.length,
-        });
       } catch (error) {
-        console.error("WHO_APPEND_ERROR", error);
+        console.error("Coreloop intro message update failed:", error);
       }
 
       if (assistantText) {
         window.requestAnimationFrame(() => {
           try {
-            scrollMessagesToBottom("smooth");
-          } catch (error) {
-            console.error("WHO_SCROLL_ERROR", error);
-          }
-
-          console.log("WHO_IS_CORELOOP_TTS_START", {
-            messageId: assistantId,
-            textLength: assistantText.length,
-          });
-          console.log("WHO_PLAYBACK_START", {
-            messageId: assistantId,
-            textLength: assistantText.length,
-          });
-
-          try {
             void playMessageResponse(assistantId, assistantText).catch(
               (error) => {
-                console.error("WHO_TTS_ERROR", error);
+                console.error("Coreloop intro playback failed:", error);
               },
             );
           } catch (error) {
-            console.error("WHO_TTS_ERROR", error);
+            console.error("Coreloop intro playback failed:", error);
           }
         }, 0);
       }
     } catch (error) {
-      console.error("WHO_IS_CORELOOP_ERROR", error);
+      console.error("Coreloop intro failed:", error);
     } finally {
       setIsProcessing(false);
     }
@@ -1578,13 +1422,12 @@ if (!resp.ok) {
     isSpeaking,
     playMessageResponse,
     playUITone,
-    scrollMessagesToBottom,
     stopRepeatPlayback,
     stopSpeech,
   ]);
 
   const handleOpenCaseReview = useCallback(
-    (review: {
+    async (review: {
       id: number;
       caseId: number;
       reviewText: string;
@@ -1592,17 +1435,37 @@ if (!resp.ok) {
     }) => {
       playUITone(720);
       setMode("A");
-      hasAutoScrolledInitialRef.current = false;
 
-      setMessages([
+      const assistantId = `case-review-temp-${review.id}`;
+      const reviewText = String(review.reviewText ?? "").trim();
+
+      if (!reviewText) return;
+
+      setMessages((prev) => [
+        ...prev,
         {
-          id: `review-${review.id}`,
+          id: assistantId,
           role: "assistant",
-          text: review.reviewText,
+          text: reviewText,
+          source: "system",
         },
       ]);
+
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      });
+
+      try {
+        await playMessageResponse(assistantId, reviewText);
+      } catch (error) {
+        console.error("Saved case review playback failed:", error);
+      } finally {
+        setMessages((prev) =>
+          prev.filter((message) => message.id !== assistantId),
+        );
+      }
     },
-    [playUITone],
+    [playMessageResponse, playUITone],
   );
 
   const currentStateValue = dashboardData.investigationState ?? "No active case";
@@ -1677,60 +1540,6 @@ if (!resp.ok) {
     },
   ];
 
-  const displayedConversationThreads = (() => {
-    if (messages.length === 0) {
-      return recentConversationThreads;
-    }
-
-    const activeThreadId = conversationId ?? -1;
-
-    return [
-      {
-        id: activeThreadId,
-        title: "Current Conversation",
-        messages,
-      },
-      ...recentConversationThreads.filter(
-        (thread) => thread.id !== activeThreadId,
-      ),
-    ].slice(0, 3);
-  })();
-
-  useEffect(() => {
-    const whoMessageId = whoDebugMessageIdRef.current;
-    if (!whoMessageId) return;
-
-    const visibleThreads =
-      messages.length === 0
-        ? recentConversationThreads
-        : [
-            {
-              id: conversationId ?? -1,
-              title: "Current Conversation",
-              messages,
-            },
-            ...recentConversationThreads.filter(
-              (thread) => thread.id !== (conversationId ?? -1),
-            ),
-          ].slice(0, 3);
-
-    console.log("WHO_IS_CORELOOP_DISPLAY_THREADS_AFTER_UPDATE", {
-      messageId: whoMessageId,
-      messagesCount: messages.length,
-      messageInMessages:
-        messages.find((message) => message.id === whoMessageId) ?? null,
-      threadCount: visibleThreads.length,
-      visibleThreads: visibleThreads.map((thread) => ({
-        id: thread.id,
-        messageCount: thread.messages.length,
-        containsWhoMessage: thread.messages.some(
-          (message) => message.id === whoMessageId,
-        ),
-        last: thread.messages[thread.messages.length - 1] ?? null,
-      })),
-    });
-  }, [conversationId, messages, recentConversationThreads]);
-
   const secondaryMangoStyle = {
     color: "rgba(255,200,61,0.92)",
     textShadow: "0 0 10px rgba(255,184,0,0.16)",
@@ -1743,6 +1552,14 @@ if (!resp.ok) {
     color: "rgba(255,200,61,0.72)",
     textShadow: "0 0 10px rgba(255,184,0,0.12)",
   };
+  const conversationThreads: ConversationThread[] = [
+    ...recentConversationThreads,
+    {
+      id: conversationId ?? "current",
+      messages,
+      isCurrent: true,
+    },
+  ].filter((thread) => thread.messages.length > 0);
 
   if (isHydratingSettings) {
     return null;
@@ -1823,302 +1640,29 @@ return (
               </div>
             </div>
 
-            <div
-              ref={messageScrollRef}
-              className="absolute left-0 right-0 z-10 overflow-y-auto overflow-x-hidden px-5 sm:px-8"
-              style={{
-                top: "calc(env(safe-area-inset-top) + 3rem)",
-                bottom: "34vh",
-                WebkitOverflowScrolling: "touch",
-                WebkitMaskImage:
-                  "linear-gradient(to bottom, transparent 0%, black 9%, black 84%, rgba(0,0,0,0.72) 92%, transparent 100%)",
-                maskImage:
-                  "linear-gradient(to bottom, transparent 0%, black 9%, black 84%, rgba(0,0,0,0.72) 92%, transparent 100%)",
-              }}
-            >
-              <div className="mx-auto w-full max-w-[700px] py-8">
-                <div className="flex w-full flex-col gap-7">
-                  {displayedConversationThreads.length === 0 ? (
-                    <div className="pb-4 text-center">
-                      <div
-                        className="text-sm"
-                        style={{
-                          color: "rgba(255,200,61,0.84)",
-                          textShadow: "0 0 12px rgba(255,184,0,0.18)",
-                        }}
-                      >
-                        Start wherever the signal is loudest.
-                      </div>
-                      <div className="mt-2 text-sm leading-relaxed text-gray-500">
-                        Voice stays primary. Typing is here when it is easier.
-                      </div>
-                    </div>
-                  ) : (
-                    displayedConversationThreads.map((thread, threadIndex) => (
-                      <section
-                        key={thread.id}
-                        className="flex flex-col gap-4"
-                        aria-label={`Conversation ${threadIndex + 1}`}
-                      >
-                        {threadIndex > 0 && (
-                          <div
-                            className="h-px w-full"
-                            style={{
-                              background:
-                                "linear-gradient(90deg, transparent, rgba(255,200,61,0.16), transparent)",
-                            }}
-                          />
-                        )}
-
-                        <div className="flex flex-col gap-5">
-                          {thread.messages.map((message) => {
-                            const isUser = message.role === "user";
-                            const messagePlaybackId = `${thread.id}-${message.id}`;
-                            const isActiveRepeatAvatar =
-                              !isUser &&
-                              isRepeatPlaying &&
-                              activeRepeatMessageId === messagePlaybackId;
-                            const isCurrentThread = thread.id === conversationId;
-                            const isEditingCurrentMessage =
-                              isCurrentThread &&
-                              isUser &&
-                              editingMessageId === message.id;
-
-                            return (
-                              <div
-                                key={`${thread.id}-${message.id}`}
-                                className={`flex items-start ${
-                                  isUser
-                                    ? "justify-end gap-2.5"
-                                    : "justify-start gap-3"
-                                }`}
-                              >
-                                {!isUser && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      playMessageResponse(
-                                        messagePlaybackId,
-                                        message.text,
-                                      )
-                                    }
-                                    className="relative mt-1.5 h-9 w-9 shrink-0 rounded-full transition-transform active:scale-95"
-                                    aria-label={
-                                      isActiveRepeatAvatar
-                                        ? "Stop CoreLoop response"
-                                        : "Play CoreLoop response"
-                                    }
-                                  >
-                                    <div
-                                      className={`absolute inset-[-5px] rounded-full ${
-                                        isActiveRepeatAvatar
-                                          ? "animate-pulse"
-                                          : ""
-                                      }`}
-                                      style={{
-                                        background:
-                                          isActiveRepeatAvatar
-                                            ? "radial-gradient(circle, rgba(255,213,87,0.36) 0%, rgba(255,176,0,0.18) 42%, transparent 74%)"
-                                            : "radial-gradient(circle, rgba(255,200,61,0.14) 0%, rgba(255,176,0,0.075) 42%, transparent 72%)",
-                                        boxShadow:
-                                          isActiveRepeatAvatar
-                                            ? "0 0 22px rgba(255,200,61,0.38)"
-                                            : "0 0 18px rgba(255,184,0,0.16)",
-                                      }}
-                                    />
-                                    <div
-                                      className="absolute inset-0 overflow-hidden rounded-full border"
-                                      style={{
-                                        borderColor: "rgba(255,200,61,0.48)",
-                                        background: "rgba(10,10,10,0.98)",
-                                        boxShadow:
-                                          isActiveRepeatAvatar
-                                            ? "inset 0 0 10px rgba(255,200,61,0.18), 0 0 0 1px rgba(255,200,61,0.26), 0 0 14px rgba(255,184,0,0.2)"
-                                            : "inset 0 0 10px rgba(255,200,61,0.12), 0 0 0 1px rgba(255,176,0,0.065)",
-                                      }}
-                                    >
-                                      <img
-                                        src={selectedVoiceAvatar}
-                                        alt=""
-                                        className="h-full w-full object-cover"
-                                      />
-                                    </div>
-                                  </button>
-                                )}
-
-                                <div
-                                  className={`relative whitespace-pre-wrap ${
-                                    isUser
-                                      ? "order-first max-w-[72%] rounded-[8px] rounded-tr-[3px] px-4 py-3 text-right"
-                                      : "max-w-[88%] rounded-[10px] rounded-tl-[3px] px-5 py-4"
-                                  }`}
-                                  style={
-                                    isUser
-                                      ? {
-                                          fontSize: "10.5px",
-                                          lineHeight: "1.28",
-                                          color: "rgba(255,200,61,0.74)",
-                                          background:
-                                            "linear-gradient(180deg, rgba(255,176,0,0.06), rgba(255,176,0,0.022))",
-                                          border:
-                                            "1px solid rgba(255,176,0,0.105)",
-                                          boxShadow:
-                                            "0 10px 22px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.02)",
-                                        }
-                                      : {
-                                          fontSize: "11.5px",
-                                          lineHeight: "1.32",
-                                          color: "rgba(229,231,235,0.89)",
-                                          background:
-                                            "linear-gradient(180deg, rgba(18,18,18,0.98), rgba(8,8,8,0.96))",
-                                          border:
-                                            "1px solid rgba(255,176,0,0.15)",
-                                          borderLeft:
-                                            "2px solid rgba(255,200,61,0.44)",
-                                          boxShadow:
-                                            "0 18px 40px rgba(0,0,0,0.34), 0 0 20px rgba(255,176,0,0.04), inset 0 1px 0 rgba(255,255,255,0.035)",
-                                        }
-                                  }
-                                >
-                                  {!isUser && (
-                                    <div
-                                      className="pointer-events-none absolute inset-x-4 top-0 h-px"
-                                      style={{
-                                        background:
-                                          "linear-gradient(90deg, rgba(255,200,61,0.32), rgba(255,200,61,0.045), transparent)",
-                                      }}
-                                    />
-                                  )}
-
-                                  {isEditingCurrentMessage ? (
-                                    <div className="flex flex-col gap-2 text-left">
-                                      <input
-                                        value={editingText}
-                                        onChange={(event) =>
-                                          setEditingText(event.target.value)
-                                        }
-                                        className="w-full rounded-[6px] border bg-black/40 px-2.5 py-2 text-sm text-gray-100 outline-none"
-                                        style={{
-                                          borderColor: "rgba(255,176,0,0.28)",
-                                        }}
-                                        autoFocus
-                                      />
-                                      <div className="flex justify-end gap-3 text-xs">
-                                        <button
-                                          type="button"
-                                          onClick={handleCancelTranscriptEdit}
-                                          className="transition-opacity hover:opacity-80"
-                                          style={softMangoControlStyle}
-                                        >
-                                          Cancel
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={handleSubmitTranscriptEdit}
-                                          className="transition-opacity hover:opacity-90"
-                                          style={secondaryMangoStyle}
-                                        >
-                                          Resend
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    message.text
-                                  )}
-
-                                  {isCurrentThread &&
-                                    isUser &&
-                                    message.source === "voice" &&
-                                    editingMessageId !== message.id && (
-                                      <div className="mt-2 flex justify-end gap-3 text-[11px] leading-none">
-                                        <button
-                                          type="button"
-                                          disabled={
-                                            isProcessing ||
-                                            isRecording ||
-                                            isSpeaking
-                                          }
-                                          onClick={() =>
-                                            handleEditTranscript(message)
-                                          }
-                                          className="transition-opacity hover:opacity-90 disabled:opacity-35"
-                                          style={softMangoControlStyle}
-                                        >
-                                          Edit
-                                        </button>
-                                        <button
-                                          type="button"
-                                          disabled={isProcessing || isRecording}
-                                          onClick={handleRetryTranscript}
-                                          className="transition-opacity hover:opacity-90 disabled:opacity-35"
-                                          style={softMangoControlStyle}
-                                        >
-                                          Retry
-                                        </button>
-                                        <button
-                                          type="button"
-                                          disabled={
-                                            isProcessing ||
-                                            isRecording ||
-                                            isSpeaking
-                                          }
-                                          onClick={() =>
-                                            resendTranscript(message.text)
-                                          }
-                                          className="transition-opacity hover:opacity-90 disabled:opacity-35"
-                                          style={secondaryMangoStyle}
-                                        >
-                                          Resend
-                                        </button>
-                                      </div>
-                                    )}
-                                </div>
-
-                                {isUser && (
-                                  <div className="relative mt-1 h-8 w-8 shrink-0 overflow-hidden rounded-full">
-                                    {settingsData.profileImageUrl ? (
-                                      <img
-                                        src={settingsData.profileImageUrl}
-                                        alt="User"
-                                        className="h-full w-full rounded-full object-cover"
-                                      />
-                                    ) : (
-                                      <>
-                                        <div
-                                          className="absolute inset-0 rounded-full border"
-                                          style={{
-                                            borderColor:
-                                              "rgba(255,176,0,0.32)",
-                                            background:
-                                              "linear-gradient(145deg, rgba(255,176,0,0.12), rgba(22,22,22,0.95))",
-                                            boxShadow:
-                                              "0 0 13px rgba(255,176,0,0.08), inset 0 0 8px rgba(255,176,0,0.06)",
-                                          }}
-                                        />
-                                        <div
-                                          className="absolute inset-[5px] rounded-full"
-                                          style={{
-                                            background:
-                                              "linear-gradient(145deg, rgba(255,200,61,0.18), rgba(255,176,0,0.035), rgba(8,8,8,0.96))",
-                                            boxShadow:
-                                              "inset 0 0 8px rgba(255,200,61,0.08)",
-                                          }}
-                                        />
-                                      </>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </section>
-                    ))
-                  )}
-                  <div ref={messageEndRef} />
-                </div>
-              </div>
-            </div>
+            <ChatView
+              messages={messages}
+              conversationThreads={conversationThreads}
+              conversationId={conversationId}
+              selectedVoiceAvatar={selectedVoiceAvatar}
+              userAvatarUrl={settingsData.profileImageUrl}
+              isRepeatPlaying={isRepeatPlaying}
+              activeRepeatMessageId={activeRepeatMessageId}
+              onPlayMessageResponse={playMessageResponse}
+              editingMessageId={editingMessageId}
+              editingText={editingText}
+              onEditingTextChange={setEditingText}
+              onCancelTranscriptEdit={handleCancelTranscriptEdit}
+              onSubmitTranscriptEdit={handleSubmitTranscriptEdit}
+              onEditTranscript={handleEditTranscript}
+              onRetryTranscript={handleRetryTranscript}
+              onResendTranscript={resendTranscript}
+              isProcessing={isProcessing}
+              isRecording={isRecording}
+              isSpeaking={isSpeaking}
+              softMangoControlStyle={softMangoControlStyle}
+              secondaryMangoStyle={secondaryMangoStyle}
+            />
 
             <div
               className="absolute left-0 right-0 z-10 flex items-center justify-center px-4"

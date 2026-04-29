@@ -1,209 +1,343 @@
-import {
-  useState,
-  useRef,
-  useEffect,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
-import { motion } from "framer-motion";
-import { type ChatMessage } from "@/pages/home";
-import { sendMessage } from "@/lib/api";
+import { useEffect, useRef, type CSSProperties } from "react";
+import { type ChatMessage, type ConversationThread } from "@/pages/home";
 
-interface ChatViewProps {
+type ChatViewProps = {
   messages: ChatMessage[];
-  setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
-  onBack?: () => void;
-  playUITone: (frequency?: number, durationMs?: number) => void;
-  onConversationIdChange: (conversationId: number) => void;
-  onPlaybackControl: () => void;
-  playbackLabel: string;
-  onSpeakText: (
-    messageId: string,
-    text: string,
-    mode?: "auto" | "repeat",
-  ) => Promise<void>;
-  onCaseReview: () => void;
-}
-
-let msgCounter = 1000;
-function nextChatId() {
-  return String(++msgCounter);
-}
-
-function mergeStream(existing: string, incoming: string) {
-  const maxOverlap = Math.min(existing.length, incoming.length);
-
-  for (let i = maxOverlap; i > 0; i--) {
-    if (existing.endsWith(incoming.slice(0, i))) {
-      return existing + incoming.slice(i);
-    }
-  }
-
-  return existing + incoming;
-}
-
-function formatAssistantText(text: string) {
-  if (!text) return text;
-
-  return text
-    .replace(/(\d+)\./g, "\n$1. ")
-    .replace(/\n{2,}/g, "\n\n")
-    .trim();
-}
+  conversationThreads?: ConversationThread[];
+  conversationId: number | null;
+  selectedVoiceAvatar: string;
+  userAvatarUrl?: string;
+  isRepeatPlaying: boolean;
+  activeRepeatMessageId: string | null;
+  onPlayMessageResponse: (messageId: string, text: string) => void;
+  editingMessageId: string | null;
+  editingText: string;
+  onEditingTextChange: (value: string) => void;
+  onCancelTranscriptEdit: () => void;
+  onSubmitTranscriptEdit: () => void;
+  onEditTranscript: (message: ChatMessage) => void;
+  onRetryTranscript: () => void;
+  onResendTranscript: (text: string) => void;
+  isProcessing: boolean;
+  isRecording: boolean;
+  isSpeaking: boolean;
+  softMangoControlStyle: CSSProperties;
+  secondaryMangoStyle: CSSProperties;
+};
 
 export function ChatView({
   messages,
-  setMessages,
-  onBack,
-  playUITone,
-  onConversationIdChange,
-  onPlaybackControl,
-  playbackLabel,
-  onSpeakText,
+  conversationThreads,
+  conversationId,
+  selectedVoiceAvatar,
+  userAvatarUrl,
+  isRepeatPlaying,
+  activeRepeatMessageId,
+  onPlayMessageResponse,
+  editingMessageId,
+  editingText,
+  onEditingTextChange,
+  onCancelTranscriptEdit,
+  onSubmitTranscriptEdit,
+  onEditTranscript,
+  onRetryTranscript,
+  onResendTranscript,
+  isProcessing,
+  isRecording,
+  isSpeaking,
+  softMangoControlStyle,
+  secondaryMangoStyle,
 }: ChatViewProps) {
-  const [inputValue, setInputValue] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const conversationIdRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    const storedId = localStorage.getItem("conversationId");
-    const parsed = storedId ? Number(storedId) : NaN;
-
-    if (Number.isFinite(parsed)) {
-      conversationIdRef.current = parsed;
-    }
-  }, []);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const visibleThreads =
+    conversationThreads && conversationThreads.length > 0
+      ? conversationThreads
+      : [
+          {
+            id: conversationId ?? "current",
+            messages,
+            isCurrent: true,
+          },
+        ];
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const handleSend = async () => {
-    const trimmed = inputValue.trim();
-    if (!trimmed || isStreaming) return;
-
-    setInputValue("");
-
-    const userMsgId = nextChatId();
-    const assistantMsgId = nextChatId();
-
-    setMessages((prev) => [
-      ...prev,
-      { id: userMsgId, role: "user", text: trimmed },
-      { id: assistantMsgId, role: "assistant", text: "" },
-    ]);
-
-    setIsStreaming(true);
-    let assistantText = "";
-
-    try {
-      await sendMessage(
-        conversationIdRef.current,
-        trimmed,
-        (id: number) => {
-          conversationIdRef.current = id;
-          onConversationIdChange(id);
-        },
-        (chunk: string) => {
-          assistantText = mergeStream(assistantText, chunk);
-
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsgId ? { ...m, text: assistantText } : m,
-            ),
-          );
-        },
-      );
-
-      if (assistantText.trim()) {
-        await onSpeakText(assistantMsgId, assistantText, "auto");
-      }
-    } finally {
-      setIsStreaming(false);
-    }
-  };
+    messageEndRef.current?.scrollIntoView({ block: "end" });
+  }, [messages, visibleThreads.length]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="h-screen min-h-0 flex flex-col bg-black relative overflow-hidden"
+    <div
+      className="absolute left-0 right-0 z-10 overflow-y-auto overflow-x-hidden px-5 sm:px-8"
+      style={{
+        top: "calc(env(safe-area-inset-top) + 3rem)",
+        bottom: "34vh",
+        WebkitOverflowScrolling: "touch",
+        WebkitMaskImage:
+          "linear-gradient(to bottom, transparent 0%, black 9%, black 84%, rgba(0,0,0,0.72) 92%, transparent 100%)",
+        maskImage:
+          "linear-gradient(to bottom, transparent 0%, black 9%, black 84%, rgba(0,0,0,0.72) 92%, transparent 100%)",
+      }}
     >
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-14">
-        <div className="max-w-xl mx-auto space-y-5 py-5">
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${
-                msg.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div className="max-w-[85%] whitespace-pre-wrap break-words text-lg font-light text-[#e0e0e0] leading-relaxed">
-                {msg.role === "assistant"
-                  ? formatAssistantText(msg.text)
-                  : msg.text}
+      <div className="mx-auto w-full max-w-[700px] py-8">
+        <div className="flex w-full flex-col gap-7">
+          {visibleThreads.every((thread) => thread.messages.length === 0) ? (
+            <div className="pb-4 text-center">
+              <div
+                className="text-sm"
+                style={{
+                  color: "rgba(255,200,61,0.84)",
+                  textShadow: "0 0 12px rgba(255,184,0,0.18)",
+                }}
+              >
+                Start wherever the signal is loudest.
+              </div>
+              <div className="mt-2 text-sm leading-relaxed text-gray-500">
+                Voice stays primary. Typing is here when it is easier.
               </div>
             </div>
-          ))}
-
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      <div
-        className="border-t border-[#1a1a1a] p-4 shrink-0"
-        style={{
-          paddingBottom: "max(env(safe-area-inset-bottom), 1rem)",
-        }}
-      >
-        <div className="max-w-xl mx-auto flex items-end gap-3">
-          <textarea
-            ref={textareaRef}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Type here"
-            className="flex-1 bg-transparent resize-none outline-none text-[#e0e0e0]"
-            rows={1}
-          />
-
-          <button
-            onClick={onPlaybackControl}
-            style={
-              playbackLabel === "Stop"
-                ? {
-                    color: "#ffc83d",
-                    textShadow: "0 0 10px rgba(255,184,0,0.28)",
+          ) : (
+            <div className="flex flex-col gap-7">
+              {visibleThreads.map((thread, threadIndex) => (
+                <section
+                  key={thread.id}
+                  className="flex flex-col gap-5"
+                  aria-label={
+                    thread.isCurrent
+                      ? "Current conversation"
+                      : "Previous conversation"
                   }
-                : undefined
-            }
-          >
-            {playbackLabel}
-          </button>
-        </div>
+                >
+                  {threadIndex > 0 && (
+                    <div
+                      className="h-px w-full"
+                      style={{
+                        background:
+                          "linear-gradient(90deg, transparent, rgba(255,200,61,0.16), transparent)",
+                      }}
+                    />
+                  )}
 
-        {onBack && (
-          <div className="text-center pt-3">
-            <button
-              onClick={() => {
-                playUITone(720);
-                onBack();
-              }}
-              className="text-sm text-[#666] hover:text-[#888]"
-            >
-              Prefer speaking?
-            </button>
-          </div>
-        )}
+                  {thread.messages.map((message) => {
+                    const isUser = message.role === "user";
+                    const messagePlaybackId = thread.isCurrent
+                      ? message.id
+                      : `${thread.id}-${message.id}`;
+                    const isActiveRepeatAvatar =
+                      !isUser &&
+                      isRepeatPlaying &&
+                      activeRepeatMessageId === messagePlaybackId;
+                    const canEditMessage = Boolean(thread.isCurrent);
+                    const isEditingCurrentMessage =
+                      canEditMessage && isUser && editingMessageId === message.id;
+
+                    return (
+                      <div
+                        key={`${thread.id}-${message.id}`}
+                        className={`flex items-start ${
+                          isUser ? "justify-end gap-2.5" : "justify-start gap-3"
+                        }`}
+                      >
+                    {!isUser && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onPlayMessageResponse(messagePlaybackId, message.text)
+                        }
+                        className="relative mt-1.5 h-9 w-9 shrink-0 rounded-full transition-transform active:scale-95"
+                        aria-label={
+                          isActiveRepeatAvatar
+                            ? "Stop CoreLoop response"
+                            : "Play CoreLoop response"
+                        }
+                      >
+                        <div
+                          className={`absolute inset-[-5px] rounded-full ${
+                            isActiveRepeatAvatar ? "animate-pulse" : ""
+                          }`}
+                          style={{
+                            background: isActiveRepeatAvatar
+                              ? "radial-gradient(circle, rgba(255,213,87,0.36) 0%, rgba(255,176,0,0.18) 42%, transparent 74%)"
+                              : "radial-gradient(circle, rgba(255,200,61,0.14) 0%, rgba(255,176,0,0.075) 42%, transparent 72%)",
+                            boxShadow: isActiveRepeatAvatar
+                              ? "0 0 22px rgba(255,200,61,0.38)"
+                              : "0 0 18px rgba(255,184,0,0.16)",
+                          }}
+                        />
+                        <div
+                          className="absolute inset-0 overflow-hidden rounded-full border"
+                          style={{
+                            borderColor: "rgba(255,200,61,0.48)",
+                            background: "rgba(10,10,10,0.98)",
+                            boxShadow: isActiveRepeatAvatar
+                              ? "inset 0 0 10px rgba(255,200,61,0.18), 0 0 0 1px rgba(255,200,61,0.26), 0 0 14px rgba(255,184,0,0.2)"
+                              : "inset 0 0 10px rgba(255,200,61,0.12), 0 0 0 1px rgba(255,176,0,0.065)",
+                          }}
+                        >
+                          <img
+                            src={selectedVoiceAvatar}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
+                      </button>
+                    )}
+
+                    <div
+                      className={`relative whitespace-pre-wrap ${
+                        isUser
+                          ? "order-first max-w-[72%] rounded-[8px] rounded-tr-[3px] px-4 py-3 text-right"
+                          : "max-w-[88%] rounded-[10px] rounded-tl-[3px] px-5 py-4"
+                      }`}
+                      style={
+                        isUser
+                          ? {
+                              fontSize: "10.5px",
+                              lineHeight: "1.28",
+                              color: "rgba(255,200,61,0.74)",
+                              background:
+                                "linear-gradient(180deg, rgba(255,176,0,0.06), rgba(255,176,0,0.022))",
+                              border: "1px solid rgba(255,176,0,0.105)",
+                              boxShadow:
+                                "0 10px 22px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.02)",
+                            }
+                          : {
+                              fontSize: "11.5px",
+                              lineHeight: "1.32",
+                              color: "rgba(229,231,235,0.89)",
+                              background:
+                                "linear-gradient(180deg, rgba(18,18,18,0.98), rgba(8,8,8,0.96))",
+                              border: "1px solid rgba(255,176,0,0.15)",
+                              borderLeft: "2px solid rgba(255,200,61,0.44)",
+                              boxShadow:
+                                "0 18px 40px rgba(0,0,0,0.34), 0 0 20px rgba(255,176,0,0.04), inset 0 1px 0 rgba(255,255,255,0.035)",
+                            }
+                      }
+                    >
+                      {!isUser && (
+                        <div
+                          className="pointer-events-none absolute inset-x-4 top-0 h-px"
+                          style={{
+                            background:
+                              "linear-gradient(90deg, rgba(255,200,61,0.32), rgba(255,200,61,0.045), transparent)",
+                          }}
+                        />
+                      )}
+
+                      {isEditingCurrentMessage ? (
+                        <div className="flex flex-col gap-2 text-left">
+                          <input
+                            value={editingText}
+                            onChange={(event) =>
+                              onEditingTextChange(event.target.value)
+                            }
+                            className="w-full rounded-[6px] border bg-black/40 px-2.5 py-2 text-sm text-gray-100 outline-none"
+                            style={{
+                              borderColor: "rgba(255,176,0,0.28)",
+                            }}
+                            autoFocus
+                          />
+                          <div className="flex justify-end gap-3 text-xs">
+                            <button
+                              type="button"
+                              onClick={onCancelTranscriptEdit}
+                              className="transition-opacity hover:opacity-80"
+                              style={softMangoControlStyle}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={onSubmitTranscriptEdit}
+                              className="transition-opacity hover:opacity-90"
+                              style={secondaryMangoStyle}
+                            >
+                              Resend
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        message.text
+                      )}
+
+                      {conversationId != null &&
+                        canEditMessage &&
+                        isUser &&
+                        message.source === "voice" &&
+                        editingMessageId !== message.id && (
+                          <div className="mt-2 flex justify-end gap-3 text-[11px] leading-none">
+                            <button
+                              type="button"
+                              disabled={isProcessing || isRecording || isSpeaking}
+                              onClick={() => onEditTranscript(message)}
+                              className="transition-opacity hover:opacity-90 disabled:opacity-35"
+                              style={softMangoControlStyle}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isProcessing || isRecording}
+                              onClick={onRetryTranscript}
+                              className="transition-opacity hover:opacity-90 disabled:opacity-35"
+                              style={softMangoControlStyle}
+                            >
+                              Retry
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isProcessing || isRecording || isSpeaking}
+                              onClick={() => onResendTranscript(message.text)}
+                              className="transition-opacity hover:opacity-90 disabled:opacity-35"
+                              style={secondaryMangoStyle}
+                            >
+                              Resend
+                            </button>
+                          </div>
+                        )}
+                    </div>
+
+                    {isUser && (
+                      <div className="relative mt-1 h-8 w-8 shrink-0 overflow-hidden rounded-full">
+                        {userAvatarUrl ? (
+                          <img
+                            src={userAvatarUrl}
+                            alt="User"
+                            className="h-full w-full rounded-full object-cover"
+                          />
+                        ) : (
+                          <>
+                            <div
+                              className="absolute inset-0 rounded-full border"
+                              style={{
+                                borderColor: "rgba(255,176,0,0.32)",
+                                background:
+                                  "linear-gradient(145deg, rgba(255,176,0,0.12), rgba(22,22,22,0.95))",
+                                boxShadow:
+                                  "0 0 13px rgba(255,176,0,0.08), inset 0 0 8px rgba(255,176,0,0.06)",
+                              }}
+                            />
+                            <div
+                              className="absolute inset-[5px] rounded-full"
+                              style={{
+                                background:
+                                  "linear-gradient(145deg, rgba(255,200,61,0.18), rgba(255,176,0,0.035), rgba(8,8,8,0.96))",
+                                boxShadow:
+                                  "inset 0 0 8px rgba(255,200,61,0.08)",
+                              }}
+                            />
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+                </section>
+              ))}
+            </div>
+          )}
+          <div ref={messageEndRef} />
+        </div>
       </div>
-    </motion.div>
+    </div>
   );
 }
