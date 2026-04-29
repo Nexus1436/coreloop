@@ -1450,6 +1450,12 @@ function hasExplicitNewCaseLanguage(text: string): boolean {
   );
 }
 
+function isReturnToCaseSignal(text: string): boolean {
+  return /\b(?:go back to|going back to|back to|returning to|that issue|the walking issue|the shoulder issue|that problem|this issue again)\b/i.test(
+    text.trim(),
+  );
+}
+
 function isMeaningfulCaseBoundaryValue(value: string | null | undefined) {
   const normalized = normalizeOptionalLabel(value);
   return (
@@ -1457,6 +1463,49 @@ function isMeaningfulCaseBoundaryValue(value: string | null | undefined) {
     normalized !== "general movement" &&
     normalized !== "unspecified"
   );
+}
+
+async function resolveReturnToExistingCase({
+  userId,
+  userText,
+}: {
+  userId: string;
+  userText: string;
+}): Promise<ResolvedCaseRow | null> {
+  const userCases = await db
+    .select({
+      id: cases.id,
+      userId: cases.userId,
+      conversationId: cases.conversationId,
+      movementContext: cases.movementContext,
+      activityType: cases.activityType,
+      status: cases.status,
+    })
+    .from(cases)
+    .where(eq(cases.userId, userId))
+    .orderBy(desc(cases.updatedAt), desc(cases.id))
+    .limit(6);
+
+  const derived = deriveCaseContext(userText, null);
+
+  for (const userCase of userCases) {
+    if (!isOpenCaseStatus(userCase.status)) continue;
+
+    const matchMovement =
+      isMeaningfulCaseBoundaryValue(userCase.movementContext) &&
+      normalizeCaseKey(userCase.movementContext) ===
+        normalizeCaseKey(derived.movementContext);
+    const matchActivity =
+      isMeaningfulCaseBoundaryValue(userCase.activityType) &&
+      normalizeCaseKey(userCase.activityType) ===
+        normalizeCaseKey(derived.activityType);
+
+    if (matchMovement || matchActivity) {
+      return userCase;
+    }
+  }
+
+  return null;
 }
 
 async function shouldStartNewCaseForSignal({
@@ -4387,6 +4436,7 @@ Produce the response now.
       let continuityContextReason = continuityContextAllowed
         ? "depends_on_prior_conversation"
         : "no_case_fit_established";
+      let returnToCaseMatched = false;
 
       try {
         if (shouldCreateCase && derivedCaseContext) {
@@ -4394,7 +4444,30 @@ Produce the response now.
             resolvedActiveCase = await getConversationOpenCase(userId, convoId);
           }
 
-          if (resolvedActiveCase) {
+          if (isReturnToCaseSignal(userText)) {
+            const matchedCase = await resolveReturnToExistingCase({
+              userId,
+              userText,
+            });
+
+            if (matchedCase) {
+              console.log("CASE_RETURN_MATCH", {
+                userId,
+                conversationId: convoId,
+                previousResolvedCaseId: resolvedActiveCase?.id ?? null,
+                matchedCaseId: matchedCase.id,
+                derivedMovementContext: derivedCaseContext.movementContext,
+                derivedActivityType: derivedCaseContext.activityType,
+              });
+
+              resolvedActiveCase = matchedCase;
+              returnToCaseMatched = true;
+              continuityContextAllowed = true;
+              continuityContextReason = "explicit_return_to_case";
+            }
+          }
+
+          if (resolvedActiveCase && !returnToCaseMatched) {
             const boundaryDecision = await shouldStartNewCaseForSignal({
               userText,
               currentCase: resolvedActiveCase,
@@ -4436,7 +4509,7 @@ Produce the response now.
               continuityContextAllowed = true;
               continuityContextReason = boundaryDecision.reason ?? "same_case_fit";
             }
-          } else {
+          } else if (!resolvedActiveCase) {
             continuityContextAllowed = false;
             continuityContextReason = "new_case_no_prior_case_fit";
           }
@@ -4451,6 +4524,11 @@ Produce the response now.
               bodyRegion: derivedBodyRegion,
               signalType: derivedSignalType,
             });
+
+            await db
+              .update(cases)
+              .set({ updatedAt: new Date() })
+              .where(eq(cases.id, resolvedActiveCase.id));
           } else {
             let newCase: ResolvedCaseRow | undefined;
 
