@@ -2876,24 +2876,31 @@ function isValidResponse(text: string): boolean {
   return true;
 }
 
-function violatesResponseArc(text: string): boolean {
-  if (!text?.trim()) return true;
+function getResponseArcViolationReasons(text: string): string[] {
+  const reasons: string[] = [];
+
+  if (!text?.trim()) return ["empty_response"];
 
   const normalized = text.toLowerCase();
 
   const genericCoachPatterns = [
-    /\bfocus on strengthening\b/,
-    /\bwork on\b/,
-    /\bstrengthen\b/,
-    /\bimprove stability\b/,
-    /\bimprove control\b/,
-    /\bperform .*exercise\b/,
-    /\bdo .*exercise\b/,
-    /\bwall slide\b/,
+    { label: "focus_on_exercises", pattern: /\bfocus on exercises\b/ },
+    { label: "focus_on_strengthening", pattern: /\bfocus on strengthening\b/ },
+    { label: "work_on", pattern: /\bwork on\b/ },
+    { label: "strengthen", pattern: /\bstrengthen\b/ },
+    { label: "improve_stability", pattern: /\bimprove stability\b/ },
+    { label: "improve_control", pattern: /\bimprove control\b/ },
+    { label: "perform_exercise", pattern: /\bperform .*exercise\b/ },
+    { label: "do_exercise", pattern: /\bdo .*exercise\b/ },
+    { label: "single_leg_bridge", pattern: /\bsingle[-\s]?leg bridge\b/ },
+    { label: "bridge_exercise", pattern: /\bbridge exercise\b/ },
+    { label: "wall_slide", pattern: /\bwall slide\b/ },
   ];
 
-  if (genericCoachPatterns.some((pattern) => pattern.test(normalized))) {
-    return true;
+  for (const entry of genericCoachPatterns) {
+    if (entry.pattern.test(normalized)) {
+      reasons.push(`banned_coach_language:${entry.label}`);
+    }
   }
 
   const hasMechanism =
@@ -2904,7 +2911,7 @@ function violatesResponseArc(text: string): boolean {
     /\bdue to\b/.test(normalized) ||
     /\bbecause\b/.test(normalized);
 
-  if (!hasMechanism) return true;
+  if (!hasMechanism) reasons.push("missing_mechanism");
 
   const hasFailurePrediction =
     /\bwill likely\b/.test(normalized) ||
@@ -2916,18 +2923,28 @@ function violatesResponseArc(text: string): boolean {
     /\bunder load\b/.test(normalized) ||
     /\bwhen fatigue\b/.test(normalized);
 
-  if (!hasFailurePrediction) return true;
+  if (!hasFailurePrediction) reasons.push("missing_failure_prediction");
 
   const hasLever =
     /\b(?:stay|keep|shift|let|load|hold|reduce|slow|soften|allow)\b/.test(
       normalized,
     );
 
-  if (!hasLever) return true;
+  if (!hasLever) reasons.push("missing_movement_lever");
 
-  if (text.length > 850) return true;
+  if (text.length > 850) reasons.push("too_long");
 
-  return false;
+  return reasons;
+}
+
+function violatesResponseArc(text: string): boolean {
+  return getResponseArcViolationReasons(text).length > 0;
+}
+
+function containsBannedCoachLanguage(text: string): boolean {
+  return getResponseArcViolationReasons(text).some((reason) =>
+    reason.startsWith("banned_coach_language:"),
+  );
 }
 
 type ExtractableResponseType = "investigation" | "case_review" | "system";
@@ -4898,20 +4915,34 @@ ${ACTIVE_PROMPT}
 
       let assistantText = await runCompletion(openai, chatMessages);
 
-      if (!isCaseReview && violatesResponseArc(assistantText)) {
-        console.log("RESPONSE_ARC_VIOLATION_RETRY", {
+      if (!isCaseReview) {
+        console.log("ARC_VALIDATOR_START", {
+          stage: "initial",
           assistantTextLength: assistantText.length,
         });
+        let arcViolationReasons = getResponseArcViolationReasons(assistantText);
+        console.log("ARC_VALIDATOR_RESULT", {
+          stage: "initial",
+          violates: arcViolationReasons.length > 0,
+          reasons: arcViolationReasons,
+        });
 
-        assistantText = await runCompletion(openai, [
-          ...chatMessages,
-          {
-            role: "assistant",
-            content: assistantText,
-          },
-          {
-            role: "user",
-            content: `
+        if (arcViolationReasons.length > 0) {
+          console.log("ARC_RETRY_START", {
+            stage: "initial",
+            assistantTextLength: assistantText.length,
+            reasons: arcViolationReasons,
+          });
+
+          assistantText = await runCompletion(openai, [
+            ...chatMessages,
+            {
+              role: "assistant",
+              content: assistantText,
+            },
+            {
+              role: "user",
+              content: `
 Your previous response violated the Interloop response arc.
 
 Rewrite it now.
@@ -4941,8 +4972,17 @@ The lever must be a movement cue, not a training recommendation.
 
 Produce the corrected response only.
             `.trim(),
-          },
-        ]);
+            },
+          ]);
+
+          arcViolationReasons = getResponseArcViolationReasons(assistantText);
+          console.log("ARC_RETRY_RESULT", {
+            stage: "initial",
+            assistantTextLength: assistantText.length,
+            violates: arcViolationReasons.length > 0,
+            reasons: arcViolationReasons,
+          });
+        }
       }
 
       let finalText = assistantText;
@@ -5160,6 +5200,91 @@ Produce the corrected response now.
         }
       }
 
+      if (!isCaseReview) {
+        console.log("ARC_VALIDATOR_START", {
+          stage: "final_before_stream",
+          finalTextLength: finalText.length,
+        });
+        let finalArcViolationReasons =
+          getResponseArcViolationReasons(finalText);
+        console.log("ARC_VALIDATOR_RESULT", {
+          stage: "final_before_stream",
+          violates: finalArcViolationReasons.length > 0,
+          reasons: finalArcViolationReasons,
+        });
+
+        if (finalArcViolationReasons.length > 0) {
+          console.log("ARC_RETRY_START", {
+            stage: "final_before_stream",
+            finalTextLength: finalText.length,
+            reasons: finalArcViolationReasons,
+          });
+
+          finalText = await runCompletion(openai, [
+            ...chatMessages,
+            {
+              role: "assistant",
+              content: finalText,
+            },
+            {
+              role: "user",
+              content: `
+Your previous response is still invalid.
+
+Rewrite it as a tight Coreloop investigation response.
+
+Required:
+- one specific mechanism
+- one interpretation correction
+- one predicted failure or overcorrection
+- one movement cue that starts with Stay, Keep, Shift, Let, Load, Hold, Reduce, Slow, Soften, or Allow
+- no exercise prescription
+- no generic coaching
+- no broad advice
+
+Never say:
+- focus on exercises
+- focus on strengthening
+- work on stability
+- strengthen
+- improve stability
+- improve control
+- perform exercises
+- single-leg bridge
+- wall slide
+
+Return only the corrected response.
+              `.trim(),
+            },
+          ]);
+
+          finalArcViolationReasons = getResponseArcViolationReasons(finalText);
+          console.log("ARC_RETRY_RESULT", {
+            stage: "final_before_stream",
+            finalTextLength: finalText.length,
+            violates: finalArcViolationReasons.length > 0,
+            reasons: finalArcViolationReasons,
+          });
+        }
+
+        if (containsBannedCoachLanguage(finalText)) {
+          console.error("ARC_FINAL_BANNED_BLOCKED", {
+            finalTextLength: finalText.length,
+            reasons: getResponseArcViolationReasons(finalText),
+            preview: clampText(finalText, 220),
+          });
+
+          finalText =
+            "The issue is that the movement is shifting into compensation before the target joint controls the load. If you chase more range or speed, that compensation will likely show up sooner under load. Slow the motion and keep the involved side loaded one beat longer before moving on.";
+        }
+      }
+
+      console.log("FINAL_TEXT_FOR_STREAM", {
+        isCaseReview,
+        finalTextLength: finalText.length,
+        preview: clampText(finalText, 220),
+      });
+
       res.setHeader("Content-Type", "text/event-stream");
 
       const words = finalText.split(" ");
@@ -5180,6 +5305,13 @@ Produce the corrected response now.
       const extractionResponseType = classifyAssistantResponseForExtraction({
         isCaseReview,
         text: finalText,
+      });
+
+      console.log("FINAL_TEXT_FOR_EXTRACTION", {
+        type: extractionResponseType,
+        isCaseReview,
+        finalTextLength: finalText.length,
+        preview: clampText(finalText, 220),
       });
 
       console.log("EXTRACT_TYPE_DETECTED", {
@@ -5261,10 +5393,22 @@ Produce the corrected response now.
             /\bloss of\b[^.!?]{1,80}\bduring\b/i,
             ]);
 
+            console.log("EXTRACT_HYPOTHESIS_CANDIDATE", {
+              caseId: resolvedActiveCase.id,
+              startsWithIssue: /^The issue is that\b/i.test(finalText.trim()),
+              hypothesisSentence,
+              candidateLength: hypothesisSentence?.length ?? 0,
+            });
+
             if (
               hypothesisSentence &&
               isStrongHypothesisCandidate(hypothesisSentence)
             ) {
+              console.log("EXTRACT_HYPOTHESIS_FOUND", {
+                caseId: resolvedActiveCase.id,
+                hypothesisSentence,
+              });
+
               const [latestStoredHypothesis] = await db
                 .select({
                   id: caseHypotheses.id,
@@ -5303,6 +5447,16 @@ Produce the corrected response now.
               } else if (isValidStoredHypothesis(latestStoredHypothesis)) {
                 validHypothesis = latestStoredHypothesis;
               }
+            } else if (hypothesisSentence) {
+              console.log("EXTRACT_HYPOTHESIS_SKIPPED_WEAK", {
+                caseId: resolvedActiveCase.id,
+                hypothesisSentence,
+              });
+            } else {
+              console.log("EXTRACT_HYPOTHESIS_NOT_FOUND", {
+                caseId: resolvedActiveCase.id,
+                finalTextPreview: clampText(finalText, 220),
+              });
             }
 
             if (!validHypothesis) {
