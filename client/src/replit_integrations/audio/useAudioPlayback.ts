@@ -1,4 +1,5 @@
 // useAudioPlayback.ts
+import { Capacitor } from "@capacitor/core";
 import { useRef, useState, useCallback } from "react";
 
 export type PlaybackState = "idle" | "playing" | "ended";
@@ -182,17 +183,25 @@ export function useAudioPlayback() {
       if (!chunk || !isValidBase64AudioChunk(chunk)) continue;
 
       try {
-        const blob = base64ToBlob(chunk);
-        if (!blob.size) continue;
-
         const sessionId = sessionRef.current;
+        const isNativePlayback = Capacitor.isNativePlatform();
 
         resetElement();
         revokeCurrentUrl();
         activeSessionRef.current = 0;
 
-        const url = URL.createObjectURL(blob);
-        currentUrlRef.current = url;
+        let url: string;
+
+        if (isNativePlayback) {
+          url = `data:audio/mpeg;base64,${chunk}`;
+        } else {
+          const blob = base64ToBlob(chunk);
+          if (!blob.size) continue;
+
+          url = URL.createObjectURL(blob);
+          currentUrlRef.current = url;
+        }
+
         activeSessionRef.current = sessionId;
 
         audio.src = url;

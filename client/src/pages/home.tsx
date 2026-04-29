@@ -5,6 +5,7 @@ import {
   useCallback,
   type FormEvent,
 } from "react";
+import { Capacitor } from "@capacitor/core";
 
 import { CentralForm } from "@/components/central-form";
 import { ChatView } from "@/components/chat-view";
@@ -252,20 +253,23 @@ function getNestedString(source: unknown, paths: string[][]): string | null {
   return null;
 }
 
-function segmentRepeatText(text: string): string[] {
-  if (!text.trim()) return [];
-
-  const normalized = text.replace(/(\d+)\.\s*/g, "\n$1. ");
-  const segments = normalized.split(/(?<=[.!?])\s+/);
-
-  return segments.map((segment) => segment.trim()).filter(Boolean);
-}
-
 function normalizeBase64Audio(input: string): string {
   return String(input ?? "")
     .replace(/^data:audio\/[a-zA-Z0-9.+-]+;base64,/, "")
     .replace(/\s+/g, "")
     .trim();
+}
+
+function base64AudioToObjectUrl(base64Audio: string): string {
+  const cleaned = normalizeBase64Audio(base64Audio);
+  const binary = atob(cleaned);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
 }
 
 export default function Home() {
@@ -758,6 +762,10 @@ if (!resp.ok) {
       repeatAudioRef.current.pause();
       repeatAudioRef.current.currentTime = 0;
       repeatAudioRef.current.src = "";
+
+      try {
+        repeatAudioRef.current.load();
+      } catch {}
     }
 
     repeatAudioReleaseRef.current?.();
@@ -798,17 +806,22 @@ if (!resp.ok) {
       stopRequestedRef.current = false;
 
       await playback.init();
+      stopRepeatPlayback();
       playback.stop();
 
       setIsSpeaking(true);
 
       try {
-        await streamTTS(text, (chunk) => {
-          if (stopRequestedRef.current) return;
-          if (sessionId !== speakSessionRef.current) return;
+        await streamTTS(
+          text,
+          (chunk) => {
+            if (stopRequestedRef.current) return;
+            if (sessionId !== speakSessionRef.current) return;
 
-          playback.pushAudio(chunk);
-        });
+            playback.pushAudio(chunk);
+          },
+          { voice: selectedVoice },
+        );
 
         if (
           !stopRequestedRef.current &&
@@ -826,7 +839,7 @@ if (!resp.ok) {
         }
       }
     },
-    [playback],
+    [playback, selectedVoice, stopRepeatPlayback],
   );
 
   const runCaseReview = useCallback(async () => {
@@ -1214,14 +1227,15 @@ if (!resp.ok) {
       return;
     }
 
-    if (!text.trim()) {
+    const responseText = text.trim();
+
+    if (!responseText) {
       console.warn("Model avatar playback skipped: empty response");
       return;
     }
 
     const sessionId = ++repeatSessionRef.current;
-    const responseText = text.trim();
-    const segments = segmentRepeatText(responseText);
+    const isNativePlayback = Capacitor.isNativePlatform();
 
     playback.stop();
     stopRequestedRef.current = true;
@@ -1230,95 +1244,153 @@ if (!resp.ok) {
     setActiveRepeatMessageId(messageId);
 
     try {
-      for (const segment of segments) {
-        if (sessionId !== repeatSessionRef.current) return;
+      console.log("TTS_REQUEST_START", {
+        messageId,
+        native: isNativePlayback,
+        length: responseText.length,
+      });
 
-        const response = await fetch(apiUrl("/api/tts"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            text: segment,
-            voice: selectedVoice,
-          }),
+      const response = await fetch(apiUrl("/api/tts"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          text: responseText,
+          voice: selectedVoice,
+        }),
+      });
+
+      const ttsResponseText = await response.text();
+
+      if (!response.ok) {
+        console.error("Model avatar TTS request failed:", {
+          status: response.status,
+          statusText: response.statusText,
+          body: ttsResponseText.slice(0, 300),
         });
-
-        const responseText = await response.text();
-
-        if (!response.ok) {
-          console.error("Model avatar TTS request failed:", {
-            status: response.status,
-            statusText: response.statusText,
-            body: responseText.slice(0, 300),
-          });
-          throw new Error(`TTS failed: ${response.status}`);
-        }
-
-        const data = parseJsonResponseText(responseText, "Repeat TTS");
-        const audio = normalizeBase64Audio(
-          typeof (data as { audio?: unknown })?.audio === "string"
-            ? ((data as { audio: string }).audio)
-            : "",
-        );
-
-        if (!audio) {
-          console.error("Model avatar TTS returned no audio:", data);
-          throw new Error("TTS returned no audio");
-        }
-
-        await new Promise<void>((resolve, reject) => {
-          if (sessionId !== repeatSessionRef.current) {
-            resolve();
-            return;
-          }
-
-          if (repeatAudioRef.current) {
-            repeatAudioRef.current.onended = null;
-            repeatAudioRef.current.onerror = null;
-            repeatAudioRef.current.pause();
-            repeatAudioRef.current.currentTime = 0;
-            repeatAudioRef.current.src = "";
-          }
-
-          const player = new Audio(`data:audio/mpeg;base64,${audio}`);
-          repeatAudioRef.current = player;
-          repeatAudioReleaseRef.current = resolve;
-
-          player.onended = () => {
-            if (repeatAudioRef.current === player) {
-              repeatAudioRef.current = null;
-              repeatAudioReleaseRef.current = null;
-            }
-
-            resolve();
-          };
-          player.onerror = () => {
-            console.error("Model avatar playback error:", player.error);
-            if (repeatAudioRef.current === player) {
-              repeatAudioRef.current = null;
-              repeatAudioReleaseRef.current = null;
-              setIsRepeatPlaying(false);
-              setActiveRepeatMessageId(null);
-            }
-            reject(player.error ?? new Error("Audio playback failed"));
-          };
-
-          player.play().catch((error) => {
-            console.error("Model avatar audio.play failed:", error);
-            if (repeatAudioRef.current === player) {
-              repeatAudioRef.current = null;
-              repeatAudioReleaseRef.current = null;
-              setIsRepeatPlaying(false);
-              setActiveRepeatMessageId(null);
-            }
-            reject(error);
-          });
-        });
+        throw new Error(`TTS failed: ${response.status}`);
       }
+
+      const data = parseJsonResponseText(ttsResponseText, "Repeat TTS");
+      const audio = normalizeBase64Audio(
+        typeof (data as { audio?: unknown })?.audio === "string"
+          ? ((data as { audio: string }).audio)
+          : "",
+      );
+
+      if (!audio) {
+        console.error("Model avatar TTS returned no audio:", data);
+        throw new Error("TTS returned no audio");
+      }
+
+      console.log("TTS_RESPONSE_RECEIVED", {
+        messageId,
+        native: isNativePlayback,
+        audioLength: audio.length,
+      });
+
+      if (sessionId !== repeatSessionRef.current) return;
+
+      await new Promise<void>((resolve, reject) => {
+        if (sessionId !== repeatSessionRef.current) {
+          resolve();
+          return;
+        }
+
+        let settled = false;
+        let objectUrl: string | null = null;
+
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+
+          if (objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+            objectUrl = null;
+          }
+
+          resolve();
+        };
+
+        const fail = (error: unknown) => {
+          if (settled) return;
+          settled = true;
+
+          if (objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+            objectUrl = null;
+          }
+
+          reject(error);
+        };
+
+        const audioSource = isNativePlayback
+          ? `data:audio/mpeg;base64,${audio}`
+          : base64AudioToObjectUrl(audio);
+
+        if (!isNativePlayback) {
+          objectUrl = audioSource;
+        }
+
+        const player = new Audio(audioSource);
+        player.preload = "auto";
+        player.volume = 1;
+        player.setAttribute("playsinline", "true");
+
+        repeatAudioRef.current = player;
+        repeatAudioReleaseRef.current = finish;
+
+        player.onended = () => {
+          console.log("TTS_PLAYBACK_END", {
+            messageId,
+            native: isNativePlayback,
+          });
+
+          if (repeatAudioRef.current === player) {
+            repeatAudioRef.current = null;
+            repeatAudioReleaseRef.current = null;
+          }
+
+          finish();
+        };
+
+        player.onerror = () => {
+          console.error("TTS_ERROR", player.error);
+
+          if (repeatAudioRef.current === player) {
+            repeatAudioRef.current = null;
+            repeatAudioReleaseRef.current = null;
+            setIsRepeatPlaying(false);
+            setActiveRepeatMessageId(null);
+          }
+
+          fail(player.error ?? new Error("Audio playback failed"));
+        };
+
+        console.log("TTS_PLAYBACK_START", {
+          messageId,
+          native: isNativePlayback,
+        });
+
+        player.play().catch((error) => {
+          console.error("Model avatar audio.play failed:", error);
+
+          if (repeatAudioRef.current === player) {
+            repeatAudioRef.current = null;
+            repeatAudioReleaseRef.current = null;
+            setIsRepeatPlaying(false);
+            setActiveRepeatMessageId(null);
+          }
+
+          fail(error);
+        });
+      });
     } catch (error) {
-      console.error("Model avatar playback failed:", error);
+      console.error("TTS_FAIL", error);
     } finally {
       if (sessionId === repeatSessionRef.current) {
+        repeatAudioReleaseRef.current?.();
+        repeatAudioReleaseRef.current = null;
         repeatAudioRef.current = null;
         setIsRepeatPlaying(false);
         setActiveRepeatMessageId(null);

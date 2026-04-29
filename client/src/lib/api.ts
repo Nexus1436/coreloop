@@ -277,19 +277,6 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
 }
 
 /* ======================================================
-   SENTENCE SEGMENTER
-====================================================== */
-
-function segmentText(text: string): string[] {
-  if (!text) return [];
-
-  const normalized = text.replace(/(\d+)\.\s*/g, "\n$1. ");
-  const parts = normalized.split(/(?<=[.!?])\s+/);
-
-  return parts.map((s) => s.trim()).filter((s) => s.length > 0);
-}
-
-/* ======================================================
    BASE64 NORMALIZATION
 ====================================================== */
 
@@ -303,7 +290,7 @@ function normalizeBase64Audio(input: string): string {
 }
 
 /* ======================================================
-   TTS (Sequential — stable)
+   TTS (Full response playback)
 ====================================================== */
 
 export async function streamTTS(
@@ -314,50 +301,56 @@ export async function streamTTS(
   if (!text || !text.trim()) return;
 
   const voice = options?.voice ?? "female";
-  const sentences = segmentText(text);
+  const fullText = text.trim();
 
-  let successCount = 0;
+  try {
+    console.log("TTS_REQUEST_START", {
+      length: fullText.length,
+      voice,
+    });
 
-  for (const sentence of sentences) {
-    try {
-      const res = await fetch(`${API_BASE}/api/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          text: sentence,
-          voice,
-        }),
+    const res = await fetch(`${API_BASE}/api/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        text: fullText,
+        voice,
+      }),
+    });
+
+    const responseText = await res.text();
+
+    if (!res.ok) {
+      console.error("TTS request failed:", {
+        status: res.status,
+        statusText: res.statusText,
+        body: responseText.slice(0, 300),
       });
-
-      if (!res.ok) {
-        console.error("TTS request failed:", res.status, res.statusText);
-        continue;
-      }
-
-      const data = await res.json();
-
-      if (!data?.audio || typeof data.audio !== "string") {
-        console.error("Invalid TTS response:", data);
-        continue;
-      }
-
-      const normalized = normalizeBase64Audio(data.audio);
-
-      if (!normalized) {
-        console.error("TTS audio normalization failed");
-        continue;
-      }
-
-      successCount += 1;
-      console.log("TTS chunk received:", normalized.slice(0, 50));
-      onChunk(normalized);
-    } catch (err) {
-      console.error("TTS request failed:", err);
+      throw new Error(`TTS failed: ${res.status}`);
     }
-  }
 
-  if (successCount === 0) {
-    throw new Error("TTS produced zero audio chunks");
+    const data = JSON.parse(responseText);
+
+    if (!data?.audio || typeof data.audio !== "string") {
+      console.error("Invalid TTS response:", data);
+      throw new Error("Invalid TTS response");
+    }
+
+    const normalized = normalizeBase64Audio(data.audio);
+
+    if (!normalized) {
+      console.error("TTS audio normalization failed");
+      throw new Error("TTS audio normalization failed");
+    }
+
+    console.log("TTS_RESPONSE_RECEIVED", {
+      audioLength: normalized.length,
+    });
+
+    onChunk(normalized);
+  } catch (err) {
+    console.error("TTS_FAIL", err);
+    throw err;
   }
 }
