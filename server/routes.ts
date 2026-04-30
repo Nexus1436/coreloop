@@ -2248,13 +2248,16 @@ function isWeakTestInstructionText(value: string | null | undefined): boolean {
 function getConcreteTestInvalidReason(value: string | null | undefined): string | null {
   const text = normalizePreviewValue(value);
   if (!text) return "empty";
+  if (text.length < 35) return "too_short";
 
   const vaguePatterns = [
     /^\s*focus on\b/i,
+    /\bengage\b/i,
     /\bengage your core\b/i,
     /\bimprove\b/i,
     /\bwork on\b/i,
     /\btry to\b/i,
+    /\bmaintain\b/i,
     /\bpay attention\b/i,
     /\bbe mindful\b/i,
     /\bstrengthen\b/i,
@@ -2324,10 +2327,10 @@ function buildFallbackConcreteTest({
 
   const movement = normalizePreviewValue(movementContext);
   if (movement && !isFallbackMovementContext(movement)) {
-    return `Do 3 slow ${movement} motions without load. Change only one variable: stay tall through the motion. Tell me if the ${regionPhrase} appears during setup, during the movement, or after the rep.`;
+    return `Do 3 slow ${movement} motions without a ball. Change only one variable: stay tall through the motion. Tell me if the ${regionPhrase} appears during setup, during movement, or after the rep.`;
   }
 
-  return `Do 3 slow reps of the movement that triggered it. Change only one variable: stay tall through the motion. Tell me if the ${regionPhrase} appears during setup, during the movement, or after the rep.`;
+  return `Do 3 slow reps of the movement that triggered it. Change only one variable. Tell me if the ${regionPhrase} appears during setup, during the movement, or after the rep.`;
 }
 
 function enforceConcreteTestCandidate({
@@ -2354,11 +2357,10 @@ function enforceConcreteTestCandidate({
       caseId,
       valid: true,
       usedFallback: false,
-      reason: null,
     });
     console.log("TEST_WRITE_READY", {
       caseId,
-      currentTestPreview: clampText(candidate, 160),
+      preview: candidate.slice(0, 80),
     });
 
     return { finalTest: candidate, usedFallback: false, reason: null };
@@ -2376,11 +2378,10 @@ function enforceConcreteTestCandidate({
     caseId,
     valid: false,
     usedFallback: true,
-    reason,
   });
   console.log("TEST_WRITE_READY", {
     caseId,
-    currentTestPreview: clampText(fallback, 160),
+    preview: fallback.slice(0, 80),
   });
 
   return { finalTest: fallback, usedFallback: true, reason };
