@@ -147,6 +147,7 @@ async function boot() {
 
     app.get("/api/version", (_req: Request, res: Response) => {
       res.json({
+        backendVersion: "test-enforcement-v4-no-candidate-failed-validation",
         version: "diagnostic-v2",
         commit: "230014a1656f8bd004f63eba72701c2c9206ec28",
       });
