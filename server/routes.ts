@@ -3116,27 +3116,15 @@ JSON shape:
     outcomeResult,
   });
 
-  console.log("INTERNAL_CASE_ENGINE_UPDATE", {
+  console.log("LAYER1_OUTPUT", {
     caseId: currentCase.id,
-    signal: update.signal,
     bodyRegion: update.bodyRegion,
-    activityType: update.activityType,
-    movementContext: update.movementContext,
-    hasHypothesis: Boolean(update.hypothesis),
-    hasAdjustment: Boolean(update.adjustment),
-    hasCurrentTest: Boolean(update.currentTest),
+    activity: update.activityType,
+    hypothesis: clampText(update.hypothesis ?? "", 120),
+    adjustment: clampText(update.adjustment ?? "", 120),
+    currentTest: clampText(update.currentTest ?? "", 120),
+    outcome: clampText(update.outcome ?? "", 120),
     outcomeStatus: update.outcomeStatus,
-    confidence: update.confidence,
-  });
-  console.log("INTERNAL_CASE_ENGINE_OUTPUT", {
-    caseId: currentCase.id,
-    signal: update.signal,
-    hypothesis: update.hypothesis,
-    adjustment: update.adjustment,
-    currentTest: update.currentTest,
-    outcome: update.outcome,
-    outcomeStatus: update.outcomeStatus,
-    confidence: update.confidence,
   });
 
   return update;
@@ -3446,12 +3434,11 @@ async function buildStructuredCaseStateBlock(
     outcome: internalUpdate?.outcome ?? snapshot.latestOutcome ?? null,
   };
 
-  console.log("VISIBLE_RESPONSE_STATE_INPUT", {
-    ...visibleStateInput,
-    signal: clampText(visibleStateInput.signal ?? "", 180),
-    hypothesis: clampText(visibleStateInput.hypothesis ?? "", 180),
-    adjustment: clampText(visibleStateInput.adjustment ?? "", 180),
-    outcome: clampText(visibleStateInput.outcome ?? "", 180),
+  console.log("VISIBLE_RESPONSE_INPUT", {
+    caseId,
+    hasHypothesis: Boolean(visibleStateInput.hypothesis),
+    hasAdjustment: Boolean(visibleStateInput.adjustment),
+    hasCurrentTest: Boolean(visibleStateInput.adjustment),
   });
 
   return `
@@ -4311,12 +4298,13 @@ export async function registerRoutes(
   );
 
   app.post("/api/stt", async (req: Request, res: Response) => {
+    const sttStartedAt = Date.now();
     let sttMimeType = "unknown";
-    let sttBase64Length = 0;
     let sttExtension = "unknown";
     let sttInputPath: string | undefined;
     let sttOutputPath: string | undefined;
     let sttFailureDetails = "Unknown STT failure";
+    let sttInputBytes = 0;
 
     try {
       const { audio, mimeType } = req.body ?? {};
@@ -4324,8 +4312,6 @@ export async function registerRoutes(
       if (!audio) {
         return res.status(400).json({ error: "No audio provided" });
       }
-
-      sttBase64Length = typeof audio === "string" ? audio.length : 0;
 
       const resolvedMimeType =
         typeof mimeType === "string" && mimeType.trim()
@@ -4347,14 +4333,9 @@ export async function registerRoutes(
       sttExtension = extension;
 
       const buffer = Buffer.from(audio, "base64");
+      sttInputBytes = buffer.length;
       let uploadBuffer = buffer;
       let uploadMimeType = resolvedMimeType;
-
-      console.log("STT request received:", {
-        mimeType: resolvedMimeType,
-        base64Length: sttBase64Length,
-        inputBytes: buffer.length,
-      });
 
       if (resolvedMimeType.includes("aac")) {
         const tempId = `${Date.now()}-${Math.random()
@@ -4364,21 +4345,9 @@ export async function registerRoutes(
         sttOutputPath = path.join("/tmp", `stt-output-${tempId}.wav`);
 
         await fsp.writeFile(sttInputPath, buffer);
-        const inputStats = await fsp.stat(sttInputPath);
-
-        console.log("STT input file ready:", {
-          inputPath: sttInputPath,
-          inputBytes: inputStats.size,
-        });
-
-        console.log("STT ffmpeg convert start:", {
-          inputPath: sttInputPath,
-          outputPath: sttOutputPath,
-          inputBytes: inputStats.size,
-        });
 
         try {
-          const { stdout, stderr } = await execFileAsync(FFMPEG_PATH, [
+          await execFileAsync(FFMPEG_PATH, [
             "-y",
             "-i",
             sttInputPath,
@@ -4390,20 +4359,6 @@ export async function registerRoutes(
             "wav",
             sttOutputPath,
           ]);
-
-          console.log("STT ffmpeg convert complete:", {
-            stdout,
-            stderr,
-          });
-
-          const outputStats = await fsp.stat(sttOutputPath);
-
-          console.log("STT ffmpeg convert success:", {
-            inputPath: sttInputPath,
-            outputPath: sttOutputPath,
-            inputBytes: inputStats.size,
-            outputBytes: outputStats.size,
-          });
         } catch (ffmpegError) {
           console.error("STT ffmpeg convert failed:", {
             message:
@@ -4439,12 +4394,6 @@ export async function registerRoutes(
           .then(() => true)
           .catch(() => false);
         const outputStats = outputExists ? await fsp.stat(sttOutputPath) : null;
-
-        console.log("STT WAV validation:", {
-          outputPath: sttOutputPath,
-          exists: outputExists,
-          outputBytes: outputStats?.size ?? 0,
-        });
 
         if (!outputStats?.isFile() || outputStats.size <= 0) {
           throw new Error("WAV output invalid or empty");
@@ -4507,8 +4456,11 @@ export async function registerRoutes(
         throw openAiError;
       }
 
-      console.log("STT OpenAI response:", {
-        textLength: transcription.text?.length ?? 0,
+      console.log("STT_DONE", {
+        mimeType: uploadMimeType,
+        inputBytes: sttInputBytes,
+        transcriptLength: transcription.text?.length ?? 0,
+        durationMs: Date.now() - sttStartedAt,
       });
 
       res.json({ transcript: transcription.text });
@@ -4518,10 +4470,8 @@ export async function registerRoutes(
 
       console.error("STT error:", {
         mimeType: sttMimeType,
-        base64Length: sttBase64Length,
+        inputBytes: sttInputBytes,
         extension: sttExtension,
-        inputPath: sttInputPath,
-        outputPath: sttOutputPath,
         name: error instanceof Error ? error.name : typeof error,
         message: error instanceof Error ? error.message : String(error),
         status:
@@ -4564,6 +4514,7 @@ export async function registerRoutes(
   let ttsQueue: Promise<string> = Promise.resolve("");
 
   app.post("/api/tts", isAuthenticated, async (req: any, res: Response) => {
+    const ttsStartedAt = Date.now();
     try {
       const authUser = req.user as any;
       const userId = authUser?.claims?.sub;
@@ -4651,7 +4602,9 @@ export async function registerRoutes(
       ttsQueue = ttsQueue.then(job);
       const audioBase64 = await ttsQueue;
 
-      console.log("TTS_RESPONSE", {
+      console.log("TTS_DONE", {
+        status: 200,
+        durationMs: Date.now() - ttsStartedAt,
         audioLength: audioBase64.length,
       });
 
@@ -5056,8 +5009,10 @@ ${memoryBlock}
       console.log("DASHBOARD_CASE_STATE_READ", {
         caseId: selectedCase?.id ?? null,
         hypothesisCount: latestHypothesis ? 1 : 0,
-        hasAdjustment: Boolean(latestAdjustment),
+        adjustmentCount: latestAdjustment ? 1 : 0,
+        outcomeCount: latestOutcome ? 1 : 0,
         hasCurrentTest: Boolean(currentTest),
+        investigationState,
       });
 
       res.json({
@@ -5172,6 +5127,7 @@ ${memoryBlock}
 
       const isCaseReview = Boolean(body.isCaseReview);
       const conversationId = body.conversationId;
+      const chatStartedAt = Date.now();
 
       // ==============================
       // DOMAIN BOUNDARY GATE
@@ -5697,6 +5653,12 @@ Produce the response now.
         });
       }
 
+      console.log("CHAT_START", {
+        userId,
+        conversationId: convoId,
+        caseId: resolvedActiveCase?.id ?? null,
+      });
+
       let internalCasePersistResult: InternalCasePersistResult = {
         attempted: false,
         wroteHypothesis: false,
@@ -5714,12 +5676,8 @@ Produce the response now.
 
         if (shouldRunInternalCaseEngine) {
           try {
-            console.log("INTERNAL_CASE_ENGINE_START", {
-              userId,
-              conversationId: convoId,
+            console.log("LAYER1_START", {
               caseId: resolvedActiveCase.id,
-              shouldCreateCase,
-              outcomeResult: internalOutcomeResult,
             });
 
             const internalCaseUpdate = await runInternalCaseEngine({
@@ -5742,6 +5700,25 @@ Produce the response now.
               caseId: resolvedActiveCase.id,
               update: internalCaseUpdate,
             });
+            console.log("EXTRACT_RESULT", {
+              caseId: resolvedActiveCase.id,
+              foundHypothesis: Boolean(internalCaseUpdate.hypothesis),
+              foundAdjustment: Boolean(internalCaseUpdate.adjustment),
+              foundTest: Boolean(internalCaseUpdate.currentTest),
+              foundOutcome: Boolean(internalCaseUpdate.outcomeStatus),
+            });
+            console.log("WRITE_RESULT", {
+              caseId: resolvedActiveCase.id,
+              hypothesisWrite: internalCasePersistResult.wroteHypothesis,
+              adjustmentWrite: internalCasePersistResult.wroteAdjustment,
+              outcomeWrite: internalCasePersistResult.wroteOutcome,
+              skippedReason:
+                internalCasePersistResult.wroteHypothesis ||
+                internalCasePersistResult.wroteAdjustment ||
+                internalCasePersistResult.wroteOutcome
+                  ? null
+                  : "no_structured_write",
+            });
           } catch (err) {
             console.error("INTERNAL_CASE_ENGINE_FAILED", {
               userId,
@@ -5751,15 +5728,9 @@ Produce the response now.
             });
           }
         } else {
-          console.log("INTERNAL_CASE_ENGINE_START", {
-            userId,
-            conversationId: convoId,
+          console.log("LAYER1_START", {
             caseId: resolvedActiveCase.id,
             skipped: true,
-            reason: "no_new_signal_outcome_or_context_dependency",
-            shouldCreateCase,
-            outcomeResult: internalOutcomeResult,
-            dependsOnPriorConversation: dependsOnPriorConversationContext(userText),
           });
         }
       }
@@ -6240,7 +6211,6 @@ Produce the corrected response now.
             reasons: finalArcViolationReasons.filter((reason) =>
               reason.startsWith("banned_coach_language:"),
             ),
-            preview: clampText(finalText, 220),
           });
         }
 
@@ -6313,7 +6283,6 @@ Return only the corrected response.
           console.error("ARC_FINAL_INVALID_BLOCKED", {
             finalTextLength: finalText.length,
             reasons: finalArcViolationReasons,
-            preview: clampText(finalText, 220),
           });
 
           finalText =
@@ -6324,7 +6293,6 @@ Return only the corrected response.
       console.log("FINAL_TEXT_FOR_STREAM", {
         isCaseReview,
         finalTextLength: finalText.length,
-        preview: clampText(finalText, 220),
       });
 
       res.setHeader("Content-Type", "text/event-stream");
@@ -6353,7 +6321,6 @@ Return only the corrected response.
         type: extractionResponseType,
         isCaseReview,
         finalTextLength: finalText.length,
-        preview: clampText(finalText, 220),
       });
 
       console.log("EXTRACT_TYPE_DETECTED", {
@@ -6862,6 +6829,11 @@ Return only the corrected response.
       } catch (err) {
         console.error("Summary generation failed:", err);
       }
+
+      console.log("CHAT_DONE", {
+        caseId: resolvedActiveCase?.id ?? null,
+        durationMs: Date.now() - chatStartedAt,
+      });
 
       res.write(`data: [DONE]\n\n`);
       res.end();

@@ -111,8 +111,6 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
         console.log("transcribeAudio stage:", {
           stage: "file-reader-load",
           length: result.length,
-          first20: result.slice(0, 20),
-          last20: result.slice(-20),
           mod4: result.length % 4,
           mimeType: audioBlob.type,
         });
@@ -122,8 +120,6 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
         console.log("transcribeAudio stage:", {
           stage: "base64-extracted",
           length: encoded.length,
-          first20: encoded.slice(0, 20),
-          last20: encoded.slice(-20),
           mod4: encoded.length % 4,
           mimeType: audioBlob.type,
         });
@@ -161,8 +157,6 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   console.log("transcribeAudio stage:", {
     stage: "fetch-start",
     length: base64Audio.length,
-    first20: base64Audio.slice(0, 20),
-    last20: base64Audio.slice(-20),
     mod4: base64Audio.length % 4,
     mimeType: audioBlob.type,
   });
@@ -175,8 +169,6 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
     url,
     resolvedUrl,
     length: base64Audio.length,
-    first20: base64Audio.slice(0, 20),
-    last20: base64Audio.slice(-20),
     mod4: base64Audio.length % 4,
     mimeType: audioBlob.type,
   });
@@ -238,7 +230,7 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
       stage: "response-text",
       status: res.status,
       contentType: res.headers.get("content-type"),
-      first300: responseText.slice(0, 300),
+      responseLength: responseText.length,
     });
   } catch (error) {
     console.error("transcribeAudio error:", {
@@ -268,7 +260,7 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
       stage: "response-json-parse",
       name: error instanceof Error ? error.name : typeof error,
       message: error instanceof Error ? error.message : String(error),
-      first300: responseText.slice(0, 300),
+      responseLength: responseText.length,
     });
     throw error;
   }

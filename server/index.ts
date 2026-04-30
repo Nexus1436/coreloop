@@ -79,7 +79,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     if (path.startsWith("/api")) {
       let line = `${req.method} ${path} ${res.statusCode} ${duration}ms`;
       if (path === "/api/tts") {
-        line += " :: responseBody=omitted";
+        line += "";
       } else if (responseBody && typeof responseBody === "object") {
         line += ` :: ${JSON.stringify({
           keys: Object.keys(responseBody as Record<string, unknown>),
