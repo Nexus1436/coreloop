@@ -78,7 +78,17 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
     if (path.startsWith("/api")) {
       let line = `${req.method} ${path} ${res.statusCode} ${duration}ms`;
-      if (responseBody) line += ` :: ${JSON.stringify(responseBody)}`;
+      if (path === "/api/tts") {
+        line += " :: responseBody=omitted";
+      } else if (responseBody && typeof responseBody === "object") {
+        line += ` :: ${JSON.stringify({
+          keys: Object.keys(responseBody as Record<string, unknown>),
+        })}`;
+      } else if (responseBody) {
+        line += ` :: ${JSON.stringify({
+          bodyType: typeof responseBody,
+        })}`;
+      }
       log(line);
     }
   });

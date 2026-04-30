@@ -2195,22 +2195,18 @@ function isWeakTestInstructionText(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return true;
 
-  const vagueInstructionPatterns = [
-    /^\s*focus on\b/i,
-    /\bbe mindful of\b/i,
-    /\bengage your core\b/i,
-    /\bactivate your core\b/i,
-    /\bcore engagement\b/i,
-    /\bmaintain core\b/i,
-    /\bproper form\b/i,
-    /\bgood posture\b/i,
-  ];
-
-  if (vagueInstructionPatterns.some((pattern) => pattern.test(text))) {
-    return true;
-  }
+  const hasConcreteDose =
+    /\b(?:1|one|2|two|3|three)\s+(?:rep|reps|step|steps|serve|serves|reach|reaches|swing|swings|motion|motions|load|loads)\b/i.test(
+      text,
+    ) ||
+    /\b(?:take|do|try|test)\s+(?:1|one|2|two|3|three)\b/i.test(text) ||
+    /\b(?:once|one[-\s]?time)\b/i.test(text) ||
+    /\bfor\s+(?:10|ten|20|twenty|30|thirty)\s+seconds\b/i.test(text) ||
+    /\b(?:take|do)\s+3\b/i.test(text) ||
+    /\bdo\s+one\b/i.test(text);
 
   const hasRepOrShortSequence =
+    hasConcreteDose ||
     /\b(?:take|do|try|test)\s+(?:one|1|two|2|three|3|a few)\b/i.test(text) ||
     /\b(?:one|1|two|2|three|3)\s+(?:rep|reps|step|steps|serve|serves|reach|reaches|swing|swings)\b/i.test(
       text,
@@ -2221,6 +2217,30 @@ function isWeakTestInstructionText(value: string | null | undefined): boolean {
     /\b(?:tell me|notice|observe|feel if|check whether|see if|whether|when it|where it|if the)\b/i.test(
       text,
     );
+
+  const hasVagueCue = [
+    /^\s*focus on\b/i,
+    /\btry to\b/i,
+    /\bbe mindful of\b/i,
+    /\bengage your core\b/i,
+    /\bactivate your core\b/i,
+    /\bcore engagement\b/i,
+    /\bmaintain core\b/i,
+    /\bproper form\b/i,
+    /\bgood posture\b/i,
+    /\bimprove stability\b/i,
+    /\brotational stability\b/i,
+    /\bdistribute the load\b/i,
+    /\bcontrolled rotation\b/i,
+    /\bstrengthen\b/i,
+    /\bexercises?\b/i,
+    /\broutine\b/i,
+    /\bdrill\b/i,
+  ].some((pattern) => pattern.test(text));
+
+  if (hasVagueCue && !(hasConcreteDose && hasObservation)) {
+    return true;
+  }
 
   return !(hasRepOrShortSequence && hasObservation);
 }
@@ -3732,6 +3752,10 @@ function getResponseArcViolationReasons(text: string): string[] {
     }
   }
 
+  if (isWeakTestInstructionText(text)) {
+    reasons.push("weak_test_instruction");
+  }
+
   const movementProbePatterns = [
     { label: "single_leg_bridge", pattern: /\bsingle[-\s]?leg bridge\b/ },
     { label: "bridge", pattern: /\bbridge\b/ },
@@ -4287,8 +4311,6 @@ export async function registerRoutes(
   );
 
   app.post("/api/stt", async (req: Request, res: Response) => {
-    console.log("STT ROUTE VERSION: diagnostic-v2");
-
     let sttMimeType = "unknown";
     let sttBase64Length = 0;
     let sttExtension = "unknown";

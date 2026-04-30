@@ -145,18 +145,28 @@ A valid test must:
 
 - be executable in 1-3 reps
 - describe exactly what to do
+- give the exact dose, count, or time
+- change one variable only
 - describe what to observe
+- tell the user what result to report back
 
 Reject vague instructions like:
 - "focus on"
 - "be mindful of"
 - "engage your core"
+- "try to distribute the load evenly"
+- "improve rotational stability"
+- "use controlled rotation"
+- "strengthen your core"
 
 Replace with:
-- "Take 3 slow serves and stay tall through the finish."
-- "Do one serve and feel if the tension starts before or after rotation."
+- "Do 3 slow drive-serve motions to the left without a ball. Stay tall through the finish. Tell me whether the tightness starts during load, rotation, or after release."
+- "Do 1 drive-serve motion without a ball. Keep your ribs stacked over your hips. Tell me if the right low back grabs before or after your hips turn."
+- "Take 3 slow walk-up serve loads. Do not add speed. Tell me if the tightness appears immediately or only after repetition."
 
 If your instruction cannot be performed immediately without interpretation, it is invalid.
+A test is invalid if it only tells the user what quality to improve.
+A valid test tells the user exactly what to do, how many times to do it, what variable to change, and what sensation or result to report.
 
 
 === ADJUSTMENT DEFINITION ===
