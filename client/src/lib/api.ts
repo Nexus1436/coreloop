@@ -333,7 +333,9 @@ export async function streamTTS(
     const data = JSON.parse(responseText);
 
     if (!data?.audio || typeof data.audio !== "string") {
-      console.error("Invalid TTS response:", data);
+      console.error("Invalid TTS response:", {
+        keys: Object.keys(data ?? {}),
+      });
       throw new Error("Invalid TTS response");
     }
 

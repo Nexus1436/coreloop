@@ -4524,7 +4524,7 @@ export async function registerRoutes(
             : undefined,
         stack: error instanceof Error ? error.stack : undefined,
       });
-      console.error("STT FULL ERROR:", error);
+      console.error("STT_FULL_ERROR", formatUnknownError(error));
       return res.status(500).json({
         error: "STT failed",
         details: error instanceof Error ? error.message : String(error),
@@ -4629,9 +4629,13 @@ export async function registerRoutes(
       ttsQueue = ttsQueue.then(job);
       const audioBase64 = await ttsQueue;
 
+      console.log("TTS_RESPONSE", {
+        audioLength: audioBase64.length,
+      });
+
       res.json({ audio: audioBase64 });
     } catch (err) {
-      console.error("ElevenLabs TTS error:", err);
+      console.error("ElevenLabs TTS error:", formatUnknownError(err));
       res.status(500).json({ error: "TTS failed" });
     }
   });
@@ -4933,6 +4937,10 @@ ${memoryBlock}
         .orderBy(desc(caseReviews.createdAt), desc(caseReviews.id))
         .limit(5);
 
+      console.log("CASE_REVIEWS_LOADED", {
+        count: caseReviewsList.length,
+      });
+
       const activeCaseTitle = buildActiveCaseTitle(
         selectedCase?.movementContext,
         selectedCase?.activityType,
@@ -5024,24 +5032,10 @@ ${memoryBlock}
       );
 
       console.log("DASHBOARD_CASE_STATE_READ", {
-        selectedCaseId: selectedCase?.id ?? null,
-        activeCaseTitle,
-        investigationState,
-        signalCaseId: latestSignal?.caseId ?? null,
-        hypothesisCaseId: latestHypothesis?.caseId ?? null,
-        adjustmentCaseId: latestAdjustment?.caseId ?? null,
-        outcomeCaseId: latestOutcome?.caseId ?? null,
-        signalPreview: clampText(latestSignal?.description ?? "", 160),
-        hypothesisPreview: clampText(latestHypothesis?.hypothesis ?? "", 160),
-        adjustmentPreview: clampText(
-          pickDashboardDisplayValue([
-            latestAdjustment?.cue,
-            latestAdjustment?.mechanicalFocus,
-          ]) ?? "",
-          160,
-        ),
-        currentTestPreview: clampText(currentTest ?? "", 160),
-        currentMechanismPreview: clampText(currentMechanism ?? "", 160),
+        caseId: selectedCase?.id ?? null,
+        hypothesisCount: latestHypothesis ? 1 : 0,
+        hasAdjustment: Boolean(latestAdjustment),
+        hasCurrentTest: Boolean(currentTest),
       });
 
       res.json({

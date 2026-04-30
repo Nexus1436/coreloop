@@ -37,7 +37,11 @@ export default function AudioVisualizer() {
       });
 
       const data = await res.json();
-      console.log("📝 Transcription result:", data);
+      console.log("TRANSCRIPTION_RESULT", {
+        keys: Object.keys(data ?? {}),
+        transcriptLength:
+          typeof data?.transcript === "string" ? data.transcript.length : 0,
+      });
     };
 
     mediaRecorder.start();

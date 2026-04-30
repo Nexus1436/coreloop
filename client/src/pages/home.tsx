@@ -1279,7 +1279,9 @@ if (!resp.ok) {
       );
 
       if (!audio) {
-        console.error("Model avatar TTS returned no audio:", data);
+        console.error("Model avatar TTS returned no audio:", {
+          keys: Object.keys((data as Record<string, unknown>) ?? {}),
+        });
         throw new Error("TTS returned no audio");
       }
 
