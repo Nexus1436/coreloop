@@ -2087,10 +2087,10 @@ function hasRealMechanicalLever(value: string | null | undefined): boolean {
   if (isLowSignalShiftText(text)) return false;
 
   const actionPattern =
-    /^\s*(?:try|test|use|focus on|keep|make sure|let|allow|shift|load|relax|drive|rotate|control|stack|move|press|pull|push|hinge|brace|stabilize|stabilise|hold|clear|stay|reduce|increase|shorten|lengthen|soften|slow)\b/i;
+    /^\s*(?:try|test|use|take|do|walk|focus on|keep|make sure|let|allow|shift|load|relax|drive|rotate|control|stack|move|press|pull|push|hinge|brace|stabilize|stabilise|hold|clear|stay|reduce|increase|shorten|lengthen|soften|slow)\b/i;
 
   const mechanicalObjectPattern =
-    /\b(?:hip|hips|rib|ribs|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|rotation|hinge|foot|feet|ankle|knee|knees|glute|glutes|serve|swing|contact|backswing|pressure|weight|chest|torso|lat|lats|core|elbow|wrist|stride|step|gait|walk|walking|tension|range|position|speed|tempo)\b/i;
+    /\b(?:hip|hips|side|rib|ribs|pelvis|trunk|shoulder|shoulders|back|spine|brace|load|stack|rotate|rotation|hinge|foot|feet|ankle|knee|knees|glute|glutes|serve|swing|contact|backswing|pressure|weight|chest|torso|lat|lats|core|elbow|wrist|stride|step|steps|gait|walk|walking|tension|range|position|speed|tempo)\b/i;
 
   const changePattern =
     /\b(?:instead of|rather than|before|after|through|under|until|as you|while you|during|into|out of|against|toward|away|forward|back|down|up|open|closed|hold|release|load|shift|drive|rotate|brace|stack|hinge|press|pull|push|clear|with|without|for|across|between|from|reduced|increased|shorter|longer|slow|slower|observe|notice|feel)\b/i;
@@ -2111,6 +2111,9 @@ function isTestLikeText(value: string | null | undefined): boolean {
     /^\s*try\b/i,
     /^\s*test\b/i,
     /^\s*use\b/i,
+    /^\s*take\b/i,
+    /^\s*do\b/i,
+    /^\s*walk\b/i,
     /^\s*focus on\b/i,
     /^\s*keep\b/i,
     /^\s*make sure\b/i,
@@ -2245,6 +2248,9 @@ function isStrongAdjustmentCandidate(
     /^\s*try\b/i,
     /^\s*test\b/i,
     /^\s*use\b/i,
+    /^\s*take\b/i,
+    /^\s*do\b/i,
+    /^\s*walk\b/i,
     /^\s*focus on\b/i,
     /^\s*keep\b/i,
     /^\s*make sure\b/i,
@@ -2292,6 +2298,7 @@ function isStrongAdjustmentCandidate(
 
   const concreteBodyActionPatterns = [
     /\bhip\b/i,
+    /\bside\b/i,
     /\brib\b/i,
     /\bpelvis\b/i,
     /\btrunk\b/i,
@@ -2315,6 +2322,7 @@ function isStrongAdjustmentCandidate(
     /\bpressure\b/i,
     /\bstride\b/i,
     /\bstep\b/i,
+    /\bsteps\b/i,
     /\bgait\b/i,
     /\bwalk\b/i,
     /\bwalking\b/i,
@@ -2773,6 +2781,520 @@ async function getLatestOutcomeForCase(caseId: number): Promise<{
     .limit(1);
 
   return outcome ?? null;
+}
+
+type InternalOutcomeStatus =
+  | "improved"
+  | "worse"
+  | "same"
+  | "unknown"
+  | null;
+
+type InternalCaseUpdate = {
+  signal: string | null;
+  bodyRegion: string | null;
+  activityType: string | null;
+  movementContext: string | null;
+  hypothesis: string | null;
+  adjustment: string | null;
+  currentTest: string | null;
+  outcome: string | null;
+  outcomeStatus: InternalOutcomeStatus;
+  shouldStartNewCase: boolean;
+  matchedCaseId?: number | null;
+  confidence: number;
+};
+
+type InternalCasePersistResult = {
+  attempted: boolean;
+  wroteHypothesis: boolean;
+  wroteAdjustment: boolean;
+  wroteOutcome: boolean;
+  update: InternalCaseUpdate | null;
+};
+
+function parseJsonObjectFromText(text: string): Record<string, unknown> | null {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) return null;
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  const candidate = fenced || trimmed;
+
+  try {
+    const parsed = JSON.parse(candidate);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    const start = candidate.indexOf("{");
+    const end = candidate.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) return null;
+
+    try {
+      const parsed = JSON.parse(candidate.slice(start, end + 1));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function stringOrNull(value: unknown, max = 600): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || /^null$/i.test(trimmed)) return null;
+  return clampText(trimmed, max);
+}
+
+function normalizeInternalOutcomeStatus(value: unknown): InternalOutcomeStatus {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "improved") return "improved";
+  if (normalized === "worse") return "worse";
+  if (normalized === "same") return "same";
+  if (normalized === "unknown") return "unknown";
+  return null;
+}
+
+function normalizeInternalConfidence(value: unknown): number {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : 0;
+
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.min(1, numeric));
+}
+
+function normalizeInternalCaseUpdate(
+  raw: Record<string, unknown> | null,
+  fallback: {
+    userText: string;
+    derivedBodyRegion: string | null;
+    derivedActivityType: string | null;
+    derivedMovementContext: string | null;
+    outcomeResult: "Improved" | "Worse" | "Same" | null;
+  },
+): InternalCaseUpdate {
+  const outcomeStatusFromDetector =
+    fallback.outcomeResult === "Improved"
+      ? "improved"
+      : fallback.outcomeResult === "Worse"
+        ? "worse"
+        : fallback.outcomeResult === "Same"
+          ? "same"
+          : null;
+
+  return {
+    signal:
+      stringOrNull(raw?.signal, 800) ??
+      (qualifiesForTimelineSignal(fallback.userText)
+        ? clampText(fallback.userText, 800)
+        : null),
+    bodyRegion:
+      stringOrNull(raw?.bodyRegion, 80) ?? fallback.derivedBodyRegion ?? null,
+    activityType:
+      stringOrNull(raw?.activityType, 80) ??
+      fallback.derivedActivityType ??
+      null,
+    movementContext:
+      stringOrNull(raw?.movementContext, 80) ??
+      fallback.derivedMovementContext ??
+      null,
+    hypothesis: stringOrNull(raw?.hypothesis, 400),
+    adjustment: stringOrNull(raw?.adjustment, 320),
+    currentTest: stringOrNull(raw?.currentTest, 320),
+    outcome: stringOrNull(raw?.outcome, 400),
+    outcomeStatus:
+      normalizeInternalOutcomeStatus(raw?.outcomeStatus) ??
+      outcomeStatusFromDetector,
+    shouldStartNewCase: raw?.shouldStartNewCase === true,
+    matchedCaseId:
+      typeof raw?.matchedCaseId === "number" && Number.isFinite(raw.matchedCaseId)
+        ? raw.matchedCaseId
+        : null,
+    confidence: normalizeInternalConfidence(raw?.confidence),
+  };
+}
+
+async function buildInternalCaseStateSnapshot(caseId: number): Promise<{
+  latestSignal: string | null;
+  latestHypothesis: string | null;
+  latestAdjustment: string | null;
+  latestOutcome: string | null;
+}> {
+  const [latestSignal] = await db
+    .select({ description: caseSignals.description })
+    .from(caseSignals)
+    .where(eq(caseSignals.caseId, caseId))
+    .orderBy(desc(caseSignals.id))
+    .limit(1);
+  const latestHypothesis = await getLatestValidHypothesisForCase(caseId);
+  const latestAdjustment = await getLatestValidAdjustmentForCase(caseId);
+  const latestOutcome = await getLatestOutcomeForCase(caseId);
+
+  return {
+    latestSignal: latestSignal?.description ?? null,
+    latestHypothesis: latestHypothesis?.hypothesis ?? null,
+    latestAdjustment: latestAdjustment
+      ? pickDashboardDisplayValue([
+          latestAdjustment.cue,
+          latestAdjustment.mechanicalFocus,
+        ])
+      : null,
+    latestOutcome: latestOutcome
+      ? [latestOutcome.result, latestOutcome.userFeedback]
+          .filter(Boolean)
+          .join(": ")
+      : null,
+  };
+}
+
+async function runInternalCaseEngine({
+  openaiClient,
+  userText,
+  currentCase,
+  derivedBodyRegion,
+  derivedActivityType,
+  derivedMovementContext,
+  derivedSignalType,
+  outcomeResult,
+}: {
+  openaiClient: OpenAI;
+  userText: string;
+  currentCase: ResolvedCaseRow;
+  derivedBodyRegion: string | null;
+  derivedActivityType: string | null;
+  derivedMovementContext: string | null;
+  derivedSignalType: string | null;
+  outcomeResult: "Improved" | "Worse" | "Same" | null;
+}): Promise<InternalCaseUpdate> {
+  const priorState = await buildInternalCaseStateSnapshot(currentCase.id);
+  const messagesForInternalPass: ChatCompletionMessageParam[] = [
+    {
+      role: "system",
+      content: `
+You are Coreloop's internal case engine.
+
+Return only strict JSON. No markdown. No explanation.
+
+Your job is structured case state, not user-facing language.
+Read the new user input and current case state, then produce the next structured state update.
+
+Rules:
+- Extract the real signal from the user input.
+- Keep the update scoped to the current case.
+- If the user reports an outcome, preserve the existing mechanism and refine the next test.
+- Generate a concise internal hypothesis when enough evidence exists.
+- Generate one movement-based adjustment/currentTest when enough information exists.
+- Do not prescribe training, strengthening, exercise programs, sets, or routines.
+- currentTest should be an in-movement probe or lever, not a paragraph.
+- If information is missing, use null instead of inventing.
+
+JSON shape:
+{
+  "signal": string | null,
+  "bodyRegion": string | null,
+  "activityType": string | null,
+  "movementContext": string | null,
+  "hypothesis": string | null,
+  "adjustment": string | null,
+  "currentTest": string | null,
+  "outcome": string | null,
+  "outcomeStatus": "improved" | "worse" | "same" | "unknown" | null,
+  "shouldStartNewCase": boolean,
+  "matchedCaseId": number | null,
+  "confidence": number
+}
+      `.trim(),
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        userInput: userText,
+        currentCase: {
+          id: currentCase.id,
+          movementContext: currentCase.movementContext,
+          activityType: currentCase.activityType,
+          status: currentCase.status,
+        },
+        deterministicSignalRead: {
+          bodyRegion: derivedBodyRegion,
+          activityType: derivedActivityType,
+          movementContext: derivedMovementContext,
+          signalType: derivedSignalType,
+          outcomeResult,
+        },
+        priorCaseState: priorState,
+      }),
+    },
+  ];
+
+  const rawText = await runCompletion(openaiClient, messagesForInternalPass);
+  const parsed = parseJsonObjectFromText(rawText);
+
+  if (!parsed) {
+    console.warn("INTERNAL_CASE_ENGINE_PARSE_FAILED", {
+      caseId: currentCase.id,
+      rawPreview: clampText(rawText, 240),
+    });
+  }
+
+  const update = normalizeInternalCaseUpdate(parsed, {
+    userText,
+    derivedBodyRegion,
+    derivedActivityType,
+    derivedMovementContext,
+    outcomeResult,
+  });
+
+  console.log("INTERNAL_CASE_ENGINE_UPDATE", {
+    caseId: currentCase.id,
+    signal: update.signal,
+    bodyRegion: update.bodyRegion,
+    activityType: update.activityType,
+    movementContext: update.movementContext,
+    hasHypothesis: Boolean(update.hypothesis),
+    hasAdjustment: Boolean(update.adjustment),
+    hasCurrentTest: Boolean(update.currentTest),
+    outcomeStatus: update.outcomeStatus,
+    confidence: update.confidence,
+  });
+
+  return update;
+}
+
+async function persistInternalCaseUpdate({
+  userId,
+  caseId,
+  update,
+}: {
+  userId: string;
+  caseId: number;
+  update: InternalCaseUpdate;
+}): Promise<InternalCasePersistResult> {
+  const result: InternalCasePersistResult = {
+    attempted: true,
+    wroteHypothesis: false,
+    wroteAdjustment: false,
+    wroteOutcome: false,
+    update,
+  };
+
+  const [latestSignal] = await db
+    .select({ id: caseSignals.id, description: caseSignals.description })
+    .from(caseSignals)
+    .where(eq(caseSignals.caseId, caseId))
+    .orderBy(desc(caseSignals.id))
+    .limit(1);
+
+  if (
+    update.signal &&
+    !areEquivalentDashboardCandidates(update.signal, latestSignal?.description)
+  ) {
+    await writeCaseSignalIfNew({
+      userId,
+      caseId,
+      description: update.signal,
+      activityType: update.activityType ?? "unspecified",
+      movementContext: update.movementContext ?? "general movement",
+      bodyRegion: update.bodyRegion,
+      signalType: null,
+    });
+  }
+
+  let activeHypothesis = await getLatestValidHypothesisForCase(caseId);
+
+  if (update.hypothesis && !isGenericCoachingFillerText(update.hypothesis)) {
+    const [latestStoredHypothesis] = await db
+      .select({
+        id: caseHypotheses.id,
+        hypothesis: caseHypotheses.hypothesis,
+      })
+      .from(caseHypotheses)
+      .where(eq(caseHypotheses.caseId, caseId))
+      .orderBy(desc(caseHypotheses.id))
+      .limit(1);
+
+    if (
+      !areEquivalentDashboardCandidates(
+        update.hypothesis,
+        latestStoredHypothesis?.hypothesis,
+      )
+    ) {
+      const [insertedHypothesis] = await db
+        .insert(caseHypotheses)
+        .values({
+          caseId,
+          signalId: latestSignal?.id ?? null,
+          hypothesis: update.hypothesis,
+          confidence: String(update.confidence || 0.65),
+        })
+        .returning({
+          id: caseHypotheses.id,
+          hypothesis: caseHypotheses.hypothesis,
+        });
+
+      activeHypothesis = insertedHypothesis;
+      result.wroteHypothesis = true;
+      console.log("INTERNAL_CASE_WRITE_SUCCESS", {
+        type: "hypothesis",
+        caseId,
+        hypothesisId: insertedHypothesis?.id ?? null,
+      });
+    } else if (isValidStoredHypothesis(latestStoredHypothesis)) {
+      activeHypothesis = latestStoredHypothesis;
+    }
+  }
+
+  const nextTest = update.currentTest ?? update.adjustment;
+
+  if (nextTest && activeHypothesis?.id && !isGenericCoachingFillerText(nextTest)) {
+    const adjustmentCue = update.adjustment ?? nextTest;
+    const mechanicalFocus = nextTest;
+
+    const [latestStoredAdjustment] = await db
+      .select({
+        cue: caseAdjustments.cue,
+        mechanicalFocus: caseAdjustments.mechanicalFocus,
+      })
+      .from(caseAdjustments)
+      .where(eq(caseAdjustments.caseId, caseId))
+      .orderBy(desc(caseAdjustments.id))
+      .limit(1);
+
+    const isDuplicateAdjustment =
+      areEquivalentDashboardCandidates(
+        adjustmentCue,
+        latestStoredAdjustment?.cue,
+      ) ||
+      areEquivalentDashboardCandidates(
+        mechanicalFocus,
+        latestStoredAdjustment?.mechanicalFocus,
+      );
+
+    if (!isDuplicateAdjustment) {
+      const [insertedAdjustment] = await db
+        .insert(caseAdjustments)
+        .values({
+          caseId,
+          hypothesisId: activeHypothesis.id,
+          adjustmentType: "internal_case_engine",
+          cue: adjustmentCue,
+          mechanicalFocus,
+        })
+        .returning({ id: caseAdjustments.id });
+
+      result.wroteAdjustment = true;
+      console.log("INTERNAL_CASE_WRITE_SUCCESS", {
+        type: "adjustment",
+        caseId,
+        adjustmentId: insertedAdjustment?.id ?? null,
+      });
+    }
+  }
+
+  if (update.outcomeStatus && update.outcomeStatus !== "unknown") {
+    const mappedOutcome =
+      update.outcomeStatus === "improved"
+        ? "Improved"
+        : update.outcomeStatus === "worse"
+          ? "Worse"
+          : "Same";
+    const validAdjustment = await getValidAdjustmentForOutcomeWrite({ caseId });
+
+    if (validAdjustment) {
+      const [latestOutcome] = await db
+        .select({
+          id: caseOutcomes.id,
+          result: caseOutcomes.result,
+          adjustmentId: caseOutcomes.adjustmentId,
+          createdAt: caseOutcomes.createdAt,
+        })
+        .from(caseOutcomes)
+        .where(eq(caseOutcomes.adjustmentId, validAdjustment.id))
+        .orderBy(desc(caseOutcomes.id))
+        .limit(1);
+
+      const latestCreatedAtMs = latestOutcome?.createdAt
+        ? new Date(latestOutcome.createdAt).getTime()
+        : 0;
+      const isDuplicateRecentOutcome =
+        Boolean(latestOutcome) &&
+        latestOutcome?.result === mappedOutcome &&
+        latestOutcome?.adjustmentId === validAdjustment.id &&
+        latestCreatedAtMs > 0 &&
+        Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
+
+      if (!isDuplicateRecentOutcome) {
+        const [insertedOutcome] = await db
+          .insert(caseOutcomes)
+          .values({
+            caseId,
+            adjustmentId: validAdjustment.id,
+            result: mappedOutcome,
+            userFeedback: update.outcome ?? null,
+          })
+          .returning({ id: caseOutcomes.id });
+
+        result.wroteOutcome = true;
+        console.log("INTERNAL_CASE_WRITE_SUCCESS", {
+          type: "outcome",
+          caseId,
+          outcomeId: insertedOutcome?.id ?? null,
+        });
+
+        if (mappedOutcome === "Improved") {
+          await db
+            .update(cases)
+            .set({ status: "resolved" })
+            .where(eq(cases.id, caseId));
+        }
+      }
+    }
+  }
+
+  await db.update(cases).set({ updatedAt: new Date() }).where(eq(cases.id, caseId));
+
+  return result;
+}
+
+async function buildStructuredCaseStateBlock(
+  caseId: number,
+  internalUpdate: InternalCaseUpdate | null,
+): Promise<string> {
+  const snapshot = await buildInternalCaseStateSnapshot(caseId);
+
+  return `
+=== STRUCTURED CASE STATE ===
+This is the internal case engine state. Use it as source-of-truth context.
+The visible response may be selective and natural; it does not need to expose every field.
+
+Signal: ${internalUpdate?.signal ?? snapshot.latestSignal ?? "none"}
+Body region: ${internalUpdate?.bodyRegion ?? "unknown"}
+Activity: ${internalUpdate?.activityType ?? "unknown"}
+Movement context: ${internalUpdate?.movementContext ?? "unknown"}
+Current hypothesis: ${
+    internalUpdate?.hypothesis ?? snapshot.latestHypothesis ?? "none"
+  }
+Current adjustment/test: ${
+    internalUpdate?.currentTest ??
+    internalUpdate?.adjustment ??
+    snapshot.latestAdjustment ??
+    "none"
+  }
+Latest outcome: ${internalUpdate?.outcome ?? snapshot.latestOutcome ?? "none"}
+
+Response rule:
+- Speak from this structured state.
+- Do not write for extraction.
+- Do not force every structured field into the visible reply.
+- Select the next useful user-facing move: breakdown, tight correction, lever, probe, or clarification.
+`;
 }
 
 async function buildSessionSummaryContext({
@@ -4973,6 +5495,62 @@ Produce the response now.
         });
       }
 
+      let internalCasePersistResult: InternalCasePersistResult = {
+        attempted: false,
+        wroteHypothesis: false,
+        wroteAdjustment: false,
+        wroteOutcome: false,
+        update: null,
+      };
+
+      if (!isCaseReview && resolvedActiveCase) {
+        const internalOutcomeResult = detectOutcomeResult(userText);
+        const shouldRunInternalCaseEngine =
+          shouldCreateCase ||
+          Boolean(internalOutcomeResult) ||
+          dependsOnPriorConversationContext(userText);
+
+        if (shouldRunInternalCaseEngine) {
+          try {
+            console.log("INTERNAL_CASE_ENGINE_START", {
+              userId,
+              conversationId: convoId,
+              caseId: resolvedActiveCase.id,
+              shouldCreateCase,
+              outcomeResult: internalOutcomeResult,
+            });
+
+            const internalCaseUpdate = await runInternalCaseEngine({
+              openaiClient: openai,
+              userText,
+              currentCase: resolvedActiveCase,
+              derivedBodyRegion,
+              derivedActivityType:
+                derivedCaseContext?.activityType ??
+                resolvedActiveCase.activityType,
+              derivedMovementContext:
+                derivedCaseContext?.movementContext ??
+                resolvedActiveCase.movementContext,
+              derivedSignalType,
+              outcomeResult: internalOutcomeResult,
+            });
+
+            internalCasePersistResult = await persistInternalCaseUpdate({
+              userId,
+              caseId: resolvedActiveCase.id,
+              update: internalCaseUpdate,
+            });
+          } catch (err) {
+            console.error("INTERNAL_CASE_ENGINE_FAILED", {
+              userId,
+              conversationId: convoId,
+              caseId: resolvedActiveCase.id,
+              ...formatUnknownError(err),
+            });
+          }
+        }
+      }
+
       const activeHypothesisBlock = continuityCaseId
         ? await getActiveHypothesisBlock(userId, continuityCaseId)
         : "";
@@ -4980,6 +5558,13 @@ Produce the response now.
         ? await getDominantRuntimePatternBlock(userId, continuityCaseId)
         : "";
       const continuityBlock = activeHypothesisBlock || runtimePatternBlock;
+      const structuredCaseStateBlock =
+        !isCaseReview && resolvedActiveCase
+          ? await buildStructuredCaseStateBlock(
+              resolvedActiveCase.id,
+              internalCasePersistResult.update,
+            )
+          : "";
       const settingsContextBlock = !isCaseReview
         ? buildSettingsContextBlock(persistedSettingsForContext)
         : "";
@@ -5172,6 +5757,8 @@ ${ACTIVE_PROMPT}
         ${memoryBlock}
 
         ${continuityBlock}
+
+        ${structuredCaseStateBlock}
 
         ${patternPriorityBlock}
 
@@ -5568,7 +6155,23 @@ Return only the corrected response.
         });
       }
 
-      if (extractionResponseType === "investigation") {
+      const shouldRunAssistantExtractionFallback =
+        extractionResponseType === "investigation" &&
+        !internalCasePersistResult.attempted;
+
+      if (
+        extractionResponseType === "investigation" &&
+        internalCasePersistResult.attempted
+      ) {
+        console.log("EXTRACT_SKIPPED_ASSISTANT_TEXT_PRIMARY_INTERNAL_STATE", {
+          caseId: resolvedActiveCase?.id ?? null,
+          wroteHypothesis: internalCasePersistResult.wroteHypothesis,
+          wroteAdjustment: internalCasePersistResult.wroteAdjustment,
+          wroteOutcome: internalCasePersistResult.wroteOutcome,
+        });
+      }
+
+      if (shouldRunAssistantExtractionFallback) {
         try {
           if (
             resolvedActiveCase &&
