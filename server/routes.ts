@@ -2245,6 +2245,147 @@ function isWeakTestInstructionText(value: string | null | undefined): boolean {
   return !(hasRepOrShortSequence && hasObservation);
 }
 
+function getConcreteTestInvalidReason(value: string | null | undefined): string | null {
+  const text = normalizePreviewValue(value);
+  if (!text) return "empty";
+
+  const vaguePatterns = [
+    /^\s*focus on\b/i,
+    /\bengage your core\b/i,
+    /\bimprove\b/i,
+    /\bwork on\b/i,
+    /\btry to\b/i,
+    /\bpay attention\b/i,
+    /\bbe mindful\b/i,
+    /\bstrengthen\b/i,
+    /\bstabilize\b/i,
+    /\buse better\b/i,
+    /\bdistribute the load\b/i,
+    /\bcontrolled rotation\b/i,
+    /\bcore engagement\b/i,
+  ];
+
+  if (vaguePatterns.some((pattern) => pattern.test(text))) {
+    return "vague_coaching_language";
+  }
+
+  const hasFiniteDose =
+    /\b(?:1|one|2|two|3|three|5|five)\s+(?:rep|reps|motion|motions|serve|serves|step|steps|time|times|load|loads|reach|reaches|swing|swings)\b/i.test(
+      text,
+    ) ||
+    /\b(?:do|take|try|test)\s+(?:1|one|2|two|3|three|5|five)\b/i.test(text) ||
+    /\b(?:once|one[-\s]?time)\b/i.test(text) ||
+    /\bfor\s+(?:10|ten|20|twenty|30|thirty)\s+seconds\b/i.test(text);
+
+  if (!hasFiniteDose) return "missing_finite_dose";
+
+  const hasObservableReturn =
+    /\b(?:tell me|notice whether|report|see if|where|when|during|after|before|whether|if the)\b/i.test(
+      text,
+    );
+
+  if (!hasObservableReturn) return "missing_observable_return";
+
+  return null;
+}
+
+function isValidConcreteTest(value: string | null | undefined): boolean {
+  return getConcreteTestInvalidReason(value) === null;
+}
+
+function buildFallbackConcreteTest({
+  userText,
+  hypothesis,
+  movementContext,
+  bodyRegion,
+  activityType,
+}: {
+  userText: string;
+  hypothesis?: string | null;
+  movementContext?: string | null;
+  bodyRegion?: string | null;
+  activityType?: string | null;
+}): string {
+  const source = `${userText} ${hypothesis ?? ""} ${movementContext ?? ""} ${
+    activityType ?? ""
+  }`;
+  const region = bodyRegion || deriveBodyRegion(userText) || "symptom";
+  const regionPhrase =
+    /\blow back|lower back|right low|right lower|lumbar/i.test(source)
+      ? "right low-back tightness"
+      : region === "low back"
+        ? "low-back tightness"
+        : `${region} symptom`;
+
+  if (/\bdrive[-\s]?serve|drive serves|serve|serving|racquetball\b/i.test(source)) {
+    const direction = /\bleft\b/i.test(source) ? " to the left" : "";
+    return `Do 3 slow drive-serve motions${direction} without a ball. Stay tall through the finish. Tell me if the ${regionPhrase} starts during load, rotation, or after release.`;
+  }
+
+  const movement = normalizePreviewValue(movementContext);
+  if (movement && !isFallbackMovementContext(movement)) {
+    return `Do 3 slow ${movement} motions without load. Change only one variable: stay tall through the motion. Tell me if the ${regionPhrase} appears during setup, during the movement, or after the rep.`;
+  }
+
+  return `Do 3 slow reps of the movement that triggered it. Change only one variable: stay tall through the motion. Tell me if the ${regionPhrase} appears during setup, during the movement, or after the rep.`;
+}
+
+function enforceConcreteTestCandidate({
+  caseId,
+  candidate,
+  userText,
+  hypothesis,
+  movementContext,
+  bodyRegion,
+  activityType,
+}: {
+  caseId: number;
+  candidate: string | null | undefined;
+  userText: string;
+  hypothesis?: string | null;
+  movementContext?: string | null;
+  bodyRegion?: string | null;
+  activityType?: string | null;
+}): { finalTest: string; usedFallback: boolean; reason: string | null } {
+  const reason = getConcreteTestInvalidReason(candidate);
+
+  if (!reason && candidate) {
+    console.log("TEST_VALIDATION_RESULT", {
+      caseId,
+      valid: true,
+      usedFallback: false,
+      reason: null,
+    });
+    console.log("TEST_WRITE_READY", {
+      caseId,
+      currentTestPreview: clampText(candidate, 160),
+    });
+
+    return { finalTest: candidate, usedFallback: false, reason: null };
+  }
+
+  const fallback = buildFallbackConcreteTest({
+    userText,
+    hypothesis,
+    movementContext,
+    bodyRegion,
+    activityType,
+  });
+
+  console.log("TEST_VALIDATION_RESULT", {
+    caseId,
+    valid: false,
+    usedFallback: true,
+    reason,
+  });
+  console.log("TEST_WRITE_READY", {
+    caseId,
+    currentTestPreview: clampText(fallback, 160),
+  });
+
+  return { finalTest: fallback, usedFallback: true, reason };
+}
+
 function isStrongHypothesisCandidate(
   value: string | null | undefined,
 ): boolean {
@@ -3134,10 +3275,12 @@ async function persistInternalCaseUpdate({
   userId,
   caseId,
   update,
+  userText,
 }: {
   userId: string;
   caseId: number;
   update: InternalCaseUpdate;
+  userText: string;
 }): Promise<InternalCasePersistResult> {
   const result: InternalCasePersistResult = {
     attempted: true,
@@ -3242,15 +3385,19 @@ async function persistInternalCaseUpdate({
   if (
     nextTest &&
     activeHypothesis?.id &&
-    !isGenericCoachingFillerText(nextTest) &&
-    !isWeakTestInstructionText(nextTest)
+    !isGenericCoachingFillerText(nextTest)
   ) {
-    const adjustmentCue =
-      update.adjustment &&
-      !areEquivalentDashboardCandidates(update.adjustment, nextTest)
-        ? update.adjustment
-        : nextTest;
-    const mechanicalFocus = nextTest;
+    const { finalTest } = enforceConcreteTestCandidate({
+      caseId,
+      candidate: nextTest,
+      userText,
+      hypothesis: activeHypothesis.hypothesis,
+      movementContext: update.movementContext,
+      bodyRegion: update.bodyRegion,
+      activityType: update.activityType,
+    });
+    const adjustmentCue = finalTest;
+    const mechanicalFocus = finalTest;
 
     const [latestStoredAdjustment] = await db
       .select({
@@ -5699,6 +5846,7 @@ Produce the response now.
               userId,
               caseId: resolvedActiveCase.id,
               update: internalCaseUpdate,
+              userText,
             });
             console.log("EXTRACT_RESULT", {
               caseId: resolvedActiveCase.id,
@@ -6559,6 +6707,27 @@ Return only the corrected response.
                   hypothesisSentence,
                 )
               ) {
+                const latestSignalSnapshot =
+                  resolvedActiveCase
+                    ? await getLatestCaseSignalSnapshot(
+                        resolvedActiveCase.id,
+                        resolvedActiveCase,
+                      )
+                    : null;
+                const { finalTest } = enforceConcreteTestCandidate({
+                  caseId: resolvedActiveCase.id,
+                  candidate: adjustmentSentence,
+                  userText,
+                  hypothesis: validHypothesis.hypothesis,
+                  movementContext:
+                    latestSignalSnapshot?.movementContext ??
+                    resolvedActiveCase.movementContext,
+                  bodyRegion: latestSignalSnapshot?.bodyRegion ?? null,
+                  activityType:
+                    latestSignalSnapshot?.activityType ??
+                    resolvedActiveCase.activityType,
+                });
+
                 const [latestStoredAdjustment] = await db
                   .select({
                     cue: caseAdjustments.cue,
@@ -6572,11 +6741,11 @@ Return only the corrected response.
 
                 const isDuplicateAdjustment =
                   areEquivalentDashboardCandidates(
-                    adjustmentSentence,
+                    finalTest,
                     latestStoredAdjustment?.cue,
                   ) ||
                   areEquivalentDashboardCandidates(
-                    adjustmentSentence,
+                    finalTest,
                     latestStoredAdjustment?.mechanicalFocus,
                   );
 
@@ -6586,8 +6755,8 @@ Return only the corrected response.
                     .values({
                       caseId: resolvedActiveCase.id,
                       hypothesisId: validHypothesis.id,
-                      cue: adjustmentSentence,
-                      mechanicalFocus,
+                      cue: finalTest,
+                      mechanicalFocus: finalTest,
                     })
                     .returning({
                       id: caseAdjustments.id,
