@@ -6702,7 +6702,7 @@ Return only the corrected response.
                       resolvedActiveCase,
                     )
                   : null;
-              const { finalTest } = enforceConcreteTestCandidate({
+              let { finalTest } = enforceConcreteTestCandidate({
                 caseId: resolvedActiveCase.id,
                 candidate: candidateTest,
                 userText,
@@ -6715,6 +6715,29 @@ Return only the corrected response.
                   latestSignalSnapshot?.activityType ??
                   resolvedActiveCase.activityType,
               });
+
+              if (!isValidConcreteTest(finalTest)) {
+                finalTest = buildFallbackConcreteTest({
+                  userText,
+                  hypothesis: validHypothesis.hypothesis,
+                  movementContext:
+                    latestSignalSnapshot?.movementContext ??
+                    resolvedActiveCase.movementContext,
+                  bodyRegion: latestSignalSnapshot?.bodyRegion ?? null,
+                  activityType:
+                    latestSignalSnapshot?.activityType ??
+                    resolvedActiveCase.activityType,
+                });
+                console.log("TEST_VALIDATION_RESULT", {
+                  caseId: resolvedActiveCase.id,
+                  valid: false,
+                  usedFallback: true,
+                });
+                console.log("TEST_WRITE_READY", {
+                  caseId: resolvedActiveCase.id,
+                  preview: finalTest.slice(0, 80),
+                });
+              }
 
               const [latestStoredAdjustment] = await db
                 .select({
