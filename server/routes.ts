@@ -2115,6 +2115,7 @@ function isTestLikeText(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
   if (isGenericAdjustmentFillerText(text)) return false;
+  if (isWeakTestInstructionText(text)) return false;
 
   const concreteActionStartPatterns = [
     /^\s*try\b/i,
@@ -2188,6 +2189,40 @@ function isTestLikeText(value: string | null | undefined): boolean {
   }
 
   return hasRealMechanicalLever(text);
+}
+
+function isWeakTestInstructionText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  const vagueInstructionPatterns = [
+    /^\s*focus on\b/i,
+    /\bbe mindful of\b/i,
+    /\bengage your core\b/i,
+    /\bactivate your core\b/i,
+    /\bcore engagement\b/i,
+    /\bmaintain core\b/i,
+    /\bproper form\b/i,
+    /\bgood posture\b/i,
+  ];
+
+  if (vagueInstructionPatterns.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+
+  const hasRepOrShortSequence =
+    /\b(?:take|do|try|test)\s+(?:one|1|two|2|three|3|a few)\b/i.test(text) ||
+    /\b(?:one|1|two|2|three|3)\s+(?:rep|reps|step|steps|serve|serves|reach|reaches|swing|swings)\b/i.test(
+      text,
+    ) ||
+    /\b(?:for|through)\s+(?:the first|one|1|two|2|three|3)\b/i.test(text);
+
+  const hasObservation =
+    /\b(?:tell me|notice|observe|feel if|check whether|see if|whether|when it|where it|if the)\b/i.test(
+      text,
+    );
+
+  return !(hasRepOrShortSequence && hasObservation);
 }
 
 function isStrongHypothesisCandidate(
@@ -3196,8 +3231,17 @@ async function persistInternalCaseUpdate({
 
   const nextTest = update.currentTest ?? update.adjustment;
 
-  if (nextTest && activeHypothesis?.id && !isGenericCoachingFillerText(nextTest)) {
-    const adjustmentCue = update.adjustment ?? nextTest;
+  if (
+    nextTest &&
+    activeHypothesis?.id &&
+    !isGenericCoachingFillerText(nextTest) &&
+    !isWeakTestInstructionText(nextTest)
+  ) {
+    const adjustmentCue =
+      update.adjustment &&
+      !areEquivalentDashboardCandidates(update.adjustment, nextTest)
+        ? update.adjustment
+        : nextTest;
     const mechanicalFocus = nextTest;
 
     const [latestStoredAdjustment] = await db
@@ -3262,7 +3306,9 @@ async function persistInternalCaseUpdate({
         ? "skipped_null"
         : !activeHypothesis?.id
           ? "skipped_no_hypothesis"
-          : "skipped_generic_or_invalid",
+          : isWeakTestInstructionText(nextTest)
+            ? "skipped_weak_test_instruction"
+            : "skipped_generic_or_invalid",
       hasNextTest: Boolean(nextTest),
       hasActiveHypothesis: Boolean(activeHypothesis?.id),
       nextTestPreview: clampText(nextTest ?? "", 180),

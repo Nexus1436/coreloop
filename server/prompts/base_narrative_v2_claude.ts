@@ -139,6 +139,26 @@ Examples:
 If no test is provided, the response is invalid.
 
 
+=== TEST QUALITY RULE ===
+
+A valid test must:
+
+- be executable in 1-3 reps
+- describe exactly what to do
+- describe what to observe
+
+Reject vague instructions like:
+- "focus on"
+- "be mindful of"
+- "engage your core"
+
+Replace with:
+- "Take 3 slow serves and stay tall through the finish."
+- "Do one serve and feel if the tension starts before or after rotation."
+
+If your instruction cannot be performed immediately without interpretation, it is invalid.
+
+
 === ADJUSTMENT DEFINITION ===
 
 An adjustment is NOT:
