@@ -3614,6 +3614,39 @@ Response rule:
 `;
 }
 
+function cleanMechanismSummary(hypothesis: string | null | undefined): string {
+  const normalized = normalizePreviewValue(hypothesis);
+  if (!normalized) return "";
+
+  const cleaned = normalized
+    .replace(/^the issue is that\s*/i, "")
+    .replace(/^the issue is\s*/i, "")
+    .trim();
+
+  if (!cleaned) return "";
+
+  return clampText(cleaned.charAt(0).toUpperCase() + cleaned.slice(1), 220);
+}
+
+async function buildResponseFromCaseState(
+  caseId: number,
+  internalUpdate: InternalCaseUpdate | null,
+): Promise<string> {
+  const snapshot = await buildInternalCaseStateSnapshot(caseId);
+  const hypothesis =
+    internalUpdate?.hypothesis ?? snapshot.latestHypothesis ?? null;
+  const currentTest =
+    internalUpdate?.currentTest ??
+    internalUpdate?.adjustment ??
+    snapshot.latestAdjustment ??
+    null;
+
+  const mechanismLine = cleanMechanismSummary(hypothesis);
+  const testLine = normalizePreviewValue(currentTest);
+
+  return [mechanismLine, testLine].filter(Boolean).join("\n\n").trim();
+}
+
 async function buildSessionSummaryContext({
   userId,
   conversationId,
@@ -6432,8 +6465,27 @@ Return only the corrected response.
             reasons: finalArcViolationReasons,
           });
 
-          finalText =
-            "Does it break before the weight shift or after?";
+          const caseStateFallback = resolvedActiveCase
+            ? await buildResponseFromCaseState(
+                resolvedActiveCase.id,
+                internalCasePersistResult.update,
+              )
+            : "";
+
+          if (caseStateFallback) {
+            finalText = caseStateFallback;
+            console.log("ARC_CASE_STATE_FALLBACK_USED", {
+              caseId: resolvedActiveCase?.id ?? null,
+              finalTextLength: finalText.length,
+              hasCurrentTest: Boolean(
+                internalCasePersistResult.update?.currentTest ||
+                  internalCasePersistResult.update?.adjustment,
+              ),
+            });
+          } else {
+            finalText =
+              "Does it break before the weight shift or after?";
+          }
         }
       }
 
