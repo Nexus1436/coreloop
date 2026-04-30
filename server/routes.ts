@@ -3383,11 +3383,7 @@ async function persistInternalCaseUpdate({
 
   const nextTest = update.currentTest ?? update.adjustment;
 
-  if (
-    nextTest &&
-    activeHypothesis?.id &&
-    !isGenericCoachingFillerText(nextTest)
-  ) {
+  if (activeHypothesis?.id) {
     const { finalTest } = enforceConcreteTestCandidate({
       caseId,
       candidate: nextTest,
@@ -3458,13 +3454,7 @@ async function persistInternalCaseUpdate({
   } else {
     console.log("INTERNAL_ADJUSTMENT_WRITE", {
       caseId,
-      status: !nextTest
-        ? "skipped_null"
-        : !activeHypothesis?.id
-          ? "skipped_no_hypothesis"
-          : isWeakTestInstructionText(nextTest)
-            ? "skipped_weak_test_instruction"
-            : "skipped_generic_or_invalid",
+      status: "skipped_no_hypothesis",
       hasNextTest: Boolean(nextTest),
       hasActiveHypothesis: Boolean(activeHypothesis?.id),
       nextTestPreview: clampText(nextTest ?? "", 180),
@@ -6697,76 +6687,64 @@ Return only the corrected response.
               }
 
               const candidateTest = adjustmentSentence ?? mechanicalFocus;
+              const latestSignalSnapshot =
+                resolvedActiveCase
+                  ? await getLatestCaseSignalSnapshot(
+                      resolvedActiveCase.id,
+                      resolvedActiveCase,
+                    )
+                  : null;
+              const { finalTest } = enforceConcreteTestCandidate({
+                caseId: resolvedActiveCase.id,
+                candidate: candidateTest,
+                userText,
+                hypothesis: validHypothesis.hypothesis,
+                movementContext:
+                  latestSignalSnapshot?.movementContext ??
+                  resolvedActiveCase.movementContext,
+                bodyRegion: latestSignalSnapshot?.bodyRegion ?? null,
+                activityType:
+                  latestSignalSnapshot?.activityType ??
+                  resolvedActiveCase.activityType,
+              });
 
-              if (candidateTest) {
-                const latestSignalSnapshot =
-                  resolvedActiveCase
-                    ? await getLatestCaseSignalSnapshot(
-                        resolvedActiveCase.id,
-                        resolvedActiveCase,
-                      )
-                    : null;
-                const { finalTest } = enforceConcreteTestCandidate({
-                  caseId: resolvedActiveCase.id,
-                  candidate: candidateTest,
-                  userText,
-                  hypothesis: validHypothesis.hypothesis,
-                  movementContext:
-                    latestSignalSnapshot?.movementContext ??
-                    resolvedActiveCase.movementContext,
-                  bodyRegion: latestSignalSnapshot?.bodyRegion ?? null,
-                  activityType:
-                    latestSignalSnapshot?.activityType ??
-                    resolvedActiveCase.activityType,
-                });
+              const [latestStoredAdjustment] = await db
+                .select({
+                  cue: caseAdjustments.cue,
+                  mechanicalFocus: caseAdjustments.mechanicalFocus,
+                  hypothesisId: caseAdjustments.hypothesisId,
+                })
+                .from(caseAdjustments)
+                .where(eq(caseAdjustments.caseId, resolvedActiveCase.id))
+                .orderBy(desc(caseAdjustments.id))
+                .limit(1);
 
-                const [latestStoredAdjustment] = await db
-                  .select({
-                    cue: caseAdjustments.cue,
-                    mechanicalFocus: caseAdjustments.mechanicalFocus,
-                    hypothesisId: caseAdjustments.hypothesisId,
+              const isDuplicateAdjustment =
+                areEquivalentDashboardCandidates(
+                  finalTest,
+                  latestStoredAdjustment?.cue,
+                ) ||
+                areEquivalentDashboardCandidates(
+                  finalTest,
+                  latestStoredAdjustment?.mechanicalFocus,
+                );
+
+              if (!isDuplicateAdjustment) {
+                const [insertedAdjustment] = await db
+                  .insert(caseAdjustments)
+                  .values({
+                    caseId: resolvedActiveCase.id,
+                    hypothesisId: validHypothesis.id,
+                    cue: finalTest,
+                    mechanicalFocus: finalTest,
                   })
-                  .from(caseAdjustments)
-                  .where(eq(caseAdjustments.caseId, resolvedActiveCase.id))
-                  .orderBy(desc(caseAdjustments.id))
-                  .limit(1);
-
-                const isDuplicateAdjustment =
-                  areEquivalentDashboardCandidates(
-                    finalTest,
-                    latestStoredAdjustment?.cue,
-                  ) ||
-                  areEquivalentDashboardCandidates(
-                    finalTest,
-                    latestStoredAdjustment?.mechanicalFocus,
-                  );
-
-                if (!isDuplicateAdjustment) {
-                  const [insertedAdjustment] = await db
-                    .insert(caseAdjustments)
-                    .values({
-                      caseId: resolvedActiveCase.id,
-                      hypothesisId: validHypothesis.id,
-                      cue: finalTest,
-                      mechanicalFocus: finalTest,
-                    })
-                    .returning({
-                      id: caseAdjustments.id,
-                    });
-                  console.log("EXTRACT_WRITE_SUCCESS", {
+                  .returning({
+                    id: caseAdjustments.id,
+                  });
+                console.log("EXTRACT_WRITE_SUCCESS", {
                   type: "adjustment",
                   caseId: resolvedActiveCase.id,
                   adjustmentId: insertedAdjustment?.id ?? null,
-                });
-              }
-            } else if (adjustmentSentence || mechanicalFocus) {
-                console.log("EXTRACT_WRITE_FAIL", {
-                  type: "adjustment",
-                  caseId: resolvedActiveCase.id,
-                  hypothesisId: validHypothesis.id,
-                  adjustmentSentence,
-                  mechanicalFocus,
-                  reason: "missing_candidate_test",
                 });
               }
             }
