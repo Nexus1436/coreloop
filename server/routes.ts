@@ -6696,18 +6696,9 @@ Return only the corrected response.
                 });
               }
 
-              if (
-                adjustmentSentence &&
-                mechanicalFocus &&
-                isValidMechanicalAdjustmentPair({
-                  cue: adjustmentSentence,
-                  mechanicalFocus,
-                }) &&
-                !areEquivalentDashboardCandidates(
-                  adjustmentSentence,
-                  hypothesisSentence,
-                )
-              ) {
+              const candidateTest = adjustmentSentence ?? mechanicalFocus;
+
+              if (candidateTest) {
                 const latestSignalSnapshot =
                   resolvedActiveCase
                     ? await getLatestCaseSignalSnapshot(
@@ -6717,7 +6708,7 @@ Return only the corrected response.
                     : null;
                 const { finalTest } = enforceConcreteTestCandidate({
                   caseId: resolvedActiveCase.id,
-                  candidate: adjustmentSentence,
+                  candidate: candidateTest,
                   userText,
                   hypothesis: validHypothesis.hypothesis,
                   movementContext:
@@ -6763,10 +6754,10 @@ Return only the corrected response.
                       id: caseAdjustments.id,
                     });
                   console.log("EXTRACT_WRITE_SUCCESS", {
-                    type: "adjustment",
-                    caseId: resolvedActiveCase.id,
-                    adjustmentId: insertedAdjustment?.id ?? null,
-                  });
+                  type: "adjustment",
+                  caseId: resolvedActiveCase.id,
+                  adjustmentId: insertedAdjustment?.id ?? null,
+                });
               }
             } else if (adjustmentSentence || mechanicalFocus) {
                 console.log("EXTRACT_WRITE_FAIL", {
@@ -6775,7 +6766,7 @@ Return only the corrected response.
                   hypothesisId: validHypothesis.id,
                   adjustmentSentence,
                   mechanicalFocus,
-                  reason: "candidate_failed_validation",
+                  reason: "missing_candidate_test",
                 });
               }
             }
