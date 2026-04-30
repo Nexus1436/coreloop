@@ -1789,6 +1789,7 @@ async function resolveCaseReviewTargetCase({
 function extractFirstMatchingSentence(
   text: string,
   patterns: RegExp[],
+  options?: { rejectMechanismSentences?: boolean },
 ): string | null {
   const sentences = text
     .replace(/\s+/g, " ")
@@ -1815,6 +1816,14 @@ function extractFirstMatchingSentence(
       if (/^[A-Z][A-Z\s]+:?$/.test(normalized)) return null;
       if (isLowSignalShiftText(normalized)) return null;
       if (isGenericCoachingFillerText(normalized)) return null;
+      if (
+        options?.rejectMechanismSentences &&
+        /^(?:the issue is|the problem is|what'?s happening is|this is happening because|this is driven by|this comes from|your .* is compensating|your .* is taking over)\b/i.test(
+          normalized,
+        )
+      ) {
+        return null;
+      }
       if (patternMatches === 0) return null;
 
       let score = patternMatches * 5;
@@ -3064,6 +3073,16 @@ JSON shape:
     outcomeStatus: update.outcomeStatus,
     confidence: update.confidence,
   });
+  console.log("INTERNAL_CASE_ENGINE_OUTPUT", {
+    caseId: currentCase.id,
+    signal: update.signal,
+    hypothesis: update.hypothesis,
+    adjustment: update.adjustment,
+    currentTest: update.currentTest,
+    outcome: update.outcome,
+    outcomeStatus: update.outcomeStatus,
+    confidence: update.confidence,
+  });
 
   return update;
 }
@@ -3141,6 +3160,12 @@ async function persistInternalCaseUpdate({
 
       activeHypothesis = insertedHypothesis;
       result.wroteHypothesis = true;
+      console.log("INTERNAL_HYPOTHESIS_WRITE", {
+        caseId,
+        status: "inserted",
+        hypothesisId: insertedHypothesis?.id ?? null,
+        hypothesisPreview: clampText(update.hypothesis, 180),
+      });
       console.log("INTERNAL_CASE_WRITE_SUCCESS", {
         type: "hypothesis",
         caseId,
@@ -3148,7 +3173,25 @@ async function persistInternalCaseUpdate({
       });
     } else if (isValidStoredHypothesis(latestStoredHypothesis)) {
       activeHypothesis = latestStoredHypothesis;
+      console.log("INTERNAL_HYPOTHESIS_WRITE", {
+        caseId,
+        status: "duplicate_reused_latest",
+        hypothesisId: latestStoredHypothesis.id,
+        hypothesisPreview: clampText(update.hypothesis, 180),
+      });
+    } else {
+      console.log("INTERNAL_HYPOTHESIS_WRITE", {
+        caseId,
+        status: "duplicate_skipped_latest_invalid",
+        hypothesisPreview: clampText(update.hypothesis, 180),
+      });
     }
+  } else {
+    console.log("INTERNAL_HYPOTHESIS_WRITE", {
+      caseId,
+      status: update.hypothesis ? "skipped_generic_or_invalid" : "skipped_null",
+      hypothesisPreview: clampText(update.hypothesis ?? "", 180),
+    });
   }
 
   const nextTest = update.currentTest ?? update.adjustment;
@@ -3190,12 +3233,40 @@ async function persistInternalCaseUpdate({
         .returning({ id: caseAdjustments.id });
 
       result.wroteAdjustment = true;
+      console.log("INTERNAL_ADJUSTMENT_WRITE", {
+        caseId,
+        status: "inserted",
+        adjustmentId: insertedAdjustment?.id ?? null,
+        hypothesisId: activeHypothesis.id,
+        cuePreview: clampText(adjustmentCue, 180),
+        mechanicalFocusPreview: clampText(mechanicalFocus, 180),
+      });
       console.log("INTERNAL_CASE_WRITE_SUCCESS", {
         type: "adjustment",
         caseId,
         adjustmentId: insertedAdjustment?.id ?? null,
       });
+    } else {
+      console.log("INTERNAL_ADJUSTMENT_WRITE", {
+        caseId,
+        status: "duplicate_skipped",
+        hypothesisId: activeHypothesis.id,
+        cuePreview: clampText(adjustmentCue, 180),
+        mechanicalFocusPreview: clampText(mechanicalFocus, 180),
+      });
     }
+  } else {
+    console.log("INTERNAL_ADJUSTMENT_WRITE", {
+      caseId,
+      status: !nextTest
+        ? "skipped_null"
+        : !activeHypothesis?.id
+          ? "skipped_no_hypothesis"
+          : "skipped_generic_or_invalid",
+      hasNextTest: Boolean(nextTest),
+      hasActiveHypothesis: Boolean(activeHypothesis?.id),
+      nextTestPreview: clampText(nextTest ?? "", 180),
+    });
   }
 
   if (update.outcomeStatus && update.outcomeStatus !== "unknown") {
@@ -3242,6 +3313,13 @@ async function persistInternalCaseUpdate({
           .returning({ id: caseOutcomes.id });
 
         result.wroteOutcome = true;
+        console.log("INTERNAL_OUTCOME_WRITE", {
+          caseId,
+          status: "inserted",
+          outcomeId: insertedOutcome?.id ?? null,
+          adjustmentId: validAdjustment.id,
+          result: mappedOutcome,
+        });
         console.log("INTERNAL_CASE_WRITE_SUCCESS", {
           type: "outcome",
           caseId,
@@ -3254,8 +3332,27 @@ async function persistInternalCaseUpdate({
             .set({ status: "resolved" })
             .where(eq(cases.id, caseId));
         }
+      } else {
+        console.log("INTERNAL_OUTCOME_WRITE", {
+          caseId,
+          status: "duplicate_recent_skipped",
+          adjustmentId: validAdjustment.id,
+          result: mappedOutcome,
+        });
       }
+    } else {
+      console.log("INTERNAL_OUTCOME_WRITE", {
+        caseId,
+        status: "skipped_no_valid_adjustment",
+        result: mappedOutcome,
+      });
     }
+  } else {
+    console.log("INTERNAL_OUTCOME_WRITE", {
+      caseId,
+      status: update.outcomeStatus ? "skipped_unknown" : "skipped_null",
+      outcomeStatus: update.outcomeStatus,
+    });
   }
 
   await db.update(cases).set({ updatedAt: new Date() }).where(eq(cases.id, caseId));
@@ -3268,6 +3365,28 @@ async function buildStructuredCaseStateBlock(
   internalUpdate: InternalCaseUpdate | null,
 ): Promise<string> {
   const snapshot = await buildInternalCaseStateSnapshot(caseId);
+  const visibleStateInput = {
+    caseId,
+    signal: internalUpdate?.signal ?? snapshot.latestSignal ?? null,
+    bodyRegion: internalUpdate?.bodyRegion ?? null,
+    activityType: internalUpdate?.activityType ?? null,
+    movementContext: internalUpdate?.movementContext ?? null,
+    hypothesis: internalUpdate?.hypothesis ?? snapshot.latestHypothesis ?? null,
+    adjustment:
+      internalUpdate?.currentTest ??
+      internalUpdate?.adjustment ??
+      snapshot.latestAdjustment ??
+      null,
+    outcome: internalUpdate?.outcome ?? snapshot.latestOutcome ?? null,
+  };
+
+  console.log("VISIBLE_RESPONSE_STATE_INPUT", {
+    ...visibleStateInput,
+    signal: clampText(visibleStateInput.signal ?? "", 180),
+    hypothesis: clampText(visibleStateInput.hypothesis ?? "", 180),
+    adjustment: clampText(visibleStateInput.adjustment ?? "", 180),
+    outcome: clampText(visibleStateInput.outcome ?? "", 180),
+  });
 
   return `
 === STRUCTURED CASE STATE ===
@@ -4858,6 +4977,27 @@ ${memoryBlock}
         220,
       );
 
+      console.log("DASHBOARD_CASE_STATE_READ", {
+        selectedCaseId: selectedCase?.id ?? null,
+        activeCaseTitle,
+        investigationState,
+        signalCaseId: latestSignal?.caseId ?? null,
+        hypothesisCaseId: latestHypothesis?.caseId ?? null,
+        adjustmentCaseId: latestAdjustment?.caseId ?? null,
+        outcomeCaseId: latestOutcome?.caseId ?? null,
+        signalPreview: clampText(latestSignal?.description ?? "", 160),
+        hypothesisPreview: clampText(latestHypothesis?.hypothesis ?? "", 160),
+        adjustmentPreview: clampText(
+          pickDashboardDisplayValue([
+            latestAdjustment?.cue,
+            latestAdjustment?.mechanicalFocus,
+          ]) ?? "",
+          160,
+        ),
+        currentTestPreview: clampText(currentTest ?? "", 160),
+        currentMechanismPreview: clampText(currentMechanism ?? "", 160),
+      });
+
       res.json({
         activeCaseTitle,
         investigationState,
@@ -5548,6 +5688,17 @@ Produce the response now.
               ...formatUnknownError(err),
             });
           }
+        } else {
+          console.log("INTERNAL_CASE_ENGINE_START", {
+            userId,
+            conversationId: convoId,
+            caseId: resolvedActiveCase.id,
+            skipped: true,
+            reason: "no_new_signal_outcome_or_context_dependency",
+            shouldCreateCase,
+            outcomeResult: internalOutcomeResult,
+            dependsOnPriorConversation: dependsOnPriorConversationContext(userText),
+          });
         }
       }
 
@@ -6340,7 +6491,7 @@ Return only the corrected response.
               /^\s*soften\b/i,
               /^\s*slow\b/i,
               /\b(?:try|test|use|focus on|keep|make sure|let|allow|shift|load|relax|drive|control|rotate|brace|stack|press|pull|push|hinge|hold|stay|reduce|increase|shorten|lengthen|soften|slow)\b/i,
-              ]);
+              ], { rejectMechanismSentences: true });
 
               const mechanicalFocusCandidate =
                 extractFirstMatchingSentence(finalText, [
