@@ -2257,11 +2257,16 @@ function getConcreteTestInvalidReason(value: string | null | undefined): string 
     /\bimprove\b/i,
     /\bwork on\b/i,
     /\btry to\b/i,
+    /\btry and\b/i,
     /\bmaintain\b/i,
+    /\bnotice if\b/i,
+    /\bconsciously\b/i,
     /\bpay attention\b/i,
     /\bbe mindful\b/i,
     /\bstrengthen\b/i,
     /\bstabilize\b/i,
+    /\bstabilizing\b/i,
+    /\bstability\b/i,
     /\buse better\b/i,
     /\bdistribute the load\b/i,
     /\bcontrolled rotation\b/i,
@@ -2273,7 +2278,7 @@ function getConcreteTestInvalidReason(value: string | null | undefined): string 
   }
 
   const hasFiniteDose =
-    /\b(?:1|one|2|two|3|three|5|five)\s+(?:rep|reps|motion|motions|serve|serves|step|steps|time|times|load|loads|reach|reaches|swing|swings)\b/i.test(
+    /\b(?:1|one|2|two|3|three|5|five)\s+(?:rep|reps|motion|motions|serve|serves|step|steps|time|times|trial|trials|load|loads|reach|reaches|swing|swings)\b/i.test(
       text,
     ) ||
     /\b(?:do|take|try|test)\s+(?:1|one|2|two|3|three|5|five)\b/i.test(text) ||
@@ -2745,6 +2750,8 @@ function pickDashboardDisplayValue(
   values: Array<string | null | undefined>,
 ): string | null {
   const normalizedValues = values
+    .map((value) => normalizePreviewValue(value))
+    .flatMap((value) => value.split(/\s+—\s+/))
     .map((value) => normalizePreviewValue(value))
     .filter((value): value is string => Boolean(value));
 
