@@ -1,6 +1,6 @@
 modules = ["nodejs-20", "python-3.11", "web", "postgresql-16"]
 
-run = "NODE_ENV=development tsx server/index.ts"
+run = "npm run build && npm run start"
 
 hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
@@ -29,7 +29,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "fuser -k 5000/tcp 2>/dev/null; sleep 0.5; NODE_ENV=development tsx server/index.ts"
+args = "fuser -k 5000/tcp 2>/dev/null; sleep 0.5; npm run build && npm run start"
 waitForPort = 5000
 
 [[ports]]

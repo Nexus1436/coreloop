@@ -122,6 +122,9 @@ function errorHandler(
 async function boot() {
   try {
     console.log("BOOTING BACKEND DIAGNOSTIC-V2");
+    console.log(
+      "RUNNING BACKEND VERSION: test-enforcement-v4-no-candidate-failed-validation",
+    );
 
     /* =====================================================
        AUTH
