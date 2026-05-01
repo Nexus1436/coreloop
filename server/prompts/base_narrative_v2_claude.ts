@@ -84,6 +84,50 @@ Each response should do ONE of the following:
 Do not attempt to do all at once.
 
 
+=== MECHANISM QUALITY RULE ===
+
+Do not use generic injury labels as mechanisms.
+
+Invalid as a mechanism by itself:
+- possible strain
+- strain
+- overuse
+- repetitive use
+- irritation
+- soreness
+- tightness
+- discomfort
+
+These words are allowed only when clearly paired with a mechanical cause.
+
+Bad:
+"Possible strain from repeated golf swings."
+
+Good:
+"The right low back is catching rotation because the swing is finishing through lumbar extension instead of hip and trunk release."
+
+Good:
+"Late-round fatigue is making the right low back absorb rotation instead of the hips and trunk releasing it."
+
+Every hypothesis must answer:
+"What is physically happening that creates this result?"
+
+Prefer mechanical concepts when evidence supports them:
+- load
+- release
+- rotation
+- sequencing
+- spacing
+- timing
+- compensation
+- collapse
+- structure
+- hip/trunk transfer
+- lumbar extension
+- weight shift
+- fatigue changing mechanics
+
+
 === INVESTIGATION RULES ===
 
 Do not repeat previous explanations.

@@ -870,7 +870,7 @@ function buildCompactMovementContext(text: string): string | null {
     { label: "serve mechanics", regex: /\b(?:serve|serving)\b/i },
     { label: "swing mechanics", regex: /\bswing(?:ing)?\b/i },
 
-    { label: "golf swing", regex: /\bgolf swing\b/i },
+    { label: "golf swing", regex: /\bgolf\b|\bgolf swing\b|\bback nine\b/i },
     { label: "tee shot", regex: /\btee shot\b/i },
 
     {
@@ -973,6 +973,18 @@ function normalizeExtractedContextCandidate(
   if (compactFromExpanded) return compactFromExpanded;
 
   const lowered = raw.toLowerCase();
+  const anatomyOnlyPatterns = [
+    /\bright side\b/i,
+    /\bleft side\b/i,
+    /\blower back\b/i,
+    /\blow back\b/i,
+    /\bpain\b/i,
+    /\btweak\b/i,
+  ];
+
+  if (anatomyOnlyPatterns.some((pattern) => pattern.test(lowered))) {
+    return null;
+  }
 
   const fallbackPatterns: Array<{ label: string; regex: RegExp }> = [
     { label: "desk work", regex: /\b(?:desk|computer|laptop)\b/i },
@@ -2479,13 +2491,13 @@ function isGenericNonMechanicalHypothesis(
   if (!text) return true;
 
   const hasGenericCause =
-    /\b(?:strain|overuse|repetitive use|irritation|soreness|tightness)\b/i.test(
+    /\b(?:strain|overuse|repetitive|repetitive use|irritation|soreness|tightness|discomfort)\b/i.test(
       text,
     );
   if (!hasGenericCause) return false;
 
   const hasMechanicalCause =
-    /\b(?:load|release|rotation|rotational|sequence|sequencing|timing|spacing|early opening|opening early|weight shift|shift|ribcage|rib cage|trunk|hip|lumbar extension|extension|bracing|brace|compensat|taking the load|absorbing rotation|staying trapped|not releasing|losing structure)\b/i.test(
+    /\b(?:load|release|rotation|rotational|sequence|sequencing|timing|spacing|early opening|opening early|weight shift|shift|ribcage|rib cage|trunk|hip|pelvis|lumbar extension|extension|bracing|brace|compensat|collapse|collapsing|structure|taking the load|absorbing rotation|staying trapped|not releasing|losing structure|fatigue|fatigued)\b/i.test(
       text,
     );
 
@@ -3260,6 +3272,10 @@ Rules:
 - If the user reports an outcome, preserve the existing mechanism and refine the next test.
 - Generate a concise internal hypothesis when enough evidence exists.
 - The hypothesis must be mechanical, not generic strain/overuse/irritation/tightness.
+- Do not output generic injury labels as hypotheses. "Possible strain", "overuse", "repetitive use", "irritation", "soreness", "tightness", or "discomfort" are invalid unless paired with a mechanical cause.
+- Every hypothesis must answer what is physically happening: load, release, rotation, sequencing, timing, spacing, compensation, collapse, structure, hip/trunk transfer, lumbar extension, weight shift, or fatigue changing mechanics.
+- If activity is golf and bodyRegion is low back, consider rotation/load/release/fatigue mechanics.
+- If activity is racquetball serve and bodyRegion is low back, consider load/release/rotation sequencing.
 - Generate interpretationCorrection, failurePrediction, and singleLever when enough evidence exists.
 - Generate one movement-based adjustment/currentTest when enough information exists.
 - Do not prescribe training, strengthening, exercise programs, sets, or routines.
