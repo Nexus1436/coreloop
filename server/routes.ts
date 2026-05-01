@@ -3647,6 +3647,48 @@ async function buildResponseFromCaseState(
   return [mechanismLine, testLine].filter(Boolean).join("\n\n").trim();
 }
 
+async function getVisibleCurrentTestFromCaseState(
+  caseId: number,
+  internalUpdate: InternalCaseUpdate | null,
+): Promise<string | null> {
+  const snapshot = await buildInternalCaseStateSnapshot(caseId);
+  return normalizePreviewValue(
+    internalUpdate?.currentTest ??
+      internalUpdate?.adjustment ??
+      snapshot.latestAdjustment ??
+      null,
+  ) || null;
+}
+
+function responseIncludesCurrentTest(
+  responseText: string,
+  currentTest: string,
+): boolean {
+  const responseNormalized = normalizeDashboardCandidate(responseText);
+  const testNormalized = normalizeDashboardCandidate(currentTest);
+
+  if (!responseNormalized || !testNormalized) return false;
+
+  return (
+    responseNormalized.includes(testNormalized) ||
+    testNormalized.includes(responseNormalized) ||
+    areEquivalentDashboardCandidates(responseText, currentTest)
+  );
+}
+
+function isProbeOnlyResponse(text: string): boolean {
+  const normalized = normalizePreviewValue(text);
+  if (!normalized) return true;
+
+  return (
+    normalized.length < 140 &&
+    /\?$/.test(normalized) &&
+    !/\b(?:do|take|try|test)\s+(?:1|one|2|two|3|three|5|five)\b/i.test(
+      normalized,
+    )
+  );
+}
+
 async function buildSessionSummaryContext({
   userId,
   conversationId,
@@ -6486,6 +6528,38 @@ Return only the corrected response.
             finalText =
               "Does it break before the weight shift or after?";
           }
+        }
+
+        const visibleCurrentTest = resolvedActiveCase
+          ? await getVisibleCurrentTestFromCaseState(
+              resolvedActiveCase.id,
+              internalCasePersistResult.update,
+            )
+          : null;
+
+        if (
+          visibleCurrentTest &&
+          !responseIncludesCurrentTest(finalText, visibleCurrentTest)
+        ) {
+          const caseStateResponse = resolvedActiveCase
+            ? await buildResponseFromCaseState(
+                resolvedActiveCase.id,
+                internalCasePersistResult.update,
+              )
+            : "";
+
+          if (caseStateResponse && isProbeOnlyResponse(finalText)) {
+            finalText = caseStateResponse;
+          } else if (caseStateResponse && !finalText.trim()) {
+            finalText = caseStateResponse;
+          } else {
+            finalText = `${finalText.trim()}\n\n${visibleCurrentTest}`.trim();
+          }
+
+          console.log("ARC_CASE_STATE_TEST_INCLUDED", {
+            caseId: resolvedActiveCase?.id ?? null,
+            finalTextLength: finalText.length,
+          });
         }
       }
 
