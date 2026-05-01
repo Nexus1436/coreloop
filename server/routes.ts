@@ -2571,6 +2571,78 @@ function enforceMechanicalHypothesis({
   return finalHypothesis;
 }
 
+function completeArcFields({
+  hypothesis,
+  interpretationCorrection,
+  failurePrediction,
+  singleLever,
+  bodyRegion,
+  activityType,
+  movementContext,
+}: {
+  hypothesis: string | null;
+  interpretationCorrection: string | null;
+  failurePrediction: string | null;
+  singleLever: string | null;
+  bodyRegion: string | null | undefined;
+  activityType: string | null | undefined;
+  movementContext: string | null | undefined;
+}): {
+  interpretationCorrection: string | null;
+  failurePrediction: string | null;
+  singleLever: string | null;
+} {
+  if (!hypothesis) {
+    return { interpretationCorrection, failurePrediction, singleLever };
+  }
+
+  const activity = normalizeCaseKey(activityType);
+  const movement = normalizeCaseKey(movementContext);
+  const region = normalizeBodyRegion(bodyRegion);
+  const isLowBack = region === "low back" || region === "back";
+  const isServe = /\bserve\b/.test(movement);
+
+  if (activity === "racquetball" && isServe && isLowBack) {
+    return {
+      interpretationCorrection:
+        interpretationCorrection ??
+        "This is not just back strain from serving; the rotation is not releasing cleanly through the trunk and hips.",
+      failurePrediction:
+        failurePrediction ??
+        "If you just reduce force or brace harder, you will hide where the rotation is breaking.",
+      singleLever:
+        singleLever ??
+        "Stay tall through the serve and feel when the right side stops releasing and starts taking the load.",
+    };
+  }
+
+  if (activity === "golf" && isLowBack) {
+    return {
+      interpretationCorrection:
+        interpretationCorrection ??
+        "Do not treat this as simple overuse from repeated swings; test where the swing stops releasing cleanly.",
+      failurePrediction:
+        failurePrediction ??
+        "You will likely brace harder or swing easier, which hides the sequencing break instead of exposing it.",
+      singleLever:
+        singleLever ??
+        "Stay tall through the finish and locate when the low back starts taking the load.",
+    };
+  }
+
+  return {
+    interpretationCorrection:
+      interpretationCorrection ??
+      "Do not treat this as simple overuse or effort; this is a load and release problem in the movement.",
+    failurePrediction:
+      failurePrediction ??
+      "You will likely stabilize harder or reduce force, which hides the break instead of exposing it.",
+    singleLever:
+      singleLever ??
+      "Stay tall and locate when the symptom starts taking the load during the movement.",
+  };
+}
+
 function isStrongAdjustmentCandidate(
   value: string | null | undefined,
 ): boolean {
@@ -3239,10 +3311,20 @@ function normalizeInternalCaseUpdate(
     stringOrNull(raw?.activityType, 80) ??
     fallback.derivedActivityType ??
     null;
-  const normalizedMovementContext =
+  let normalizedMovementContext =
     normalizeExtractedContextCandidate(stringOrNull(raw?.movementContext, 80)) ??
-    fallback.derivedMovementContext ??
+    normalizeExtractedContextCandidate(fallback.derivedMovementContext) ??
     null;
+  if (normalizeCaseKey(normalizedActivityType) === "golf") {
+    normalizedMovementContext = "golf swing";
+  } else if (
+    normalizeCaseKey(normalizedActivityType) === "racquetball" &&
+    /\bserve\b/i.test(
+      `${fallback.userText} ${normalizedMovementContext ?? ""}`,
+    )
+  ) {
+    normalizedMovementContext = "drive serve";
+  }
   const rawHypothesis = stringOrNull(raw?.hypothesis, 400);
   const enforcedHypothesis = enforceMechanicalHypothesis({
     original: rawHypothesis,
@@ -3259,6 +3341,15 @@ function normalizeInternalCaseUpdate(
     260,
   );
   const normalizedSingleLever = stringOrNull(raw?.singleLever, 180);
+  const completedArc = completeArcFields({
+    hypothesis: enforcedHypothesis,
+    interpretationCorrection: normalizedCorrection,
+    failurePrediction: normalizedFailurePrediction,
+    singleLever: normalizedSingleLever,
+    bodyRegion: normalizedBodyRegion,
+    activityType: normalizedActivityType,
+    movementContext: normalizedMovementContext,
+  });
 
   return {
     signal:
@@ -3270,34 +3361,9 @@ function normalizeInternalCaseUpdate(
     activityType: normalizedActivityType,
     movementContext: normalizedMovementContext,
     hypothesis: enforcedHypothesis,
-    interpretationCorrection:
-      normalizedCorrection ??
-      (enforcedHypothesis
-        ? buildInterpretationCorrectionLine({
-            hypothesis: enforcedHypothesis,
-            bodyRegion: normalizedBodyRegion,
-            activityType: normalizedActivityType,
-            movementContext: normalizedMovementContext,
-          })
-        : null),
-    failurePrediction:
-      normalizedFailurePrediction ??
-      (enforcedHypothesis
-        ? buildFailurePredictionLine({
-            failurePrediction: null,
-            hypothesis: enforcedHypothesis,
-            bodyRegion: normalizedBodyRegion,
-          })
-        : null),
-    singleLever:
-      normalizedSingleLever ??
-      (enforcedHypothesis
-        ? buildFallbackSingleLever({
-            bodyRegion: normalizedBodyRegion,
-            activityType: normalizedActivityType,
-            movementContext: normalizedMovementContext,
-          })
-        : null),
+    interpretationCorrection: completedArc.interpretationCorrection,
+    failurePrediction: completedArc.failurePrediction,
+    singleLever: completedArc.singleLever,
     adjustment: stringOrNull(raw?.adjustment, 320),
     currentTest: stringOrNull(raw?.currentTest, 320),
     outcome: stringOrNull(raw?.outcome, 400),
