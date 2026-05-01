@@ -1292,7 +1292,11 @@ function deriveBodyRegion(text: string): string | null {
   const input = text.trim();
 
   const regionPatterns: Array<{ label: string; regex: RegExp }> = [
-    { label: "low back", regex: /\blow back\b|\blower back\b|\blumbar\b/i },
+    {
+      label: "low back",
+      regex:
+        /\blower[-\s]?right back\b|\bright lower back\b|\blower right side of (?:my |the )?back\b|\bright side low back\b|\bright side and back\b|\blower back right side\b|\blow back\b|\blower back\b|\blumbar\b/i,
+    },
     {
       label: "mid back",
       regex: /\bmid back\b|\bmiddle back\b|\bthoracic\b/i,
@@ -1371,6 +1375,12 @@ function normalizeBodyRegion(input: string | null | undefined): string {
 
   if (!value) return "";
   if (
+    /\blower[-\s]?right back\b/.test(value) ||
+    /\bright lower back\b/.test(value) ||
+    /\blower right side of (?:my |the )?back\b/.test(value) ||
+    /\bright side low back\b/.test(value) ||
+    /\bright side and back\b/.test(value) ||
+    /\blower back right side\b/.test(value) ||
     value.includes("low back") ||
     value.includes("lower back") ||
     value.includes("lumbar")
@@ -2543,7 +2553,7 @@ function isGenericNonMechanicalHypothesis(
   if (!hasGenericCause) return false;
 
   const hasMechanicalCause =
-    /\b(?:load|release|rotation|rotational|sequence|sequencing|timing|spacing|early opening|opening early|weight shift|shift|ribcage|rib cage|trunk|hip|pelvis|lumbar extension|extension|bracing|brace|compensat|collapse|collapsing|structure|taking the load|absorbing rotation|staying trapped|not releasing|losing structure|fatigue|fatigued)\b/i.test(
+    /\b(?:not releasing|absorbing rotation|taking the load|finishing through lumbar extension|sequencing breakdown|trunk and hip release|trunk and hips? release|collapsing under load|opening too early|shifting too early|load is not releasing|rotation is not releasing)\b/i.test(
       text,
     );
 
@@ -7083,9 +7093,18 @@ Return only the corrected response.
           }
         }
 
+        const latestCaseHypothesisForTestOnly =
+          resolvedActiveCase && visibleCurrentTest
+            ? await getLatestValidHypothesisForCase(resolvedActiveCase.id)
+            : null;
+        const hasHypothesisForTestOnly = Boolean(
+          internalCasePersistResult.update?.hypothesis ||
+            latestCaseHypothesisForTestOnly?.hypothesis,
+        );
+
         if (
           visibleCurrentTest &&
-          internalCasePersistResult.update?.hypothesis &&
+          hasHypothesisForTestOnly &&
           isTestOnlyResponse(finalText, visibleCurrentTest)
         ) {
           console.log("ARC_TEST_ONLY_DETECTED", {
