@@ -1244,6 +1244,17 @@ function deriveCaseContext(
     movementContext = detectedActivity;
   }
 
+  if (detectedActivity === "golf") {
+    movementContext = "golf swing";
+  }
+
+  if (
+    isRacquetballContext &&
+    normalizeExtractedContextCandidate(movementContext) === null
+  ) {
+    movementContext = "drive serve";
+  }
+
   if (
     !movementContext &&
     normalizedInput.includes("leaning forward") &&
@@ -2504,6 +2515,62 @@ function isGenericNonMechanicalHypothesis(
   return !hasMechanicalCause;
 }
 
+function buildFallbackMechanicalHypothesis({
+  activityType,
+  movementContext,
+  bodyRegion,
+}: {
+  activityType: string | null | undefined;
+  movementContext: string | null | undefined;
+  bodyRegion: string | null | undefined;
+}): string | null {
+  const activity = normalizeCaseKey(activityType);
+  const movement = normalizeCaseKey(movementContext);
+  const region = normalizeBodyRegion(bodyRegion);
+
+  if (activity === "golf" && region === "low back") {
+    return "Right low back is taking the load because the swing is finishing through lumbar extension instead of hip and trunk rotation.";
+  }
+
+  if (
+    activity === "racquetball" &&
+    /\bserve\b/.test(movement) &&
+    (region === "low back" || region === "back")
+  ) {
+    return "Right low back is absorbing rotation because the load is not releasing cleanly through the trunk and hips during the serve.";
+  }
+
+  return null;
+}
+
+function enforceMechanicalHypothesis({
+  original,
+  activityType,
+  movementContext,
+  bodyRegion,
+}: {
+  original: string | null;
+  activityType: string | null | undefined;
+  movementContext: string | null | undefined;
+  bodyRegion: string | null | undefined;
+}): string | null {
+  const fallback = buildFallbackMechanicalHypothesis({
+    activityType,
+    movementContext,
+    bodyRegion,
+  });
+  const accepted = Boolean(original && isStrongHypothesisCandidate(original));
+  const finalHypothesis = accepted ? original : fallback;
+
+  console.log("HYPOTHESIS_VALIDATION", {
+    original: clampText(original ?? "", 120),
+    accepted,
+    usedFallback: Boolean(!accepted && fallback),
+  });
+
+  return finalHypothesis;
+}
+
 function isStrongAdjustmentCandidate(
   value: string | null | undefined,
 ): boolean {
@@ -3166,6 +3233,23 @@ function normalizeInternalCaseUpdate(
         : fallback.outcomeResult === "Same"
           ? "same"
           : null;
+  const normalizedBodyRegion =
+    stringOrNull(raw?.bodyRegion, 80) ?? fallback.derivedBodyRegion ?? null;
+  const normalizedActivityType =
+    stringOrNull(raw?.activityType, 80) ??
+    fallback.derivedActivityType ??
+    null;
+  const normalizedMovementContext =
+    normalizeExtractedContextCandidate(stringOrNull(raw?.movementContext, 80)) ??
+    fallback.derivedMovementContext ??
+    null;
+  const rawHypothesis = stringOrNull(raw?.hypothesis, 400);
+  const enforcedHypothesis = enforceMechanicalHypothesis({
+    original: rawHypothesis,
+    activityType: normalizedActivityType,
+    movementContext: normalizedMovementContext,
+    bodyRegion: normalizedBodyRegion,
+  });
 
   return {
     signal:
@@ -3173,17 +3257,10 @@ function normalizeInternalCaseUpdate(
       (qualifiesForTimelineSignal(fallback.userText)
         ? clampText(fallback.userText, 800)
         : null),
-    bodyRegion:
-      stringOrNull(raw?.bodyRegion, 80) ?? fallback.derivedBodyRegion ?? null,
-    activityType:
-      stringOrNull(raw?.activityType, 80) ??
-      fallback.derivedActivityType ??
-      null,
-    movementContext:
-      stringOrNull(raw?.movementContext, 80) ??
-      fallback.derivedMovementContext ??
-      null,
-    hypothesis: stringOrNull(raw?.hypothesis, 400),
+    bodyRegion: normalizedBodyRegion,
+    activityType: normalizedActivityType,
+    movementContext: normalizedMovementContext,
+    hypothesis: enforcedHypothesis,
     interpretationCorrection: stringOrNull(raw?.interpretationCorrection, 260),
     failurePrediction: stringOrNull(raw?.failurePrediction, 260),
     singleLever: stringOrNull(raw?.singleLever, 180),
