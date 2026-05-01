@@ -3250,6 +3250,15 @@ function normalizeInternalCaseUpdate(
     movementContext: normalizedMovementContext,
     bodyRegion: normalizedBodyRegion,
   });
+  const normalizedCorrection = stringOrNull(
+    raw?.interpretationCorrection,
+    260,
+  );
+  const normalizedFailurePrediction = stringOrNull(
+    raw?.failurePrediction,
+    260,
+  );
+  const normalizedSingleLever = stringOrNull(raw?.singleLever, 180);
 
   return {
     signal:
@@ -3261,9 +3270,34 @@ function normalizeInternalCaseUpdate(
     activityType: normalizedActivityType,
     movementContext: normalizedMovementContext,
     hypothesis: enforcedHypothesis,
-    interpretationCorrection: stringOrNull(raw?.interpretationCorrection, 260),
-    failurePrediction: stringOrNull(raw?.failurePrediction, 260),
-    singleLever: stringOrNull(raw?.singleLever, 180),
+    interpretationCorrection:
+      normalizedCorrection ??
+      (enforcedHypothesis
+        ? buildInterpretationCorrectionLine({
+            hypothesis: enforcedHypothesis,
+            bodyRegion: normalizedBodyRegion,
+            activityType: normalizedActivityType,
+            movementContext: normalizedMovementContext,
+          })
+        : null),
+    failurePrediction:
+      normalizedFailurePrediction ??
+      (enforcedHypothesis
+        ? buildFailurePredictionLine({
+            failurePrediction: null,
+            hypothesis: enforcedHypothesis,
+            bodyRegion: normalizedBodyRegion,
+          })
+        : null),
+    singleLever:
+      normalizedSingleLever ??
+      (enforcedHypothesis
+        ? buildFallbackSingleLever({
+            bodyRegion: normalizedBodyRegion,
+            activityType: normalizedActivityType,
+            movementContext: normalizedMovementContext,
+          })
+        : null),
     adjustment: stringOrNull(raw?.adjustment, 320),
     currentTest: stringOrNull(raw?.currentTest, 320),
     outcome: stringOrNull(raw?.outcome, 400),
@@ -3859,6 +3893,26 @@ function buildLeverLine(singleLever: string | null | undefined): string {
   return clampText(lever, 180);
 }
 
+function buildFallbackSingleLever({
+  bodyRegion,
+  activityType,
+  movementContext,
+}: {
+  bodyRegion: string | null | undefined;
+  activityType: string | null | undefined;
+  movementContext: string | null | undefined;
+}): string {
+  const source = `${bodyRegion ?? ""} ${activityType ?? ""} ${
+    movementContext ?? ""
+  }`;
+
+  if (/\blow back|lower back|lumbar\b/i.test(source)) {
+    return "Find whether the low back grabs during load, rotation, or release.";
+  }
+
+  return "Find the exact phase where the movement starts to break.";
+}
+
 async function buildResponseFromCaseState(
   caseId: number,
   internalUpdate: InternalCaseUpdate | null,
@@ -3894,7 +3948,15 @@ async function buildResponseFromCaseState(
           bodyRegion,
         })
       : "";
-  const leverLine = buildLeverLine(internalUpdate?.singleLever);
+  const leverLine =
+    mechanismLine && currentTest
+      ? buildLeverLine(internalUpdate?.singleLever) ||
+        buildFallbackSingleLever({
+          bodyRegion,
+          activityType,
+          movementContext,
+        })
+      : "";
   const testLine = normalizePreviewValue(currentTest);
 
   return [mechanismLine, correctionLine, failureLine, leverLine, testLine]
@@ -3943,6 +4005,19 @@ function isProbeOnlyResponse(text: string): boolean {
       normalized,
     )
   );
+}
+
+function isTestOnlyResponse(text: string, currentTest: string): boolean {
+  const normalized = normalizePreviewValue(text);
+  if (!normalized) return true;
+  if (!responseIncludesCurrentTest(normalized, currentTest)) return false;
+
+  const withoutTest = normalizeDashboardCandidate(normalized).replace(
+    normalizeDashboardCandidate(currentTest),
+    "",
+  );
+
+  return withoutTest.replace(/\s+/g, " ").trim().length < 80;
 }
 
 async function buildSessionSummaryContext({
@@ -6862,6 +6937,27 @@ Return only the corrected response.
             console.log("ARC_CASE_STATE_TEST_INCLUDED", {
               caseId: resolvedActiveCase?.id ?? null,
               finalTextLength: finalText.length,
+            });
+          }
+        }
+
+        if (
+          visibleCurrentTest &&
+          internalCasePersistResult.update?.hypothesis &&
+          isTestOnlyResponse(finalText, visibleCurrentTest)
+        ) {
+          const caseStateResponse = resolvedActiveCase
+            ? await buildResponseFromCaseState(
+                resolvedActiveCase.id,
+                internalCasePersistResult.update,
+              )
+            : "";
+
+          if (caseStateResponse) {
+            finalText = caseStateResponse;
+            console.log("ARC_RESPONSE_TYPE_SELECTED", {
+              caseId: resolvedActiveCase?.id ?? null,
+              responseType: "case_state_test_only_replacement",
             });
           }
         }
