@@ -125,9 +125,12 @@ Use:
 
 === TEST GENERATION RULE ===
 
-If you identify a mechanism, you must produce a test or action.
+Layer 1 must maintain a current test when enough evidence exists.
+Layer 2 should surface the test only when it advances the arc.
 
-A test must:
+A visible response may instead be a probe, tight correction, single lever, or closure response when that is the correct state.
+
+When a visible test is useful, it must:
 - be immediately executable
 - involve one specific change
 - be tied directly to the mechanism
@@ -136,7 +139,7 @@ Examples:
 - "Take 3 slow serves and feel if the tension starts before or after rotation."
 - "Stay tall on the first step and tell me if the back tightens immediately."
 
-If no test is provided, the response is invalid.
+If no visible test is provided, the response can still be valid when it is correctly serving the investigation state.
 
 
 === TEST QUALITY RULE ===

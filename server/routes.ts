@@ -1082,6 +1082,12 @@ function hasAnyActivitySignalInMessage(text: string): boolean {
   );
 }
 
+function hasExplicitActivityInText(text: string): boolean {
+  return /\b(?:racquetball|tennis|pickleball|squash|badminton|golf|run|running|jog|jogging|walk|walking|cycle|cycling|bike|biking|swim|swimming|lift|lifting|weightlift|crossfit|pilates|yoga|climb|climbing|row|rowing|basketball|soccer|football|baseball|hockey|martial arts|boxing|kickboxing|dance|dancing|ballet|squat|deadlift|lunge)\b/i.test(
+    text.trim(),
+  );
+}
+
 function deriveCaseContext(
   text: string,
   settings?: PersistedInterloopSettings | null,
@@ -1625,8 +1631,8 @@ async function shouldStartNewCaseForSignal({
       normalizeOptionalLabel(derivedSignalType)
   ) {
     return {
-      shouldStartNewCase: true,
-      reason: `signal_type_shift:${previousSignalType}->${derivedSignalType}`,
+      shouldStartNewCase: false,
+      reason: `same_case_fit_context_drift:signal_type:${previousSignalType}->${derivedSignalType}`,
       ...derived,
       ...previous,
     };
@@ -1639,8 +1645,8 @@ async function shouldStartNewCaseForSignal({
       normalizeOptionalLabel(derivedMovementContext)
   ) {
     return {
-      shouldStartNewCase: true,
-      reason: `movement_context_shift:${previousMovementContext}->${derivedMovementContext}`,
+      shouldStartNewCase: false,
+      reason: `same_case_fit_context_drift:movement_context:${previousMovementContext}->${derivedMovementContext}`,
       ...derived,
       ...previous,
     };
@@ -1653,8 +1659,8 @@ async function shouldStartNewCaseForSignal({
       normalizeOptionalLabel(derivedActivityType)
   ) {
     return {
-      shouldStartNewCase: true,
-      reason: `activity_type_shift:${previousActivityType}->${derivedActivityType}`,
+      shouldStartNewCase: false,
+      reason: `same_case_fit_context_drift:activity_type:${previousActivityType}->${derivedActivityType}`,
       ...derived,
       ...previous,
     };
@@ -5689,6 +5695,15 @@ Produce the response now.
       const derivedCaseContext = shouldCreateCase
         ? deriveCaseContext(userText, persistedSettingsForContext)
         : null;
+      if (
+        shouldCreateCase &&
+        derivedCaseContext &&
+        resolvedActiveCase?.activityType &&
+        !hasExplicitActivityInText(userText) &&
+        isMeaningfulCaseBoundaryValue(resolvedActiveCase.activityType)
+      ) {
+        derivedCaseContext.activityType = resolvedActiveCase.activityType;
+      }
       const derivedBodyRegion = shouldCreateCase
         ? deriveBodyRegion(userText)
         : null;
@@ -6636,18 +6651,14 @@ Return only the corrected response.
               caseId: resolvedActiveCase?.id ?? null,
               responseType: "case_state_empty_replacement",
             });
-          } else {
-            finalText = `${finalText.trim()}\n\n${visibleCurrentTest}`.trim();
-            console.log("ARC_RESPONSE_TYPE_SELECTED", {
-              caseId: resolvedActiveCase?.id ?? null,
-              responseType: "model_response_with_case_test",
-            });
           }
 
-          console.log("ARC_CASE_STATE_TEST_INCLUDED", {
-            caseId: resolvedActiveCase?.id ?? null,
-            finalTextLength: finalText.length,
-          });
+          if (responseIncludesCurrentTest(finalText, visibleCurrentTest)) {
+            console.log("ARC_CASE_STATE_TEST_INCLUDED", {
+              caseId: resolvedActiveCase?.id ?? null,
+              finalTextLength: finalText.length,
+            });
+          }
         }
       }
 
