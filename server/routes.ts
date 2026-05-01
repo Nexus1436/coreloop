@@ -2431,6 +2431,7 @@ function isStrongHypothesisCandidate(
   if (isGenericCoachingFillerText(text)) return false;
   if (isTestLikeText(text)) return false;
   if (!isMechanismLikeText(text)) return false;
+  if (isGenericNonMechanicalHypothesis(text)) return false;
 
   const directivePatterns = [
     /^\s*focus on\b/i,
@@ -2469,6 +2470,26 @@ function isStrongHypothesisCandidate(
     /\breduced\b[^.!?]{1,80}\bduring\b/i.test(text) ||
     /\bloss of\b[^.!?]{1,80}\bduring\b/i.test(text)
   );
+}
+
+function isGenericNonMechanicalHypothesis(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  const hasGenericCause =
+    /\b(?:strain|overuse|repetitive use|irritation|soreness|tightness)\b/i.test(
+      text,
+    );
+  if (!hasGenericCause) return false;
+
+  const hasMechanicalCause =
+    /\b(?:load|release|rotation|rotational|sequence|sequencing|timing|spacing|early opening|opening early|weight shift|shift|ribcage|rib cage|trunk|hip|lumbar extension|extension|bracing|brace|compensat|taking the load|absorbing rotation|staying trapped|not releasing|losing structure)\b/i.test(
+      text,
+    );
+
+  return !hasMechanicalCause;
 }
 
 function isStrongAdjustmentCandidate(
@@ -3038,6 +3059,9 @@ type InternalCaseUpdate = {
   activityType: string | null;
   movementContext: string | null;
   hypothesis: string | null;
+  interpretationCorrection: string | null;
+  failurePrediction: string | null;
+  singleLever: string | null;
   adjustment: string | null;
   currentTest: string | null;
   outcome: string | null;
@@ -3148,6 +3172,9 @@ function normalizeInternalCaseUpdate(
       fallback.derivedMovementContext ??
       null,
     hypothesis: stringOrNull(raw?.hypothesis, 400),
+    interpretationCorrection: stringOrNull(raw?.interpretationCorrection, 260),
+    failurePrediction: stringOrNull(raw?.failurePrediction, 260),
+    singleLever: stringOrNull(raw?.singleLever, 180),
     adjustment: stringOrNull(raw?.adjustment, 320),
     currentTest: stringOrNull(raw?.currentTest, 320),
     outcome: stringOrNull(raw?.outcome, 400),
@@ -3232,6 +3259,8 @@ Rules:
 - Keep the update scoped to the current case.
 - If the user reports an outcome, preserve the existing mechanism and refine the next test.
 - Generate a concise internal hypothesis when enough evidence exists.
+- The hypothesis must be mechanical, not generic strain/overuse/irritation/tightness.
+- Generate interpretationCorrection, failurePrediction, and singleLever when enough evidence exists.
 - Generate one movement-based adjustment/currentTest when enough information exists.
 - Do not prescribe training, strengthening, exercise programs, sets, or routines.
 - currentTest should be an in-movement probe or lever, not a paragraph.
@@ -3244,6 +3273,9 @@ JSON shape:
   "activityType": string | null,
   "movementContext": string | null,
   "hypothesis": string | null,
+  "interpretationCorrection": string | null,
+  "failurePrediction": string | null,
+  "singleLever": string | null,
   "adjustment": string | null,
   "currentTest": string | null,
   "outcome": string | null,
@@ -3299,6 +3331,12 @@ JSON shape:
     bodyRegion: update.bodyRegion,
     activity: update.activityType,
     hypothesis: clampText(update.hypothesis ?? "", 120),
+    interpretationCorrection: clampText(
+      update.interpretationCorrection ?? "",
+      120,
+    ),
+    failurePrediction: clampText(update.failurePrediction ?? "", 120),
+    singleLever: clampText(update.singleLever ?? "", 120),
     adjustment: clampText(update.adjustment ?? "", 120),
     currentTest: clampText(update.currentTest ?? "", 120),
     outcome: clampText(update.outcome ?? "", 120),
@@ -3600,6 +3638,9 @@ async function buildStructuredCaseStateBlock(
     activityType: internalUpdate?.activityType ?? null,
     movementContext: internalUpdate?.movementContext ?? null,
     hypothesis: internalUpdate?.hypothesis ?? snapshot.latestHypothesis ?? null,
+    interpretationCorrection: internalUpdate?.interpretationCorrection ?? null,
+    failurePrediction: internalUpdate?.failurePrediction ?? null,
+    singleLever: internalUpdate?.singleLever ?? null,
     adjustment:
       internalUpdate?.currentTest ??
       internalUpdate?.adjustment ??
@@ -3627,6 +3668,11 @@ Movement context: ${internalUpdate?.movementContext ?? "unknown"}
 Current hypothesis: ${
     internalUpdate?.hypothesis ?? snapshot.latestHypothesis ?? "none"
   }
+Interpretation correction: ${
+    internalUpdate?.interpretationCorrection ?? "none"
+  }
+Failure prediction: ${internalUpdate?.failurePrediction ?? "none"}
+Single lever: ${internalUpdate?.singleLever ?? "none"}
 Current adjustment/test: ${
     internalUpdate?.currentTest ??
     internalUpdate?.adjustment ??
@@ -3639,6 +3685,8 @@ Response rule:
 - Speak from this structured state.
 - Do not write for extraction.
 - Do not force every structured field into the visible reply.
+- The visible response is the Arc. It should naturally express signal, mechanism, correction, failure prediction, lever, and test when the state supports them.
+- Do not output only the test unless the correct response type is single-test/probe.
 - Select the next useful user-facing move: breakdown, tight correction, lever, probe, or clarification.
 `;
 }
@@ -3691,6 +3739,33 @@ function buildInterpretationCorrectionLine({
   return "The mistake would be adding effort before you know exactly where the movement breaks.";
 }
 
+function buildFailurePredictionLine({
+  failurePrediction,
+  hypothesis,
+  bodyRegion,
+}: {
+  failurePrediction: string | null | undefined;
+  hypothesis: string | null | undefined;
+  bodyRegion: string | null | undefined;
+}): string {
+  const explicit = normalizePreviewValue(failurePrediction);
+  if (explicit) return clampText(explicit, 220);
+
+  const source = `${hypothesis ?? ""} ${bodyRegion ?? ""}`;
+  if (/\blow back|lower back|lumbar\b/i.test(source)) {
+    return "If you only reduce force or brace harder, you may hide the sequencing break instead of finding it.";
+  }
+
+  return "";
+}
+
+function buildLeverLine(singleLever: string | null | undefined): string {
+  const lever = normalizePreviewValue(singleLever);
+  if (!lever) return "";
+
+  return clampText(lever, 180);
+}
+
 async function buildResponseFromCaseState(
   caseId: number,
   internalUpdate: InternalCaseUpdate | null,
@@ -3710,16 +3785,26 @@ async function buildResponseFromCaseState(
   const mechanismLine = cleanMechanismSummary(hypothesis);
   const correctionLine =
     mechanismLine && currentTest
-      ? buildInterpretationCorrectionLine({
+      ? normalizePreviewValue(internalUpdate?.interpretationCorrection) ||
+        buildInterpretationCorrectionLine({
+            hypothesis,
+            bodyRegion,
+            activityType,
+            movementContext,
+          })
+      : "";
+  const failureLine =
+    mechanismLine && currentTest
+      ? buildFailurePredictionLine({
+          failurePrediction: internalUpdate?.failurePrediction,
           hypothesis,
           bodyRegion,
-          activityType,
-          movementContext,
         })
       : "";
+  const leverLine = buildLeverLine(internalUpdate?.singleLever);
   const testLine = normalizePreviewValue(currentTest);
 
-  return [mechanismLine, correctionLine, testLine]
+  return [mechanismLine, correctionLine, failureLine, leverLine, testLine]
     .filter(Boolean)
     .join("\n\n")
     .trim();
@@ -5826,9 +5911,36 @@ Produce the response now.
               signalType: derivedSignalType,
             });
 
+            const caseUpdate: {
+              updatedAt: Date;
+              activityType?: string;
+              movementContext?: string;
+            } = { updatedAt: new Date() };
+
+            if (
+              hasExplicitActivityInText(userText) &&
+              isMeaningfulCaseBoundaryValue(derivedCaseContext.activityType) &&
+              normalizeCaseKey(derivedCaseContext.activityType) !==
+                normalizeCaseKey(resolvedActiveCase.activityType)
+            ) {
+              caseUpdate.activityType = derivedCaseContext.activityType;
+              if (
+                isMeaningfulCaseBoundaryValue(
+                  derivedCaseContext.movementContext,
+                )
+              ) {
+                caseUpdate.movementContext = derivedCaseContext.movementContext;
+              }
+              console.log("CASE_ACTIVITY_CORRECTED_FROM_SIGNAL", {
+                caseId: resolvedActiveCase.id,
+                previousActivityType: resolvedActiveCase.activityType,
+                nextActivityType: derivedCaseContext.activityType,
+              });
+            }
+
             await db
               .update(cases)
-              .set({ updatedAt: new Date() })
+              .set(caseUpdate)
               .where(eq(cases.id, resolvedActiveCase.id));
           } else {
             let newCase: ResolvedCaseRow | undefined;
