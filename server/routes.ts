@@ -3896,7 +3896,14 @@ async function buildStructuredCaseStateBlock(
   return `
 === STRUCTURED CASE STATE ===
 This is the internal case engine state. Use it as source-of-truth context.
-The visible response may be selective and natural; it does not need to expose every field.
+The visible response must express the Arc when a hypothesis exists.
+
+Selective output is allowed only when no hypothesis is present.
+
+If hypothesis exists:
+- include mechanism
+- include at least one of correction or failure prediction
+- include one lever or test
 
 Signal: ${internalUpdate?.signal ?? snapshot.latestSignal ?? "none"}
 Body region: ${internalUpdate?.bodyRegion ?? "unknown"}
@@ -3921,7 +3928,6 @@ Latest outcome: ${internalUpdate?.outcome ?? snapshot.latestOutcome ?? "none"}
 Response rule:
 - Speak from this structured state.
 - Do not write for extraction.
-- Do not force every structured field into the visible reply.
 - The visible response is the Arc. It should naturally express signal, mechanism, correction, failure prediction, lever, and test when the state supports them.
 - Do not output only the test unless the correct response type is single-test/probe.
 - Select the next useful user-facing move: breakdown, tight correction, lever, probe, or clarification.
@@ -7065,6 +7071,12 @@ Return only the corrected response.
           internalCasePersistResult.update?.hypothesis &&
           isTestOnlyResponse(finalText, visibleCurrentTest)
         ) {
+          console.log("ARC_TEST_ONLY_DETECTED", {
+            caseId: resolvedActiveCase?.id ?? null,
+            hasHypothesis: true,
+            triggered: true,
+          });
+
           const caseStateResponse = resolvedActiveCase
             ? await buildResponseFromCaseState(
                 resolvedActiveCase.id,
