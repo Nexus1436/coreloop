@@ -9,3 +9,5 @@ uploads/
 *.db-wal
 .DS_Store
 client/index.html.save
+.replit
+replit.nix
