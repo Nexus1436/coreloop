@@ -1381,6 +1381,28 @@ function normalizeBodyRegion(input: string | null | undefined): string {
   return value;
 }
 
+function areCompatibleBodyRegions(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftNormalized = normalizeBodyRegion(left);
+  const rightNormalized = normalizeBodyRegion(right);
+  if (!leftNormalized || !rightNormalized) return false;
+  if (leftNormalized === rightNormalized) return true;
+
+  const backGroup = new Set([
+    "back",
+    "low back",
+    "lower back",
+    "lumbar",
+    "right low back",
+    "right lower back",
+    "right side and back",
+  ]);
+
+  return backGroup.has(leftNormalized) && backGroup.has(rightNormalized);
+}
+
 function hasStrongCaseContext(value: string | null | undefined): boolean {
   return (
     !isFallbackMovementContext(value) && normalizeOptionalLabel(value) !== ""
@@ -1633,6 +1655,19 @@ async function shouldStartNewCaseForSignal({
     normalizedDerived: normalizedDerivedBodyRegion,
     normalizedPrevious: normalizedPreviousBodyRegion,
   });
+
+  if (
+    isMeaningfulCaseBoundaryValue(previousBodyRegion) &&
+    isMeaningfulCaseBoundaryValue(derivedBodyRegion) &&
+    areCompatibleBodyRegions(previousBodyRegion, derivedBodyRegion)
+  ) {
+    return {
+      shouldStartNewCase: false,
+      reason: "same_case_fit_body_region_compatible",
+      ...derived,
+      ...previous,
+    };
+  }
 
   if (
     isMeaningfulCaseBoundaryValue(previousBodyRegion) &&
@@ -3351,7 +3386,7 @@ function normalizeInternalCaseUpdate(
     movementContext: normalizedMovementContext,
   });
 
-  return {
+  const update: InternalCaseUpdate = {
     signal:
       stringOrNull(raw?.signal, 800) ??
       (qualifiesForTimelineSignal(fallback.userText)
@@ -3377,6 +3412,15 @@ function normalizeInternalCaseUpdate(
         : null,
     confidence: normalizeInternalConfidence(raw?.confidence),
   };
+
+  console.log("ARC_COMPLETION_RESULT", {
+    hypothesis: update.hypothesis,
+    interpretationCorrection: update.interpretationCorrection,
+    failurePrediction: update.failurePrediction,
+    singleLever: update.singleLever,
+  });
+
+  return update;
 }
 
 async function buildInternalCaseStateSnapshot(caseId: number): Promise<{
@@ -4076,6 +4120,15 @@ function isProbeOnlyResponse(text: string): boolean {
 function isTestOnlyResponse(text: string, currentTest: string): boolean {
   const normalized = normalizePreviewValue(text);
   if (!normalized) return true;
+
+  const startsWithTestAction =
+    /^(?:take|do|try|test)\s+(?:1|one|3|three|5|five)\b/i.test(normalized);
+  const hasObservationCue =
+    /\b(?:tell me if|starts during|during load, rotation, or after release)\b/i.test(
+      normalized,
+    );
+
+  if (startsWithTestAction && hasObservationCue) return true;
   if (!responseIncludesCurrentTest(normalized, currentTest)) return false;
 
   const withoutTest = normalizeDashboardCandidate(normalized).replace(
