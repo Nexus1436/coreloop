@@ -3628,6 +3628,40 @@ function cleanMechanismSummary(hypothesis: string | null | undefined): string {
   return clampText(cleaned.charAt(0).toUpperCase() + cleaned.slice(1), 220);
 }
 
+function buildInterpretationCorrectionLine({
+  hypothesis,
+  bodyRegion,
+  activityType,
+  movementContext,
+}: {
+  hypothesis: string | null | undefined;
+  bodyRegion: string | null | undefined;
+  activityType: string | null | undefined;
+  movementContext: string | null | undefined;
+}): string {
+  const source = `${hypothesis ?? ""} ${bodyRegion ?? ""} ${
+    activityType ?? ""
+  } ${movementContext ?? ""}`;
+  const region = cleanDashboardTitlePart(bodyRegion);
+  const activity =
+    getDisplayableActivityType(activityType) ??
+    getDisplayableMovementContext(movementContext);
+
+  if (/\blow back|lower back|lumbar\b/i.test(source)) {
+    return `The mistake would be trying to stabilize harder before you know whether the break happens during load, rotation, or release.`;
+  }
+
+  if (region && activity) {
+    return `The mistake would be treating the ${region} as the whole problem instead of testing where the ${activity.toLowerCase()} pattern breaks.`;
+  }
+
+  if (region) {
+    return `The mistake would be treating the ${region} as the source before testing where the movement breaks.`;
+  }
+
+  return "The mistake would be adding effort before you know exactly where the movement breaks.";
+}
+
 async function buildResponseFromCaseState(
   caseId: number,
   internalUpdate: InternalCaseUpdate | null,
@@ -3640,11 +3674,26 @@ async function buildResponseFromCaseState(
     internalUpdate?.adjustment ??
     snapshot.latestAdjustment ??
     null;
+  const bodyRegion = internalUpdate?.bodyRegion ?? null;
+  const activityType = internalUpdate?.activityType ?? null;
+  const movementContext = internalUpdate?.movementContext ?? null;
 
   const mechanismLine = cleanMechanismSummary(hypothesis);
+  const correctionLine =
+    mechanismLine && currentTest
+      ? buildInterpretationCorrectionLine({
+          hypothesis,
+          bodyRegion,
+          activityType,
+          movementContext,
+        })
+      : "";
   const testLine = normalizePreviewValue(currentTest);
 
-  return [mechanismLine, testLine].filter(Boolean).join("\n\n").trim();
+  return [mechanismLine, correctionLine, testLine]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 }
 
 async function getVisibleCurrentTestFromCaseState(
@@ -6516,6 +6565,10 @@ Return only the corrected response.
 
           if (caseStateFallback) {
             finalText = caseStateFallback;
+            console.log("ARC_RESPONSE_TYPE_SELECTED", {
+              caseId: resolvedActiveCase?.id ?? null,
+              responseType: "case_state_fallback",
+            });
             console.log("ARC_CASE_STATE_FALLBACK_USED", {
               caseId: resolvedActiveCase?.id ?? null,
               finalTextLength: finalText.length,
@@ -6550,10 +6603,22 @@ Return only the corrected response.
 
           if (caseStateResponse && isProbeOnlyResponse(finalText)) {
             finalText = caseStateResponse;
+            console.log("ARC_RESPONSE_TYPE_SELECTED", {
+              caseId: resolvedActiveCase?.id ?? null,
+              responseType: "case_state_probe_replacement",
+            });
           } else if (caseStateResponse && !finalText.trim()) {
             finalText = caseStateResponse;
+            console.log("ARC_RESPONSE_TYPE_SELECTED", {
+              caseId: resolvedActiveCase?.id ?? null,
+              responseType: "case_state_empty_replacement",
+            });
           } else {
             finalText = `${finalText.trim()}\n\n${visibleCurrentTest}`.trim();
+            console.log("ARC_RESPONSE_TYPE_SELECTED", {
+              caseId: resolvedActiveCase?.id ?? null,
+              responseType: "model_response_with_case_test",
+            });
           }
 
           console.log("ARC_CASE_STATE_TEST_INCLUDED", {
