@@ -2558,7 +2558,7 @@ function buildFallbackMechanicalHypothesis({
   activityType: string | null | undefined;
   movementContext: string | null | undefined;
   bodyRegion: string | null | undefined;
-}): string | null {
+}): string {
   const activity = normalizeCaseKey(activityType);
   const movement = normalizeCaseKey(movementContext);
   const region = normalizeBodyRegion(bodyRegion);
@@ -2575,7 +2575,24 @@ function buildFallbackMechanicalHypothesis({
     return "Right low back is absorbing rotation because the load is not releasing cleanly through the trunk and hips during the serve.";
   }
 
-  return null;
+  const readableRegion =
+    region && region !== "unspecified"
+      ? region === "low back"
+        ? "The low back"
+        : `The ${region}`
+      : "The affected region";
+  const movementSource =
+    movement && movement !== "unspecified" && !isFallbackMovementContext(movement)
+      ? movement
+      : activity && activity !== "unspecified"
+        ? activity
+        : "the movement";
+  const readableMovement =
+    movementSource === "the movement"
+      ? "the movement"
+      : `the ${movementSource} pattern`;
+
+  return `${readableRegion} is taking load because ${readableMovement} is not releasing cleanly through the surrounding movement sequence.`;
 }
 
 function enforceMechanicalHypothesis({
