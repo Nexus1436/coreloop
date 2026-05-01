@@ -1337,6 +1337,21 @@ function normalizeOptionalLabel(value: string | null | undefined): string {
   return normalizeCaseKey(value);
 }
 
+function normalizeBodyRegion(input: string | null | undefined): string {
+  const value = normalizeCaseKey(input);
+
+  if (!value) return "";
+  if (
+    value.includes("low back") ||
+    value.includes("lower back") ||
+    value.includes("lumbar")
+  ) {
+    return "low back";
+  }
+
+  return value;
+}
+
 function hasStrongCaseContext(value: string | null | undefined): boolean {
   return (
     !isFallbackMovementContext(value) && normalizeOptionalLabel(value) !== ""
@@ -1580,12 +1595,20 @@ async function shouldStartNewCaseForSignal({
     previousMovementContext,
     previousActivityType,
   };
+  const normalizedDerivedBodyRegion = normalizeBodyRegion(derivedBodyRegion);
+  const normalizedPreviousBodyRegion = normalizeBodyRegion(previousBodyRegion);
+
+  console.log("CASE_BOUNDARY_COMPARISON", {
+    derived: derivedBodyRegion,
+    previous: previousBodyRegion,
+    normalizedDerived: normalizedDerivedBodyRegion,
+    normalizedPrevious: normalizedPreviousBodyRegion,
+  });
 
   if (
     isMeaningfulCaseBoundaryValue(previousBodyRegion) &&
     isMeaningfulCaseBoundaryValue(derivedBodyRegion) &&
-    normalizeOptionalLabel(previousBodyRegion) !==
-      normalizeOptionalLabel(derivedBodyRegion)
+    normalizedPreviousBodyRegion !== normalizedDerivedBodyRegion
   ) {
     return {
       shouldStartNewCase: true,
