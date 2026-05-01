@@ -3367,8 +3367,11 @@ function normalizeInternalCaseUpdate(
         : fallback.outcomeResult === "Same"
           ? "same"
           : null;
-  const normalizedBodyRegion =
+  const rawBodyRegion =
     stringOrNull(raw?.bodyRegion, 80) ?? fallback.derivedBodyRegion ?? null;
+  const normalizedBodyRegion = rawBodyRegion
+    ? normalizeBodyRegion(rawBodyRegion)
+    : null;
   const normalizedActivityType =
     stringOrNull(raw?.activityType, 80) ??
     fallback.derivedActivityType ??
@@ -3653,7 +3656,7 @@ async function persistInternalCaseUpdate({
 
   let activeHypothesis = await getLatestValidHypothesisForCase(caseId);
 
-  if (update.hypothesis && !isGenericCoachingFillerText(update.hypothesis)) {
+  if (update.hypothesis && isStrongHypothesisCandidate(update.hypothesis)) {
     const [latestStoredHypothesis] = await db
       .select({
         id: caseHypotheses.id,
