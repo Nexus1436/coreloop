@@ -10,9 +10,6 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import setupVite from "./vite"; // ✅ FIX
 
-// 🔐 Replit Auth
-import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
-
 const app = express();
 const httpServer = createServer(app);
 
@@ -131,7 +128,7 @@ async function boot() {
     ===================================================== */
 
     /* =====================================================
-       CORS – must run before setupAuth so auth routes
+       CORS – must run before API routes so auth routes
        include Access-Control headers on every response
     ===================================================== */
 
@@ -148,17 +145,6 @@ async function boot() {
       next();
     });
 
-    app.get("/api/version", (_req: Request, res: Response) => {
-      res.json({
-        backendVersion: "test-enforcement-v4-no-candidate-failed-validation",
-        version: "diagnostic-v2",
-        commit: "230014a1656f8bd004f63eba72701c2c9206ec28",
-      });
-    });
-
-    await setupAuth(app);
-    registerAuthRoutes(app);
-
     /* =====================================================
        API ROUTES
     ===================================================== */
@@ -166,10 +152,8 @@ async function boot() {
     await registerRoutes(httpServer, app);
 
     /* =====================================================
-       ERROR HANDLER
+       API 404
     ===================================================== */
-
-    app.use(errorHandler);
 
     app.use("/api/{*path}", (req: Request, res: Response) => {
       res.status(404).json({
@@ -177,6 +161,12 @@ async function boot() {
         path: req.originalUrl,
       });
     });
+
+    /* =====================================================
+       ERROR HANDLER
+    ===================================================== */
+
+    app.use(errorHandler);
 
     /* =====================================================
        DEV / PROD
@@ -192,7 +182,7 @@ async function boot() {
        PORT
     ===================================================== */
 
-    const port = Number(process.env.PORT) || 3000;
+    const port = Number(process.env.PORT) || 5000;
 
     console.log("ENV PORT:", process.env.PORT);
     console.log("USING PORT:", port);
@@ -231,21 +221,3 @@ async function boot() {
 }
 
 boot();
-
-/* =====================================================
-   CLEAN SHUTDOWN
-===================================================== */
-
-const shutdown = (signal: string) => {
-  log(`${signal} received — shutting down`);
-
-  httpServer.close(() => {
-    log("server closed");
-    process.exit(0);
-  });
-
-  setTimeout(() => process.exit(1), 5000);
-};
-
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
