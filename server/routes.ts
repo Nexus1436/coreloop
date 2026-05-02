@@ -2818,14 +2818,15 @@ function completeArcFields({
   const normalizedActivity = (activityType || "").toLowerCase();
   const normalizedMovement = (movementContext || "").toLowerCase();
   const normalizedBody = (bodyRegion || "").toLowerCase();
+  const normalizedText = (userText || "").toLowerCase();
   const activity = normalizeCaseKey(activityType);
   const movement = normalizeCaseKey(movementContext);
   const region = normalizeBodyRegion(bodyRegion);
   const isDriveServeLowBack =
     normalizedActivity.includes("racquetball") &&
-    normalizedMovement.includes("drive") &&
-    normalizedMovement.includes("serve") &&
-    normalizedBody.includes("back");
+    normalizedBody.includes("back") &&
+    (normalizedText.includes("drive serve") ||
+      (normalizedText.includes("drive") && normalizedText.includes("serve")));
 
   const arcResult = {
     hypothesis,
@@ -2841,6 +2842,7 @@ function completeArcFields({
       activityType,
       movementContext,
       bodyRegion,
+      userText,
     });
     arcResult.interpretationCorrection =
       "The trunk is starting before the hips, so the rotation is being forced through the low back instead of transferring cleanly.";
