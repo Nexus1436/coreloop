@@ -2790,6 +2790,9 @@ function completeArcFields({
   interpretationCorrection,
   failurePrediction,
   singleLever,
+  adjustment,
+  currentTest,
+  userText,
   bodyRegion,
   activityType,
   movementContext,
@@ -2798,16 +2801,31 @@ function completeArcFields({
   interpretationCorrection: string | null;
   failurePrediction: string | null;
   singleLever: string | null;
+  adjustment: string | null;
+  currentTest: string | null;
+  userText: string;
   bodyRegion: string | null | undefined;
   activityType: string | null | undefined;
   movementContext: string | null | undefined;
 }): {
+  hypothesis: string | null;
   interpretationCorrection: string | null;
   failurePrediction: string | null;
   singleLever: string | null;
+  adjustment: string | null;
+  currentTest: string | null;
 } {
+  const arcResult = {
+    hypothesis,
+    interpretationCorrection,
+    failurePrediction,
+    singleLever,
+    adjustment,
+    currentTest,
+  };
+
   if (!hypothesis) {
-    return { interpretationCorrection, failurePrediction, singleLever };
+    return arcResult;
   }
 
   const defaults = buildMechanicalArcDefaults({
@@ -2816,23 +2834,35 @@ function completeArcFields({
     movementContext,
   });
 
-  return {
-    interpretationCorrection: isShallowArcField(
-      interpretationCorrection,
-      "interpretationCorrection",
-    )
-      ? defaults.interpretationCorrection
-      : interpretationCorrection,
-    failurePrediction: isShallowArcField(
-      failurePrediction,
-      "failurePrediction",
-    )
-      ? defaults.failurePrediction
-      : failurePrediction,
-    singleLever: isShallowArcField(singleLever, "singleLever")
-      ? defaults.singleLever
-      : singleLever,
-  };
+  if (isShallowArcField(arcResult.interpretationCorrection, "interpretationCorrection")) {
+    arcResult.interpretationCorrection = defaults.interpretationCorrection;
+  }
+
+  if (isShallowArcField(arcResult.failurePrediction, "failurePrediction")) {
+    arcResult.failurePrediction = defaults.failurePrediction;
+  }
+
+  if (isShallowArcField(arcResult.singleLever, "singleLever")) {
+    arcResult.singleLever = defaults.singleLever;
+  }
+
+  arcResult.adjustment = completeAdjustmentField({
+    candidate: arcResult.adjustment,
+    hypothesis,
+    movementContext: movementContext ?? null,
+    bodyRegion: bodyRegion ?? null,
+    activityType: activityType ?? null,
+  });
+  arcResult.currentTest = completeCurrentTestField({
+    candidate: arcResult.currentTest ?? arcResult.adjustment,
+    userText,
+    hypothesis,
+    movementContext: movementContext ?? null,
+    bodyRegion: bodyRegion ?? null,
+    activityType: activityType ?? null,
+  });
+
+  return arcResult;
 }
 
 function isStrongAdjustmentCandidate(
@@ -3615,38 +3645,19 @@ function normalizeInternalCaseUpdate(
     currentTest: stringOrNull(raw?.currentTest, 320),
   };
   console.log("ARC_FIELD_QUALITY_BEFORE", rawFieldQuality);
-  const completedArc = completeArcFields({
+  const arcResult = completeArcFields({
     hypothesis: enforcedHypothesis,
     interpretationCorrection: normalizedCorrection,
     failurePrediction: normalizedFailurePrediction,
     singleLever: normalizedSingleLever,
-    bodyRegion: normalizedBodyRegion,
-    activityType: normalizedActivityType,
-    movementContext: normalizedMovementContext,
-  });
-  const normalizedAdjustment = completeAdjustmentField({
-    candidate: rawFieldQuality.adjustment,
-    hypothesis: enforcedHypothesis,
-    movementContext: normalizedMovementContext,
-    bodyRegion: normalizedBodyRegion,
-    activityType: normalizedActivityType,
-  });
-  const normalizedCurrentTest = completeCurrentTestField({
-    candidate: rawFieldQuality.currentTest ?? normalizedAdjustment,
+    adjustment: rawFieldQuality.adjustment,
+    currentTest: rawFieldQuality.currentTest,
     userText: fallback.userText,
-    hypothesis: enforcedHypothesis,
-    movementContext: normalizedMovementContext,
     bodyRegion: normalizedBodyRegion,
     activityType: normalizedActivityType,
+    movementContext: normalizedMovementContext,
   });
-  console.log("ARC_FIELD_QUALITY_AFTER", {
-    hypothesis: enforcedHypothesis,
-    interpretationCorrection: completedArc.interpretationCorrection,
-    failurePrediction: completedArc.failurePrediction,
-    singleLever: completedArc.singleLever,
-    adjustment: normalizedAdjustment,
-    currentTest: normalizedCurrentTest,
-  });
+  console.log("ARC_FIELD_QUALITY_AFTER", arcResult);
 
   const update: InternalCaseUpdate = {
     signal:
@@ -3657,12 +3668,12 @@ function normalizeInternalCaseUpdate(
     bodyRegion: normalizedBodyRegion,
     activityType: normalizedActivityType,
     movementContext: normalizedMovementContext,
-    hypothesis: enforcedHypothesis,
-    interpretationCorrection: completedArc.interpretationCorrection,
-    failurePrediction: completedArc.failurePrediction,
-    singleLever: completedArc.singleLever,
-    adjustment: normalizedAdjustment,
-    currentTest: normalizedCurrentTest,
+    hypothesis: arcResult.hypothesis,
+    interpretationCorrection: arcResult.interpretationCorrection,
+    failurePrediction: arcResult.failurePrediction,
+    singleLever: arcResult.singleLever,
+    adjustment: arcResult.adjustment,
+    currentTest: arcResult.currentTest,
     outcome: stringOrNull(raw?.outcome, 400),
     outcomeStatus:
       normalizeInternalOutcomeStatus(raw?.outcomeStatus) ??
@@ -4216,6 +4227,14 @@ async function buildStructuredCaseStateBlock(
     hasHypothesis: Boolean(visibleStateInput.hypothesis),
     hasAdjustment: Boolean(visibleStateInput.adjustment),
     hasCurrentTest: Boolean(visibleStateInput.adjustment),
+  });
+  console.log("ARC_FINAL_FIELDS_USED", {
+    hypothesis: visibleStateInput.hypothesis,
+    interpretationCorrection: visibleStateInput.interpretationCorrection,
+    failurePrediction: visibleStateInput.failurePrediction,
+    singleLever: visibleStateInput.singleLever,
+    adjustment: internalUpdate?.adjustment ?? null,
+    currentTest: internalUpdate?.currentTest ?? null,
   });
   logLayer1Trace(traceId, "final_structured_case_state_for_layer2", {
     caseId,
