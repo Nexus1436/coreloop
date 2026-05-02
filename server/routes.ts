@@ -4217,7 +4217,6 @@ async function buildStructuredCaseStateBlock(
     adjustment:
       internalUpdate?.currentTest ??
       internalUpdate?.adjustment ??
-      snapshot.latestAdjustment ??
       null,
     outcome: internalUpdate?.outcome ?? snapshot.latestOutcome ?? null,
   };
@@ -4228,7 +4227,8 @@ async function buildStructuredCaseStateBlock(
     hasAdjustment: Boolean(visibleStateInput.adjustment),
     hasCurrentTest: Boolean(visibleStateInput.adjustment),
   });
-  console.log("ARC_FINAL_FIELDS_USED", {
+  console.log("ARC_SINGLE_SOURCE_CHECK", {
+    source: "completeArcFields",
     hypothesis: visibleStateInput.hypothesis,
     interpretationCorrection: visibleStateInput.interpretationCorrection,
     failurePrediction: visibleStateInput.failurePrediction,
@@ -4269,7 +4269,6 @@ Single lever: ${internalUpdate?.singleLever ?? "none"}
 Current adjustment/test: ${
     internalUpdate?.currentTest ??
     internalUpdate?.adjustment ??
-    snapshot.latestAdjustment ??
     "none"
   }
 Latest outcome: ${internalUpdate?.outcome ?? snapshot.latestOutcome ?? "none"}
@@ -4283,162 +4282,13 @@ Response rule:
 `;
 }
 
-function cleanMechanismSummary(hypothesis: string | null | undefined): string {
-  const normalized = normalizePreviewValue(hypothesis);
-  if (!normalized) return "";
-
-  const cleaned = normalized
-    .replace(/^the issue is that\s*/i, "")
-    .replace(/^the issue is\s*/i, "")
-    .trim();
-
-  if (!cleaned) return "";
-
-  return clampText(cleaned.charAt(0).toUpperCase() + cleaned.slice(1), 220);
-}
-
-function buildInterpretationCorrectionLine({
-  hypothesis,
-  bodyRegion,
-  activityType,
-  movementContext,
-}: {
-  hypothesis: string | null | undefined;
-  bodyRegion: string | null | undefined;
-  activityType: string | null | undefined;
-  movementContext: string | null | undefined;
-}): string {
-  const source = `${hypothesis ?? ""} ${bodyRegion ?? ""} ${
-    activityType ?? ""
-  } ${movementContext ?? ""}`;
-  const region = cleanDashboardTitlePart(bodyRegion);
-  const activity =
-    getDisplayableActivityType(activityType) ??
-    getDisplayableMovementContext(movementContext);
-
-  if (/\blow back|lower back|lumbar\b/i.test(source)) {
-    return `The mistake would be trying to stabilize harder before you know whether the break happens during load, rotation, or release.`;
-  }
-
-  if (region && activity) {
-    return `The mistake would be treating the ${region} as the whole problem instead of testing where the ${activity.toLowerCase()} pattern breaks.`;
-  }
-
-  if (region) {
-    return `The mistake would be treating the ${region} as the source before testing where the movement breaks.`;
-  }
-
-  return "The mistake would be adding effort before you know exactly where the movement breaks.";
-}
-
-function buildFailurePredictionLine({
-  failurePrediction,
-  hypothesis,
-  bodyRegion,
-}: {
-  failurePrediction: string | null | undefined;
-  hypothesis: string | null | undefined;
-  bodyRegion: string | null | undefined;
-}): string {
-  const explicit = normalizePreviewValue(failurePrediction);
-  if (explicit) return clampText(explicit, 220);
-
-  const source = `${hypothesis ?? ""} ${bodyRegion ?? ""}`;
-  if (/\blow back|lower back|lumbar\b/i.test(source)) {
-    return "If you only reduce force or brace harder, you may hide the sequencing break instead of finding it.";
-  }
-
-  return "";
-}
-
-function buildLeverLine(singleLever: string | null | undefined): string {
-  const lever = normalizePreviewValue(singleLever);
-  if (!lever) return "";
-
-  return clampText(lever, 180);
-}
-
-function buildFallbackSingleLever({
-  bodyRegion,
-  activityType,
-  movementContext,
-}: {
-  bodyRegion: string | null | undefined;
-  activityType: string | null | undefined;
-  movementContext: string | null | undefined;
-}): string {
-  const source = `${bodyRegion ?? ""} ${activityType ?? ""} ${
-    movementContext ?? ""
-  }`;
-
-  if (/\blow back|lower back|lumbar\b/i.test(source)) {
-    return "Find whether the low back grabs during load, rotation, or release.";
-  }
-
-  return "Find the exact phase where the movement starts to break.";
-}
-
-async function buildResponseFromCaseState(
-  caseId: number,
-  internalUpdate: InternalCaseUpdate | null,
-): Promise<string> {
-  const snapshot = await buildInternalCaseStateSnapshot(caseId);
-  const hypothesis =
-    internalUpdate?.hypothesis ?? snapshot.latestHypothesis ?? null;
-  const currentTest =
-    internalUpdate?.currentTest ??
-    internalUpdate?.adjustment ??
-    snapshot.latestAdjustment ??
-    null;
-  const bodyRegion = internalUpdate?.bodyRegion ?? null;
-  const activityType = internalUpdate?.activityType ?? null;
-  const movementContext = internalUpdate?.movementContext ?? null;
-
-  const mechanismLine = cleanMechanismSummary(hypothesis);
-  const correctionLine =
-    mechanismLine && currentTest
-      ? normalizePreviewValue(internalUpdate?.interpretationCorrection) ||
-        buildInterpretationCorrectionLine({
-            hypothesis,
-            bodyRegion,
-            activityType,
-            movementContext,
-          })
-      : "";
-  const failureLine =
-    mechanismLine && currentTest
-      ? buildFailurePredictionLine({
-          failurePrediction: internalUpdate?.failurePrediction,
-          hypothesis,
-          bodyRegion,
-        })
-      : "";
-  const leverLine =
-    mechanismLine && currentTest
-      ? buildLeverLine(internalUpdate?.singleLever) ||
-        buildFallbackSingleLever({
-          bodyRegion,
-          activityType,
-          movementContext,
-        })
-      : "";
-  const testLine = normalizePreviewValue(currentTest);
-
-  return [mechanismLine, correctionLine, failureLine, leverLine, testLine]
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-}
-
 async function getVisibleCurrentTestFromCaseState(
   caseId: number,
   internalUpdate: InternalCaseUpdate | null,
 ): Promise<string | null> {
-  const snapshot = await buildInternalCaseStateSnapshot(caseId);
   return normalizePreviewValue(
     internalUpdate?.currentTest ??
       internalUpdate?.adjustment ??
-      snapshot.latestAdjustment ??
       null,
   ) || null;
 }
@@ -6901,7 +6751,9 @@ Produce the response now.
       const runtimePatternBlock = continuityCaseId
         ? await getDominantRuntimePatternBlock(userId, continuityCaseId)
         : "";
-      const continuityBlock = activeHypothesisBlock || runtimePatternBlock;
+      const continuityBlock = internalCasePersistResult.update
+        ? ""
+        : activeHypothesisBlock || runtimePatternBlock;
       const structuredCaseStateBlock =
         !isCaseReview && resolvedActiveCase
           ? await buildStructuredCaseStateBlock(
