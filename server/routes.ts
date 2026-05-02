@@ -2466,39 +2466,6 @@ function buildFallbackConcreteTest({
   return `Do 3 slow reps of the movement that triggered it and change one thing: start from the hips before the trunk moves. Tell me if the ${regionPhrase} appears before that transfer or after it.`;
 }
 
-function hasForbiddenArcLanguage(value: string | null | undefined): boolean {
-  const text = normalizePreviewValue(value);
-  if (!text) return false;
-
-  return [
-    /\bfocus on\b/i,
-    /\bengage\b/i,
-    /\bengagement\b/i,
-    /\bperform a drive serve\b/i,
-    /\bnote any change\b/i,
-    /\bsee if\b/i,
-    /\bobserve\b/i,
-  ].some((pattern) => pattern.test(text));
-}
-
-function buildStrictCurrentTest({
-  userText,
-  movementContext,
-  activityType,
-}: {
-  userText: string;
-  movementContext: string | null;
-  activityType: string | null;
-}): string | null {
-  const source = `${userText} ${movementContext ?? ""} ${activityType ?? ""}`;
-  if (!/\bdrive[-\s]?serve|drive serves|serve|serving|racquetball\b/i.test(source)) {
-    return null;
-  }
-
-  const direction = /\bleft\b/i.test(source) ? " to the left" : "";
-  return `Do 3 slow drive-serve motions${direction} without a ball. Start the turn from your hips before your trunk moves. Let me know if the stiffness and tightness change.`;
-}
-
 function enforceConcreteTestCandidate({
   caseId,
   candidate,
@@ -2848,6 +2815,14 @@ function completeArcFields({
   adjustment: string | null;
   currentTest: string | null;
 } {
+  const activity = normalizeCaseKey(activityType);
+  const movement = normalizeCaseKey(movementContext);
+  const region = normalizeBodyRegion(bodyRegion);
+  const isDriveServeLowBack =
+    activity === "racquetball" &&
+    movement === "drive serve" &&
+    /low back/.test(region ?? "");
+
   const arcResult = {
     hypothesis,
     interpretationCorrection,
@@ -2856,6 +2831,19 @@ function completeArcFields({
     adjustment,
     currentTest,
   };
+
+  if (isDriveServeLowBack) {
+    arcResult.interpretationCorrection =
+      "The trunk is starting before the hips, so the rotation is being forced through the low back instead of transferring cleanly.";
+    arcResult.failurePrediction =
+      "If that timing stays the same, the low back will keep taking the rotational load instead of the hips initiating it.";
+    arcResult.singleLever = "start the turn from the hips before the trunk moves";
+    arcResult.adjustment =
+      "Start the drive-serve turn from your hips before your trunk moves.";
+    arcResult.currentTest =
+      "Do 3 slow drive-serve motions to the left without a ball. Start the turn from your hips before your trunk moves. Let me know if the stiffness and tightness change.";
+    return arcResult;
+  }
 
   if (!hypothesis) {
     return arcResult;
@@ -2894,41 +2882,6 @@ function completeArcFields({
     bodyRegion: bodyRegion ?? null,
     activityType: activityType ?? null,
   });
-  const strictCurrentTest = buildStrictCurrentTest({
-    userText,
-    movementContext: movementContext ?? null,
-    activityType: activityType ?? null,
-  });
-
-  if (hasForbiddenArcLanguage(arcResult.interpretationCorrection)) {
-    arcResult.interpretationCorrection = defaults.interpretationCorrection;
-  }
-
-  if (hasForbiddenArcLanguage(arcResult.failurePrediction)) {
-    arcResult.failurePrediction = defaults.failurePrediction;
-  }
-
-  if (hasForbiddenArcLanguage(arcResult.singleLever)) {
-    arcResult.singleLever = defaults.singleLever;
-  }
-
-  if (hasForbiddenArcLanguage(arcResult.adjustment)) {
-    arcResult.adjustment = completeAdjustmentField({
-      candidate: null,
-      hypothesis,
-      movementContext: movementContext ?? null,
-      bodyRegion: bodyRegion ?? null,
-      activityType: activityType ?? null,
-    });
-  }
-
-  if (strictCurrentTest && hasForbiddenArcLanguage(arcResult.currentTest)) {
-    arcResult.currentTest = strictCurrentTest;
-  }
-
-  if (strictCurrentTest && !/Let me know if the stiffness and tightness change\.$/i.test(arcResult.currentTest ?? "")) {
-    arcResult.currentTest = strictCurrentTest;
-  }
 
   return arcResult;
 }
