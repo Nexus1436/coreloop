@@ -2369,6 +2369,7 @@ function getConcreteTestInvalidReason(value: string | null | undefined): string 
 
   const vaguePatterns = [
     /^\s*focus on\b/i,
+    /\bfocusing on\b/i,
     /\bengage\b/i,
     /\bengage your core\b/i,
     /\bimprove\b/i,
@@ -2444,15 +2445,15 @@ function buildFallbackConcreteTest({
 
   if (/\bdrive[-\s]?serve|drive serves|serve|serving|racquetball\b/i.test(source)) {
     const direction = /\bleft\b/i.test(source) ? " to the left" : "";
-    return `Do 3 slow drive-serve motions${direction} without a ball. Stay tall through the finish. Tell me if the ${regionPhrase} starts during load, rotation, or after release.`;
+    return `Do 3 slow drive serves${direction} without a ball and start the turn from your hips before your trunk moves. Tell me if the ${regionPhrase} starts before the hips move or after the trunk releases.`;
   }
 
   const movement = normalizePreviewValue(movementContext);
   if (movement && !isFallbackMovementContext(movement)) {
-    return `Do 3 slow ${movement} motions without a ball. Change only one variable: stay tall through the motion. Tell me if the ${regionPhrase} appears during setup, during movement, or after the rep.`;
+    return `Do 3 slow ${movement} motions and change one thing: start the motion from the hips before the trunk moves. Tell me if the ${regionPhrase} appears before that hip turn or after it.`;
   }
 
-  return `Do 3 slow reps of the movement that triggered it. Change only one variable. Tell me if the ${regionPhrase} appears during setup, during the movement, or after the rep.`;
+  return `Do 3 slow reps of the movement that triggered it and change one thing: start from the hips before the trunk moves. Tell me if the ${regionPhrase} appears before that transfer or after it.`;
 }
 
 function enforceConcreteTestCandidate({
@@ -2653,6 +2654,117 @@ function enforceMechanicalHypothesis({
   return finalHypothesis;
 }
 
+function isShallowArcField(
+  value: string | null | undefined,
+  kind: "interpretationCorrection" | "failurePrediction" | "singleLever",
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return true;
+
+  const genericPatterns = [
+    /\bensure\b/i,
+    /\bfocus on\b/i,
+    /\bfocusing on\b/i,
+    /\bwork on\b/i,
+    /\btry to\b/i,
+    /\btry and\b/i,
+    /\bbalance\b/i,
+    /\breduce asymmetrical load\b/i,
+    /\basymmetrical load\b/i,
+    /\bengage\b/i,
+    /\bengagement\b/i,
+    /\bactivate\b/i,
+    /\bactivation\b/i,
+    /\bcore\b/i,
+    /\bproper form\b/i,
+    /\bgood posture\b/i,
+    /\bcontrolled rotation\b/i,
+    /\bhip rotation initiation\b/i,
+    /\bweight transfer\b/i,
+    /\bcontinued stiffness\b/i,
+    /\bcontinued tightness\b/i,
+    /\bcontinued pain\b/i,
+    /\bmay persist\b/i,
+    /\bmay continue\b/i,
+  ];
+
+  if (genericPatterns.some((pattern) => pattern.test(text))) return true;
+
+  if (kind === "interpretationCorrection") {
+    const hasContrast =
+      /\b(?:not|instead of|rather than|before|after|starting before|starting after|never transfers|doesn'?t transfer)\b/i.test(
+        text,
+      );
+    const hasFailurePoint =
+      /\b(?:trunk|hip|hips|back|low back|pelvis|load|transfer|release|rotation|sequence|starts|moves|takes)\b/i.test(
+        text,
+      );
+    return !(hasContrast && hasFailurePoint);
+  }
+
+  if (kind === "failurePrediction") {
+    const predictsBehavior =
+      /\b(?:will|you'll|you will|keeps?|starts?|forces?|takes?|loads?|transfers?|releases?|rotates?|compensates?)\b/i.test(
+        text,
+      );
+    const mechanicalBehavior =
+      /\b(?:trunk|hip|hips|back|low back|pelvis|load|transfer|release|rotation|sequence|brace|force)\b/i.test(
+        text,
+      );
+    return !(predictsBehavior && mechanicalBehavior);
+  }
+
+  return !hasRealMechanicalLever(text);
+}
+
+function buildMechanicalArcDefaults({
+  bodyRegion,
+  activityType,
+  movementContext,
+}: {
+  bodyRegion: string | null | undefined;
+  activityType: string | null | undefined;
+  movementContext: string | null | undefined;
+}): {
+  interpretationCorrection: string;
+  failurePrediction: string;
+  singleLever: string;
+} {
+  const activity = normalizeCaseKey(activityType);
+  const movement = normalizeCaseKey(movementContext);
+  const region = normalizeBodyRegion(bodyRegion);
+  const isLowBack = region === "low back" || region === "back";
+  const isServe = /\bserve\b/.test(movement);
+
+  if (activity === "racquetball" && isServe && isLowBack) {
+    return {
+      interpretationCorrection:
+        "Right now the trunk is starting before the hips, so the serve load never transfers cleanly out of the low back.",
+      failurePrediction:
+        "If that timing stays the same, you will start forcing rotation from the back instead of transferring it through the hips.",
+      singleLever: "start the turn from the hips before the trunk moves",
+    };
+  }
+
+  if (activity === "golf" && isLowBack) {
+    return {
+      interpretationCorrection:
+        "Right now the trunk is finishing before the hips clear, so the low back is becoming the release point instead of the hips.",
+      failurePrediction:
+        "If that sequence stays the same, you will keep forcing the finish from the back instead of letting the hips carry the rotation.",
+      singleLever: "clear the hips before the trunk finishes the turn",
+    };
+  }
+
+  return {
+    interpretationCorrection:
+      "Right now the trunk is moving before the hips transfer load, so the irritated area is becoming the control point.",
+    failurePrediction:
+      "If that timing stays the same, the trunk will keep taking the load instead of the hips.",
+    singleLever: "start the movement from the hips before the trunk moves",
+  };
+}
+
 function completeArcFields({
   hypothesis,
   interpretationCorrection,
@@ -2678,50 +2790,28 @@ function completeArcFields({
     return { interpretationCorrection, failurePrediction, singleLever };
   }
 
-  const activity = normalizeCaseKey(activityType);
-  const movement = normalizeCaseKey(movementContext);
-  const region = normalizeBodyRegion(bodyRegion);
-  const isLowBack = region === "low back" || region === "back";
-  const isServe = /\bserve\b/.test(movement);
-
-  if (activity === "racquetball" && isServe && isLowBack) {
-    return {
-      interpretationCorrection:
-        interpretationCorrection ??
-        "This is not just back strain from serving; the rotation is not releasing cleanly through the trunk and hips.",
-      failurePrediction:
-        failurePrediction ??
-        "If you just reduce force or brace harder, you will hide where the rotation is breaking.",
-      singleLever:
-        singleLever ??
-        "Stay tall through the serve and feel when the right side stops releasing and starts taking the load.",
-    };
-  }
-
-  if (activity === "golf" && isLowBack) {
-    return {
-      interpretationCorrection:
-        interpretationCorrection ??
-        "Do not treat this as simple overuse from repeated swings; test where the swing stops releasing cleanly.",
-      failurePrediction:
-        failurePrediction ??
-        "You will likely brace harder or swing easier, which hides the sequencing break instead of exposing it.",
-      singleLever:
-        singleLever ??
-        "Stay tall through the finish and locate when the low back starts taking the load.",
-    };
-  }
+  const defaults = buildMechanicalArcDefaults({
+    bodyRegion,
+    activityType,
+    movementContext,
+  });
 
   return {
-    interpretationCorrection:
-      interpretationCorrection ??
-      "Do not treat this as simple overuse or effort; this is a load and release problem in the movement.",
-    failurePrediction:
-      failurePrediction ??
-      "You will likely stabilize harder or reduce force, which hides the break instead of exposing it.",
-    singleLever:
-      singleLever ??
-      "Stay tall and locate when the symptom starts taking the load during the movement.",
+    interpretationCorrection: isShallowArcField(
+      interpretationCorrection,
+      "interpretationCorrection",
+    )
+      ? defaults.interpretationCorrection
+      : interpretationCorrection,
+    failurePrediction: isShallowArcField(
+      failurePrediction,
+      "failurePrediction",
+    )
+      ? defaults.failurePrediction
+      : failurePrediction,
+    singleLever: isShallowArcField(singleLever, "singleLever")
+      ? defaults.singleLever
+      : singleLever,
   };
 }
 
@@ -3369,6 +3459,33 @@ function normalizeInternalConfidence(value: unknown): number {
   return Math.max(0, Math.min(1, numeric));
 }
 
+function completeCurrentTestField({
+  candidate,
+  userText,
+  hypothesis,
+  movementContext,
+  bodyRegion,
+  activityType,
+}: {
+  candidate: string | null;
+  userText: string;
+  hypothesis: string | null;
+  movementContext: string | null;
+  bodyRegion: string | null;
+  activityType: string | null;
+}): string | null {
+  if (!hypothesis) return candidate;
+  if (!getConcreteTestInvalidReason(candidate)) return candidate;
+
+  return buildFallbackConcreteTest({
+    userText,
+    hypothesis,
+    movementContext,
+    bodyRegion,
+    activityType,
+  });
+}
+
 function normalizeInternalCaseUpdate(
   raw: Record<string, unknown> | null,
   fallback: {
@@ -3435,6 +3552,15 @@ function normalizeInternalCaseUpdate(
     activityType: normalizedActivityType,
     movementContext: normalizedMovementContext,
   });
+  const normalizedAdjustment = stringOrNull(raw?.adjustment, 320);
+  const normalizedCurrentTest = completeCurrentTestField({
+    candidate: stringOrNull(raw?.currentTest, 320) ?? normalizedAdjustment,
+    userText: fallback.userText,
+    hypothesis: enforcedHypothesis,
+    movementContext: normalizedMovementContext,
+    bodyRegion: normalizedBodyRegion,
+    activityType: normalizedActivityType,
+  });
 
   const update: InternalCaseUpdate = {
     signal:
@@ -3449,8 +3575,8 @@ function normalizeInternalCaseUpdate(
     interpretationCorrection: completedArc.interpretationCorrection,
     failurePrediction: completedArc.failurePrediction,
     singleLever: completedArc.singleLever,
-    adjustment: stringOrNull(raw?.adjustment, 320),
-    currentTest: stringOrNull(raw?.currentTest, 320),
+    adjustment: normalizedAdjustment,
+    currentTest: normalizedCurrentTest,
     outcome: stringOrNull(raw?.outcome, 400),
     outcomeStatus:
       normalizeInternalOutcomeStatus(raw?.outcomeStatus) ??
