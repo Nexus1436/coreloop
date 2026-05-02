@@ -6905,59 +6905,10 @@ ${ACTIVE_PROMPT}
         });
 
         if (arcViolationReasons.length > 0) {
-          console.log("ARC_RETRY_START", {
+          console.log("ARC_VALIDATOR_LOG_ONLY_MODE", {
             stage: "initial",
-            assistantTextLength: assistantText.length,
             reasons: arcViolationReasons,
-          });
-
-          assistantText = await runCompletion(openai, [
-            ...chatMessages,
-            {
-              role: "assistant",
-              content: assistantText,
-            },
-            {
-              role: "user",
-              content: `
-Your previous response violated the Interloop response arc.
-
-Rewrite it now.
-
-Required:
-
-* controlled validation only if earned
-* one mechanism
-* one interpretation correction
-* one predicted failure or overcorrection
-* one movement-based lever
-* no exercise prescription
-* no generic coaching
-* no broad advice
-* no multiple levers
-* one sharp question only if useful
-
-The response must not say:
-
-* focus on strengthening
-* work on stability
-* improve control
-* perform exercises
-* do wall slides
-
-The lever must be a movement cue, not a training recommendation.
-
-Produce the corrected response only.
-            `.trim(),
-            },
-          ]);
-
-          arcViolationReasons = getResponseArcViolationReasons(assistantText);
-          console.log("ARC_RETRY_RESULT", {
-            stage: "initial",
-            assistantTextLength: assistantText.length,
-            violates: arcViolationReasons.length > 0,
-            reasons: arcViolationReasons,
+            finalTextLength: assistantText.length,
           });
         }
       }
@@ -6993,128 +6944,22 @@ Produce the corrected response only.
 
         const hasFormattedSections = /\*\*.*\*\*:/g.test(assistantText);
         const closureDrift = userSignaledClosure && /\?/.test(assistantText);
+        const driftReasons = [
+          !isValidResponse(assistantText) ? "invalid_response_shape" : null,
+          isWeak ? "weak_response_language" : null,
+          hasWeakMechanismLanguage ? "weak_mechanism_language" : null,
+          isGenericSuccess ? "generic_success_language" : null,
+          closureDrift ? "closure_drift" : null,
+          hasLabels ? "visible_labels" : null,
+          hasFormattedSections ? "formatted_sections" : null,
+        ].filter((reason): reason is string => Boolean(reason));
 
-        if (
-          !isValidResponse(assistantText) ||
-          isWeak ||
-          hasWeakMechanismLanguage ||
-          isGenericSuccess ||
-          closureDrift ||
-          hasLabels ||
-          hasFormattedSections
-        ) {
-          const retryMessages: ChatCompletionMessageParam[] = [
-            ...chatMessages,
-            {
-              role: "assistant",
-              content: assistantText,
-            },
-            {
-              role: "user",
-              content: `
-That response drifted from the active narrative. Rewrite it so the execution stays faithful to the base narrative and the Interloop response arc.
-
-=== RETRY PRIORITY ===
-
-Do not default to immediate diagnosis.
-Do not force the phrase "The issue is..."
-Do not make every response diagnosis-first.
-
-Choose the right shape:
-
-1. Mechanism-led:
-- name one specific mechanism
-- correct the user's interpretation
-- predict a localized failure point
-- give one movement-based lever
-- end with one single-rep probe
-
-2. Probe-first:
-- briefly name the uncertainty
-- give one single-rep probe that separates two possible failure points
-- ask for one specific observable result
-
-If the mechanism is not fully clear, start with a targeted probe instead.
-If the previous response identified a mechanism, refine or test it instead of restating it.
-
-=== MECHANISM ENFORCEMENT ===
-
-All explanations, when given, must resolve to a physical or mechanical cause.
-
-Do NOT say:
-- this is working
-- this is aligning well
-- this is a good sign
-- this means you're doing it right
-- this suggests progress
-
-Instead:
-- identify what is physically happening in the body
-- describe what is breaking, collapsing, shifting, or compensating
-- explain the mechanism directly
-
-When the user reports improvement:
-- refine the current mechanism instead of restating it
-- narrow where the failure moved
-- change the lever or probe to target the new failure point
-
-Do not collapse success into praise, reassurance, or closure.
-
-=== RESPONSE SHAPE ===
-
-Preserve the natural Interloop arc:
-
-1. Validate only what is actually correct
-2. Decide whether this turn needs mechanism-led or probe-first handling
-3. If mechanism-led, correct the mechanism and predict a localized failure
-4. If probe-first, isolate the missing variable
-5. Reduce to one lever or one probe
-6. End according to state, with at most one final question only if needed
-
-Keep one dominant mechanism only.
-Do not reopen multiple explanations or branches.
-Do not restate the whole problem from scratch.
-Do not explain broadly when a precise correction is available.
-Do not use bolded headers, titled sections, bullets, or packaged formatting in the visible response.
-
-If the mechanism is already established, advance it instead of restating it.
-If new evidence breaks the mechanism, replace it rather than stacking explanations.
-If feedback says it helped first and failed later, localize the later failure instead of repeating the first explanation.
-
-The response must read as one continuous explanation with natural paragraphing.
-
-Natural phrasing is allowed. The response is valid if it either gives a specific mechanism or asks a targeted probe that will reveal the mechanism.
-
-=== ENDING STATE ===
-
-The ending question is determined by state, not by template.
-
-- If the user is lightly reopening the conversation, use soft re-entry from continuity when it exists.
-- If the mechanism is still unclear, end with a narrowing question about where, when, load, timing, or condition.
-- If the mechanism is forming but not proven, end with a confirmation or falsification question.
-- Only if an actual adjustment has already been introduced may the ending question test whether it holds or what changed.
-- If no adjustment exists, do not ask an adjustment-testing question.
-- If the user clearly closes the point, do not ask a follow-up question.
-
-A closure response can be very short if it lands cleanly.
-A light release line is allowed only if it does not probe, test, clarify, or restart the investigation.
-
-=== NAME AND TONE ===
-
-Do not force name usage.
-Use the name only when it adds meaning or emphasis.
-Do not attach the name to the final question by default.
-Prefer omitting the name over using it habitually.
-
-Do not sound generic, therapeutic, motivational, or like a normal assistant.
-The response should feel slightly corrective and willing to challenge the user's framing when needed.
-
-Produce the corrected response now.
-                `.trim(),
-            },
-          ];
-
-          finalText = await runCompletion(openai, retryMessages);
+        if (driftReasons.length > 0) {
+          console.log("ARC_VALIDATOR_LOG_ONLY_MODE", {
+            stage: "narrative_drift",
+            reasons: driftReasons,
+            finalTextLength: assistantText.length,
+          });
         }
       }
 
@@ -7123,7 +6968,7 @@ Produce the corrected response now.
           stage: "final_before_stream",
           finalTextLength: finalText.length,
         });
-        let finalArcViolationReasons =
+        const finalArcViolationReasons =
           getResponseArcViolationReasons(finalText);
         console.log("ARC_VALIDATOR_RESULT", {
           stage: "final_before_stream",
@@ -7145,108 +6990,11 @@ Produce the corrected response now.
         }
 
         if (finalArcViolationReasons.length > 0) {
-          console.log("ARC_RETRY_START", {
+          console.log("ARC_VALIDATOR_LOG_ONLY_MODE", {
             stage: "final_before_stream",
-            finalTextLength: finalText.length,
             reasons: finalArcViolationReasons,
-          });
-
-          finalText = await runCompletion(openai, [
-            ...chatMessages,
-            {
-              role: "assistant",
-              content: finalText,
-            },
-            {
-              role: "user",
-              content: `
-Your previous response is still invalid.
-
-Rewrite it from the hidden reasoning arc, then express only what is needed.
-
-Internal arc:
-1. Extract the real signal
-2. Test multiple interpretations
-3. Identify the mechanism
-4. Correct the user's interpretation if needed
-5. Predict the likely failure or overcorrection if useful
-6. Extract one lever if useful
-
-Visible output may be:
-- full breakdown
-- tight correction
-- single lever
-- probe
-
-Do not force all arc components into the visible response.
-Do not force "The issue is..."
-Do not use the same rhythm every time.
-Only ask a question if it sharpens the model.
-
-Never say:
-- focus on exercises
-- focus on strengthening
-- work on stability
-- strengthen
-- improve stability
-- improve control
-- perform exercises
-- do 3 sets
-- practice
-- higher speeds
-
-Return only the corrected response.
-              `.trim(),
-            },
-          ]);
-
-          finalArcViolationReasons = getResponseArcViolationReasons(finalText);
-          console.log("ARC_RETRY_RESULT", {
-            stage: "final_before_stream",
             finalTextLength: finalText.length,
-            violates: finalArcViolationReasons.length > 0,
-            reasons: finalArcViolationReasons,
           });
-        }
-
-        if (finalArcViolationReasons.length > 0) {
-          console.error("ARC_FINAL_INVALID_BLOCKED", {
-            finalTextLength: finalText.length,
-            reasons: finalArcViolationReasons,
-          });
-          logLayer1Trace(layer1TraceId, "visible_response_fallback_decision", {
-            conversationId: convoId,
-            caseId: resolvedActiveCase?.id ?? null,
-            reason: "arc_final_invalid",
-            finalTextLength: finalText.length,
-            arcViolationReasons: finalArcViolationReasons,
-          });
-
-          const caseStateFallback = resolvedActiveCase
-            ? await buildResponseFromCaseState(
-                resolvedActiveCase.id,
-                internalCasePersistResult.update,
-              )
-            : "";
-
-          if (caseStateFallback) {
-            finalText = caseStateFallback;
-            console.log("ARC_RESPONSE_TYPE_SELECTED", {
-              caseId: resolvedActiveCase?.id ?? null,
-              responseType: "case_state_fallback",
-            });
-            console.log("ARC_CASE_STATE_FALLBACK_USED", {
-              caseId: resolvedActiveCase?.id ?? null,
-              finalTextLength: finalText.length,
-              hasCurrentTest: Boolean(
-                internalCasePersistResult.update?.currentTest ||
-                  internalCasePersistResult.update?.adjustment,
-              ),
-            });
-          } else {
-            finalText =
-              "Does it break before the weight shift or after?";
-          }
         }
 
         const visibleCurrentTest = resolvedActiveCase
@@ -7267,33 +7015,16 @@ Return only the corrected response.
             visibleCurrentTest: clampText(visibleCurrentTest, 220),
             finalTextLength: finalText.length,
           });
-          const caseStateResponse = resolvedActiveCase
-            ? await buildResponseFromCaseState(
-                resolvedActiveCase.id,
-                internalCasePersistResult.update,
-              )
-            : "";
-
-          if (caseStateResponse && isProbeOnlyResponse(finalText)) {
-            finalText = caseStateResponse;
-            console.log("ARC_RESPONSE_TYPE_SELECTED", {
-              caseId: resolvedActiveCase?.id ?? null,
-              responseType: "case_state_probe_replacement",
-            });
-          } else if (caseStateResponse && !finalText.trim()) {
-            finalText = caseStateResponse;
-            console.log("ARC_RESPONSE_TYPE_SELECTED", {
-              caseId: resolvedActiveCase?.id ?? null,
-              responseType: "case_state_empty_replacement",
-            });
-          }
-
-          if (responseIncludesCurrentTest(finalText, visibleCurrentTest)) {
-            console.log("ARC_CASE_STATE_TEST_INCLUDED", {
-              caseId: resolvedActiveCase?.id ?? null,
-              finalTextLength: finalText.length,
-            });
-          }
+          console.log("ARC_VALIDATOR_LOG_ONLY_MODE", {
+            stage: "visible_current_test_missing",
+            reasons: ["visible_current_test_missing"],
+            finalTextLength: finalText.length,
+          });
+        } else if (visibleCurrentTest) {
+          console.log("ARC_CASE_STATE_TEST_INCLUDED", {
+            caseId: resolvedActiveCase?.id ?? null,
+            finalTextLength: finalText.length,
+          });
         }
 
         const latestCaseHypothesisForTestOnly =
@@ -7322,21 +7053,11 @@ Return only the corrected response.
             hasHypothesis: true,
             triggered: true,
           });
-
-          const caseStateResponse = resolvedActiveCase
-            ? await buildResponseFromCaseState(
-                resolvedActiveCase.id,
-                internalCasePersistResult.update,
-              )
-            : "";
-
-          if (caseStateResponse) {
-            finalText = caseStateResponse;
-            console.log("ARC_RESPONSE_TYPE_SELECTED", {
-              caseId: resolvedActiveCase?.id ?? null,
-              responseType: "case_state_test_only_replacement",
-            });
-          }
+          console.log("ARC_VALIDATOR_LOG_ONLY_MODE", {
+            stage: "test_only_response_with_hypothesis",
+            reasons: ["test_only_response_with_hypothesis"],
+            finalTextLength: finalText.length,
+          });
         }
       }
 
