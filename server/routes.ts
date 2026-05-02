@@ -6890,14 +6890,15 @@ ${ACTIVE_PROMPT}
         })),
       ];
 
-      let assistantText = await runCompletion(openai, chatMessages);
+      const assistantText = await runCompletion(openai, chatMessages);
 
       if (!isCaseReview) {
         console.log("ARC_VALIDATOR_START", {
           stage: "initial",
           assistantTextLength: assistantText.length,
         });
-        let arcViolationReasons = getResponseArcViolationReasons(assistantText);
+        const arcViolationReasons =
+          getResponseArcViolationReasons(assistantText);
         console.log("ARC_VALIDATOR_RESULT", {
           stage: "initial",
           violates: arcViolationReasons.length > 0,
@@ -6913,7 +6914,7 @@ ${ACTIVE_PROMPT}
         }
       }
 
-      let finalText = assistantText;
+      const finalText = assistantText;
 
       if (!isCaseReview) {
         const userSignaledClosure = detectUserClosureSignal(userText);
@@ -7008,7 +7009,7 @@ ${ACTIVE_PROMPT}
           visibleCurrentTest &&
           !responseIncludesCurrentTest(finalText, visibleCurrentTest)
         ) {
-          logLayer1Trace(layer1TraceId, "visible_response_fallback_decision", {
+          logLayer1Trace(layer1TraceId, "visible_response_arc_observation", {
             conversationId: convoId,
             caseId: resolvedActiveCase?.id ?? null,
             reason: "visible_current_test_missing",
@@ -7041,7 +7042,7 @@ ${ACTIVE_PROMPT}
           hasHypothesisForTestOnly &&
           isTestOnlyResponse(finalText, visibleCurrentTest)
         ) {
-          logLayer1Trace(layer1TraceId, "visible_response_fallback_decision", {
+          logLayer1Trace(layer1TraceId, "visible_response_arc_observation", {
             conversationId: convoId,
             caseId: resolvedActiveCase?.id ?? null,
             reason: "test_only_response_with_hypothesis",
