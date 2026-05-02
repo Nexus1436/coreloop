@@ -2388,6 +2388,16 @@ function getConcreteTestInvalidReason(value: string | null | undefined): string 
     /\buse better\b/i,
     /\bdistribute the load\b/i,
     /\bcontrolled rotation\b/i,
+    /\bimprove hip rotation\b/i,
+    /\btrunk engagement\b/i,
+    /\bconsciously engaging\b/i,
+    /\bengage the hips\b/i,
+    /\bengage the trunk\b/i,
+    /\binadequate hip rotation\b/i,
+    /\binadequate trunk engagement\b/i,
+    /\bincreased right low back strain\b/i,
+    /\bnote any change\b/i,
+    /\bperform a drive serve\b/i,
     /\bcore engagement\b/i,
   ];
 
@@ -2445,7 +2455,7 @@ function buildFallbackConcreteTest({
 
   if (/\bdrive[-\s]?serve|drive serves|serve|serving|racquetball\b/i.test(source)) {
     const direction = /\bleft\b/i.test(source) ? " to the left" : "";
-    return `Do 3 slow drive serves${direction} without a ball and start the turn from your hips before your trunk moves. Tell me if the ${regionPhrase} starts before the hips move or after the trunk releases.`;
+    return `Do 3 slow drive-serve motions${direction} without a ball. Start the turn from your hips before your trunk moves. Tell me if the ${regionPhrase} starts before the hips move or after the trunk releases.`;
   }
 
   const movement = normalizePreviewValue(movementContext);
@@ -2680,6 +2690,16 @@ function isShallowArcField(
     /\bgood posture\b/i,
     /\bcontrolled rotation\b/i,
     /\bhip rotation initiation\b/i,
+    /\bimprove hip rotation\b/i,
+    /\btrunk engagement\b/i,
+    /\bconsciously engaging\b/i,
+    /\bengage the hips\b/i,
+    /\bengage the trunk\b/i,
+    /\binadequate hip rotation\b/i,
+    /\binadequate trunk engagement\b/i,
+    /\bincreased right low back strain\b/i,
+    /\bnote any change\b/i,
+    /\bperform a drive serve\b/i,
     /\bweight transfer\b/i,
     /\bcontinued stiffness\b/i,
     /\bcontinued tightness\b/i,
@@ -2739,9 +2759,9 @@ function buildMechanicalArcDefaults({
   if (activity === "racquetball" && isServe && isLowBack) {
     return {
       interpretationCorrection:
-        "Right now the trunk is starting before the hips, so the serve load never transfers cleanly out of the low back.",
+        "The trunk is starting before the hips, so the serve load is staying in the right low back instead of transferring out through rotation.",
       failurePrediction:
-        "If that timing stays the same, you will start forcing rotation from the back instead of transferring it through the hips.",
+        "If that timing stays the same, the low back will keep forcing the turn instead of the hips starting it.",
       singleLever: "start the turn from the hips before the trunk moves",
     };
   }
@@ -3486,6 +3506,49 @@ function completeCurrentTestField({
   });
 }
 
+function completeAdjustmentField({
+  candidate,
+  hypothesis,
+  movementContext,
+  bodyRegion,
+  activityType,
+}: {
+  candidate: string | null;
+  hypothesis: string | null;
+  movementContext: string | null;
+  bodyRegion: string | null;
+  activityType: string | null;
+}): string | null {
+  if (!hypothesis) return candidate;
+
+  const activity = normalizeCaseKey(activityType);
+  const movement = normalizeCaseKey(movementContext);
+  const region = normalizeBodyRegion(bodyRegion);
+
+  if (
+    activity === "racquetball" &&
+    /\bserve\b/.test(movement) &&
+    (region === "low back" || region === "back") &&
+    (!candidate ||
+      isGenericAdjustmentFillerText(candidate) ||
+      isWeakTestInstructionText(candidate) ||
+      isShallowArcField(candidate, "singleLever"))
+  ) {
+    return "Start the drive-serve turn from the hips before the trunk moves.";
+  }
+
+  if (
+    !candidate ||
+    isGenericAdjustmentFillerText(candidate) ||
+    isWeakTestInstructionText(candidate) ||
+    isShallowArcField(candidate, "singleLever")
+  ) {
+    return "Start the movement from the hips before the trunk moves.";
+  }
+
+  return candidate;
+}
+
 function normalizeInternalCaseUpdate(
   raw: Record<string, unknown> | null,
   fallback: {
@@ -3543,6 +3606,15 @@ function normalizeInternalCaseUpdate(
     260,
   );
   const normalizedSingleLever = stringOrNull(raw?.singleLever, 180);
+  const rawFieldQuality = {
+    hypothesis: enforcedHypothesis,
+    interpretationCorrection: normalizedCorrection,
+    failurePrediction: normalizedFailurePrediction,
+    singleLever: normalizedSingleLever,
+    adjustment: stringOrNull(raw?.adjustment, 320),
+    currentTest: stringOrNull(raw?.currentTest, 320),
+  };
+  console.log("ARC_FIELD_QUALITY_BEFORE", rawFieldQuality);
   const completedArc = completeArcFields({
     hypothesis: enforcedHypothesis,
     interpretationCorrection: normalizedCorrection,
@@ -3552,14 +3624,28 @@ function normalizeInternalCaseUpdate(
     activityType: normalizedActivityType,
     movementContext: normalizedMovementContext,
   });
-  const normalizedAdjustment = stringOrNull(raw?.adjustment, 320);
+  const normalizedAdjustment = completeAdjustmentField({
+    candidate: rawFieldQuality.adjustment,
+    hypothesis: enforcedHypothesis,
+    movementContext: normalizedMovementContext,
+    bodyRegion: normalizedBodyRegion,
+    activityType: normalizedActivityType,
+  });
   const normalizedCurrentTest = completeCurrentTestField({
-    candidate: stringOrNull(raw?.currentTest, 320) ?? normalizedAdjustment,
+    candidate: rawFieldQuality.currentTest ?? normalizedAdjustment,
     userText: fallback.userText,
     hypothesis: enforcedHypothesis,
     movementContext: normalizedMovementContext,
     bodyRegion: normalizedBodyRegion,
     activityType: normalizedActivityType,
+  });
+  console.log("ARC_FIELD_QUALITY_AFTER", {
+    hypothesis: enforcedHypothesis,
+    interpretationCorrection: completedArc.interpretationCorrection,
+    failurePrediction: completedArc.failurePrediction,
+    singleLever: completedArc.singleLever,
+    adjustment: normalizedAdjustment,
+    currentTest: normalizedCurrentTest,
   });
 
   const update: InternalCaseUpdate = {
