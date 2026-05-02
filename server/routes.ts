@@ -3621,6 +3621,7 @@ function normalizeInternalCaseUpdate(
     outcomeResult: "Improved" | "Worse" | "Same" | null;
   },
 ): InternalCaseUpdate {
+  const userText = fallback.userText;
   const outcomeStatusFromDetector =
     fallback.outcomeResult === "Improved"
       ? "improved"
@@ -3647,7 +3648,7 @@ function normalizeInternalCaseUpdate(
   } else if (
     normalizeCaseKey(normalizedActivityType) === "racquetball" &&
     /\bserve\b/i.test(
-      `${fallback.userText} ${normalizedMovementContext ?? ""}`,
+      `${userText} ${normalizedMovementContext ?? ""}`,
     )
   ) {
     normalizedMovementContext = "drive serve";
@@ -3684,7 +3685,7 @@ function normalizeInternalCaseUpdate(
     singleLever: normalizedSingleLever,
     adjustment: rawFieldQuality.adjustment,
     currentTest: rawFieldQuality.currentTest,
-    userText: fallback.userText,
+    userText: userText,
     bodyRegion: normalizedBodyRegion,
     activityType: normalizedActivityType,
     movementContext: normalizedMovementContext,
@@ -3694,8 +3695,8 @@ function normalizeInternalCaseUpdate(
   const update: InternalCaseUpdate = {
     signal:
       stringOrNull(raw?.signal, 800) ??
-      (qualifiesForTimelineSignal(fallback.userText)
-        ? clampText(fallback.userText, 800)
+      (qualifiesForTimelineSignal(userText)
+        ? clampText(userText, 800)
         : null),
     bodyRegion: normalizedBodyRegion,
     activityType: normalizedActivityType,
