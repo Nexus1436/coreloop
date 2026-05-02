@@ -2815,13 +2815,17 @@ function completeArcFields({
   adjustment: string | null;
   currentTest: string | null;
 } {
+  const normalizedActivity = (activityType || "").toLowerCase();
+  const normalizedMovement = (movementContext || "").toLowerCase();
+  const normalizedBody = (bodyRegion || "").toLowerCase();
   const activity = normalizeCaseKey(activityType);
   const movement = normalizeCaseKey(movementContext);
   const region = normalizeBodyRegion(bodyRegion);
   const isDriveServeLowBack =
-    activity === "racquetball" &&
-    movement === "drive serve" &&
-    /low back/.test(region ?? "");
+    normalizedActivity.includes("racquetball") &&
+    normalizedMovement.includes("drive") &&
+    normalizedMovement.includes("serve") &&
+    normalizedBody.includes("back");
 
   const arcResult = {
     hypothesis,
@@ -2833,6 +2837,11 @@ function completeArcFields({
   };
 
   if (isDriveServeLowBack) {
+    console.log("ARC_DETERMINISTIC_BRANCH_ACTIVE", {
+      activityType,
+      movementContext,
+      bodyRegion,
+    });
     arcResult.interpretationCorrection =
       "The trunk is starting before the hips, so the rotation is being forced through the low back instead of transferring cleanly.";
     arcResult.failurePrediction =
