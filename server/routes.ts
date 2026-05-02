@@ -124,6 +124,26 @@ function clampText(s: string, max = 800): string {
   return t.length > max ? t.slice(0, max) + "…" : t;
 }
 
+function createLayer1TraceId(): string {
+  return `l1_${Date.now().toString(36)}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+function logLayer1Trace(
+  traceId: string | null | undefined,
+  step: string,
+  payload: Record<string, unknown> = {},
+): void {
+  if (!traceId) return;
+
+  console.log("LAYER1_TRACE", {
+    traceId,
+    step,
+    ...payload,
+  });
+}
+
 function normalizeStoredFirstName(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -3488,6 +3508,7 @@ async function buildInternalCaseStateSnapshot(caseId: number): Promise<{
 
 async function runInternalCaseEngine({
   openaiClient,
+  traceId,
   userText,
   currentCase,
   derivedBodyRegion,
@@ -3497,6 +3518,7 @@ async function runInternalCaseEngine({
   outcomeResult,
 }: {
   openaiClient: OpenAI;
+  traceId?: string | null;
   userText: string;
   currentCase: ResolvedCaseRow;
   derivedBodyRegion: string | null;
@@ -3576,6 +3598,10 @@ JSON shape:
   ];
 
   const rawText = await runCompletion(openaiClient, messagesForInternalPass);
+  logLayer1Trace(traceId, "raw_internal_case_engine_output", {
+    caseId: currentCase.id,
+    rawPreview: clampText(rawText, 1200),
+  });
   const parsed = parseJsonObjectFromText(rawText);
 
   if (!parsed) {
@@ -3591,6 +3617,10 @@ JSON shape:
     derivedActivityType,
     derivedMovementContext,
     outcomeResult,
+  });
+  logLayer1Trace(traceId, "normalized_internal_update", {
+    caseId: currentCase.id,
+    update,
   });
 
   console.log("LAYER1_OUTPUT", {
@@ -3615,11 +3645,13 @@ JSON shape:
 
 async function persistInternalCaseUpdate({
   userId,
+  traceId,
   caseId,
   update,
   userText,
 }: {
   userId: string;
+  traceId?: string | null;
   caseId: number;
   update: InternalCaseUpdate;
   userText: string;
@@ -3655,6 +3687,17 @@ async function persistInternalCaseUpdate({
   }
 
   let activeHypothesis = await getLatestValidHypothesisForCase(caseId);
+  const hypothesisValidation = {
+    hasHypothesis: Boolean(update.hypothesis),
+    isStrongCandidate: update.hypothesis
+      ? isStrongHypothesisCandidate(update.hypothesis)
+      : false,
+    preview: clampText(update.hypothesis ?? "", 220),
+  };
+  logLayer1Trace(traceId, "hypothesis_validation_result", {
+    caseId,
+    ...hypothesisValidation,
+  });
 
   if (update.hypothesis && isStrongHypothesisCandidate(update.hypothesis)) {
     const [latestStoredHypothesis] = await db
@@ -3723,9 +3766,18 @@ async function persistInternalCaseUpdate({
   }
 
   const nextTest = update.currentTest ?? update.adjustment;
+  const testInvalidReason = getConcreteTestInvalidReason(nextTest);
+  logLayer1Trace(traceId, "adjustment_test_candidate_precheck", {
+    caseId,
+    hasNextTest: Boolean(nextTest),
+    hasActiveHypothesis: Boolean(activeHypothesis?.id),
+    candidatePreview: clampText(nextTest ?? "", 220),
+    candidateValid: testInvalidReason === null,
+    invalidReason: testInvalidReason,
+  });
 
   if (activeHypothesis?.id) {
-    const { finalTest } = enforceConcreteTestCandidate({
+    const testValidationResult = enforceConcreteTestCandidate({
       caseId,
       candidate: nextTest,
       userText,
@@ -3733,6 +3785,17 @@ async function persistInternalCaseUpdate({
       movementContext: update.movementContext,
       bodyRegion: update.bodyRegion,
       activityType: update.activityType,
+    });
+    const { finalTest } = testValidationResult;
+    logLayer1Trace(traceId, "adjustment_test_validation_result", {
+      caseId,
+      hasNextTest: Boolean(nextTest),
+      hasActiveHypothesis: true,
+      candidatePreview: clampText(nextTest ?? "", 220),
+      finalTestPreview: clampText(finalTest, 220),
+      finalTestValid: isValidConcreteTest(finalTest),
+      usedFallback: testValidationResult.usedFallback,
+      invalidReason: testValidationResult.reason,
     });
     const adjustmentCue = finalTest;
     const mechanicalFocus = finalTest;
@@ -3793,6 +3856,18 @@ async function persistInternalCaseUpdate({
       });
     }
   } else {
+    logLayer1Trace(traceId, "adjustment_test_validation_result", {
+      caseId,
+      hasNextTest: Boolean(nextTest),
+      hasActiveHypothesis: false,
+      candidatePreview: clampText(nextTest ?? "", 220),
+      finalTestPreview: "",
+      finalTestValid: false,
+      usedFallback: false,
+      invalidReason: activeHypothesis?.id
+        ? testInvalidReason
+        : "skipped_no_active_hypothesis",
+    });
     console.log("INTERNAL_ADJUSTMENT_WRITE", {
       caseId,
       status: "skipped_no_hypothesis",
@@ -3889,6 +3964,13 @@ async function persistInternalCaseUpdate({
   }
 
   await db.update(cases).set({ updatedAt: new Date() }).where(eq(cases.id, caseId));
+  logLayer1Trace(traceId, "persistence_result", {
+    caseId,
+    attempted: result.attempted,
+    wroteHypothesis: result.wroteHypothesis,
+    wroteAdjustment: result.wroteAdjustment,
+    wroteOutcome: result.wroteOutcome,
+  });
 
   return result;
 }
@@ -3896,6 +3978,7 @@ async function persistInternalCaseUpdate({
 async function buildStructuredCaseStateBlock(
   caseId: number,
   internalUpdate: InternalCaseUpdate | null,
+  traceId?: string | null,
 ): Promise<string> {
   const snapshot = await buildInternalCaseStateSnapshot(caseId);
   const visibleStateInput = {
@@ -3921,6 +4004,11 @@ async function buildStructuredCaseStateBlock(
     hasHypothesis: Boolean(visibleStateInput.hypothesis),
     hasAdjustment: Boolean(visibleStateInput.adjustment),
     hasCurrentTest: Boolean(visibleStateInput.adjustment),
+  });
+  logLayer1Trace(traceId, "final_structured_case_state_for_layer2", {
+    caseId,
+    snapshot,
+    visibleStateInput,
   });
 
   return `
@@ -5835,6 +5923,15 @@ ${memoryBlock}
       const isCaseReview = Boolean(body.isCaseReview);
       const conversationId = body.conversationId;
       const chatStartedAt = Date.now();
+      const layer1TraceId = createLayer1TraceId();
+      logLayer1Trace(layer1TraceId, "userText", {
+        userId,
+        conversationId: Number.isFinite(Number(conversationId))
+          ? Number(conversationId)
+          : null,
+        isCaseReview,
+        userText,
+      });
 
       // ==============================
       // DOMAIN BOUNDARY GATE
@@ -6118,6 +6215,31 @@ Produce the response now.
       const derivedSignalType = shouldCreateCase
         ? deriveSignalType(userText)
         : null;
+      logLayer1Trace(layer1TraceId, "signal_recognition", {
+        conversationId: convoId,
+        shouldCreateCase,
+        derivedCaseContext,
+        derivedBodyRegion,
+        derivedSignalType,
+      });
+      if (!shouldCreateCase) {
+        logLayer1Trace(layer1TraceId, "resolved_active_case_before_boundary", {
+          conversationId: convoId,
+          caseId: resolvedActiveCase?.id ?? null,
+          status: resolvedActiveCase?.status ?? null,
+          movementContext: resolvedActiveCase?.movementContext ?? null,
+          activityType: resolvedActiveCase?.activityType ?? null,
+          skippedBoundary: true,
+          reason: "signal_not_case_creation_candidate",
+        });
+        logLayer1Trace(layer1TraceId, "case_boundary_decision", {
+          conversationId: convoId,
+          currentCaseId: resolvedActiveCase?.id ?? null,
+          skipped: true,
+          shouldStartNewCase: false,
+          reason: "signal_not_case_creation_candidate",
+        });
+      }
       let continuityContextAllowed =
         !isCaseReview && !shouldCreateCase && dependsOnPriorConversationContext(userText);
       let continuityContextReason = continuityContextAllowed
@@ -6168,6 +6290,16 @@ Produce the response now.
           }
 
           if (resolvedActiveCase && !returnToCaseMatched) {
+            logLayer1Trace(layer1TraceId, "resolved_active_case_before_boundary", {
+              conversationId: convoId,
+              caseId: resolvedActiveCase.id,
+              status: resolvedActiveCase.status,
+              movementContext: resolvedActiveCase.movementContext,
+              activityType: resolvedActiveCase.activityType,
+              derivedCaseContext,
+              derivedBodyRegion,
+              derivedSignalType,
+            });
             const boundaryDecision = await shouldStartNewCaseForSignal({
               userText,
               currentCase: resolvedActiveCase,
@@ -6175,6 +6307,20 @@ Produce the response now.
               derivedActivityType: derivedCaseContext.activityType,
               derivedBodyRegion,
               derivedSignalType,
+            });
+            logLayer1Trace(layer1TraceId, "case_boundary_decision", {
+              conversationId: convoId,
+              currentCaseId: resolvedActiveCase.id,
+              shouldStartNewCase: boundaryDecision.shouldStartNewCase,
+              reason: boundaryDecision.reason,
+              derivedBodyRegion: boundaryDecision.bodyRegion,
+              previousBodyRegion: boundaryDecision.previousBodyRegion,
+              derivedMovementContext: boundaryDecision.movementContext,
+              previousMovementContext: boundaryDecision.previousMovementContext,
+              derivedSignalType: boundaryDecision.signalType,
+              previousSignalType: boundaryDecision.previousSignalType,
+              derivedActivityType: boundaryDecision.activityType,
+              previousActivityType: boundaryDecision.previousActivityType,
             });
             console.log("CASE_BOUNDARY_DECISION", {
               userId,
@@ -6219,8 +6365,27 @@ Produce the response now.
               continuityContextReason = boundaryDecision.reason ?? "same_case_fit";
             }
           } else if (!resolvedActiveCase) {
+            logLayer1Trace(layer1TraceId, "case_boundary_decision", {
+              conversationId: convoId,
+              currentCaseId: null,
+              shouldStartNewCase: true,
+              reason: "new_case_no_prior_case_fit",
+              derivedCaseContext,
+              derivedBodyRegion,
+              derivedSignalType,
+            });
             continuityContextAllowed = false;
             continuityContextReason = "new_case_no_prior_case_fit";
+          } else if (returnToCaseMatched) {
+            logLayer1Trace(layer1TraceId, "case_boundary_decision", {
+              conversationId: convoId,
+              currentCaseId: resolvedActiveCase.id,
+              shouldStartNewCase: false,
+              reason: "explicit_return_to_case",
+              derivedCaseContext,
+              derivedBodyRegion,
+              derivedSignalType,
+            });
           }
 
           if (resolvedActiveCase) {
@@ -6416,6 +6581,15 @@ Produce the response now.
           shouldCreateCase ||
           Boolean(internalOutcomeResult) ||
           dependsOnPriorConversationContext(userText);
+        logLayer1Trace(layer1TraceId, "layer1_run_decision", {
+          conversationId: convoId,
+          caseId: resolvedActiveCase.id,
+          ran: shouldRunInternalCaseEngine,
+          skipped: !shouldRunInternalCaseEngine,
+          shouldCreateCase,
+          internalOutcomeResult,
+          dependsOnPriorContext: dependsOnPriorConversationContext(userText),
+        });
 
         if (shouldRunInternalCaseEngine) {
           try {
@@ -6425,6 +6599,7 @@ Produce the response now.
 
             const internalCaseUpdate = await runInternalCaseEngine({
               openaiClient: openai,
+              traceId: layer1TraceId,
               userText,
               currentCase: resolvedActiveCase,
               derivedBodyRegion,
@@ -6440,6 +6615,7 @@ Produce the response now.
 
             internalCasePersistResult = await persistInternalCaseUpdate({
               userId,
+              traceId: layer1TraceId,
               caseId: resolvedActiveCase.id,
               update: internalCaseUpdate,
               userText,
@@ -6477,6 +6653,15 @@ Produce the response now.
             skipped: true,
           });
         }
+      } else {
+        logLayer1Trace(layer1TraceId, "layer1_run_decision", {
+          conversationId: convoId,
+          caseId: resolvedActiveCase?.id ?? null,
+          ran: false,
+          skipped: true,
+          reason: isCaseReview ? "case_review" : "no_resolved_active_case",
+          shouldCreateCase,
+        });
       }
 
       const activeHypothesisBlock = continuityCaseId
@@ -6491,6 +6676,7 @@ Produce the response now.
           ? await buildStructuredCaseStateBlock(
               resolvedActiveCase.id,
               internalCasePersistResult.update,
+              layer1TraceId,
             )
           : "";
       const settingsContextBlock = !isCaseReview
@@ -7028,6 +7214,13 @@ Return only the corrected response.
             finalTextLength: finalText.length,
             reasons: finalArcViolationReasons,
           });
+          logLayer1Trace(layer1TraceId, "visible_response_fallback_decision", {
+            conversationId: convoId,
+            caseId: resolvedActiveCase?.id ?? null,
+            reason: "arc_final_invalid",
+            finalTextLength: finalText.length,
+            arcViolationReasons: finalArcViolationReasons,
+          });
 
           const caseStateFallback = resolvedActiveCase
             ? await buildResponseFromCaseState(
@@ -7067,6 +7260,13 @@ Return only the corrected response.
           visibleCurrentTest &&
           !responseIncludesCurrentTest(finalText, visibleCurrentTest)
         ) {
+          logLayer1Trace(layer1TraceId, "visible_response_fallback_decision", {
+            conversationId: convoId,
+            caseId: resolvedActiveCase?.id ?? null,
+            reason: "visible_current_test_missing",
+            visibleCurrentTest: clampText(visibleCurrentTest, 220),
+            finalTextLength: finalText.length,
+          });
           const caseStateResponse = resolvedActiveCase
             ? await buildResponseFromCaseState(
                 resolvedActiveCase.id,
@@ -7110,6 +7310,13 @@ Return only the corrected response.
           hasHypothesisForTestOnly &&
           isTestOnlyResponse(finalText, visibleCurrentTest)
         ) {
+          logLayer1Trace(layer1TraceId, "visible_response_fallback_decision", {
+            conversationId: convoId,
+            caseId: resolvedActiveCase?.id ?? null,
+            reason: "test_only_response_with_hypothesis",
+            visibleCurrentTest: clampText(visibleCurrentTest, 220),
+            finalTextLength: finalText.length,
+          });
           console.log("ARC_TEST_ONLY_DETECTED", {
             caseId: resolvedActiveCase?.id ?? null,
             hasHypothesis: true,
@@ -7136,6 +7343,13 @@ Return only the corrected response.
       console.log("FINAL_TEXT_FOR_STREAM", {
         isCaseReview,
         finalTextLength: finalText.length,
+      });
+      logLayer1Trace(layer1TraceId, "visible_response_final", {
+        conversationId: convoId,
+        caseId: resolvedActiveCase?.id ?? null,
+        isCaseReview,
+        finalTextLength: finalText.length,
+        finalTextPreview: clampText(finalText, 500),
       });
 
       res.setHeader("Content-Type", "text/event-stream");
@@ -7181,6 +7395,13 @@ Return only the corrected response.
       const shouldRunAssistantExtractionFallback =
         extractionResponseType === "investigation" &&
         !internalCasePersistResult.attempted;
+      logLayer1Trace(layer1TraceId, "assistant_text_extraction_fallback_decision", {
+        conversationId: convoId,
+        caseId: resolvedActiveCase?.id ?? null,
+        extractionResponseType,
+        internalCaseAttempted: internalCasePersistResult.attempted,
+        shouldRunAssistantExtractionFallback,
+      });
 
       if (
         extractionResponseType === "investigation" &&
