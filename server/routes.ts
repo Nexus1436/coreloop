@@ -1604,36 +1604,56 @@ async function resolveReturnToExistingCase({
   return null;
 }
 
+function extractMechanicalFeatures(
+  userText: string,
+  activityType?: string | null,
+  movementContext?: string | null,
+) {
+  const t = (userText || "").toLowerCase();
+  const a = (activityType || "").toLowerCase();
+  const m = (movementContext || "").toLowerCase();
+
+  const isSupine =
+    /on (my )?back|lying|supine|reformer/.test(t) ||
+    /reformer|lying/.test(m);
+  const hasLegLowering =
+    /leg(s)? (lower|drop|lowering)|leg circles|legs go lower/.test(t) ||
+    /leg circles|lower/.test(m);
+  const hasArching = /arch|arching|back lifts|low back lifts/.test(t);
+  const isRotational =
+    /serve|swing|throw|rotate|rotation/.test(t) || /serve|swing/.test(m);
+
+  return {
+    isSupine,
+    hasLegLowering,
+    hasArching,
+    isRotational,
+  };
+}
+
 function classifyMechanicalEnvironment(
-  activityType: string | null | undefined,
-  movementContext: string | null | undefined,
+  userText: string,
+  activityType?: string | null,
+  movementContext?: string | null,
 ): string {
-  const activity = normalizeOptionalLabel(activityType);
-  const movement = normalizeOptionalLabel(movementContext);
-  const source = `${activity} ${movement}`;
+  const f = extractMechanicalFeatures(userText, activityType, movementContext);
 
-  if (
-    source.includes("racquetball") ||
-    source.includes("serve") ||
-    source.includes("swing")
-  ) {
-    return "rotational_power";
-  }
-
-  if (
-    source.includes("pilates") ||
-    source.includes("leg circles") ||
-    source.includes("lying") ||
-    source.includes("controlled")
-  ) {
+  if (f.isSupine && f.hasLegLowering && f.hasArching) {
     return "controlled_stability";
   }
 
-  if (source.includes("walking") || source.includes("running")) {
+  if (f.isRotational) {
+    return "rotational_power";
+  }
+
+  const t = (userText || "").toLowerCase();
+  const m = (movementContext || "").toLowerCase();
+
+  if (/run|walk|stairs/.test(t) || /run|walk/.test(m)) {
     return "locomotion";
   }
 
-  if (source.includes("deadlift") || source.includes("squat")) {
+  if (/squat|deadlift|press|pull/.test(t) || /squat|deadlift/.test(m)) {
     return "strength_loading";
   }
 
@@ -1715,10 +1735,12 @@ async function shouldStartNewCaseForSignal({
   const normalizedDerivedBodyRegion = normalizeBodyRegion(derivedBodyRegion);
   const normalizedPreviousBodyRegion = normalizeBodyRegion(previousBodyRegion);
   const derivedEnvironment = classifyMechanicalEnvironment(
+    userText,
     derivedActivityType,
     derivedMovementContext,
   );
   const previousEnvironment = classifyMechanicalEnvironment(
+    latestSignal.description ?? "",
     previousActivityType,
     previousMovementContext,
   );
@@ -2924,7 +2946,14 @@ function completeArcFields({
   const activity = normalizeCaseKey(activityType);
   const movement = normalizeCaseKey(movementContext);
   const region = normalizeBodyRegion(bodyRegion);
-  const env = classifyMechanicalEnvironment(activityType, movementContext);
+  const env = classifyMechanicalEnvironment(userText, activityType, movementContext);
+  console.log("ARC_ENV_CLASSIFICATION", {
+    env,
+    features: extractMechanicalFeatures(userText, activityType, movementContext),
+    activityType,
+    movementContext,
+    bodyRegion,
+  });
   const isDriveServeLowBack =
     normalizedActivity.includes("racquetball") &&
     normalizedBody.includes("back") &&
