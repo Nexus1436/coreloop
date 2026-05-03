@@ -1732,6 +1732,7 @@ function deriveSportDomainForAnalytics(
   const signal = `${userText || ""} ${activityType || ""}`.toLowerCase();
 
   if (/\bpilates\b|\breformer\b/.test(signal)) return "Pilates";
+  if (/\bbasketball\b|\blayup\b/.test(signal)) return "basketball";
   if (/\bracquetball\b/.test(signal)) return "racquetball";
   if (/\bgolf\b/.test(signal)) return "golf";
   if (/\brunning\b|\brun\b/.test(signal)) return "running";
@@ -1749,6 +1750,7 @@ function deriveActivityMovementForAnalytics(
   const signal = `${userText || ""} ${movementContext || ""}`.toLowerCase();
 
   if (/\bswan dive\b|\bswan\b/.test(signal)) return "Swan Dive";
+  if (/\blayup\b/.test(signal)) return "layup";
   if (/\bleg circles?\b/.test(signal)) return "Leg circles";
   if (/\bshoulder bridge\b/.test(signal)) return "Shoulder bridge";
   if (/\bbridge\b/.test(signal)) return "Bridge";
@@ -4359,38 +4361,47 @@ async function persistCaseReasoningSnapshot({
   activeHypothesisId?: number | null;
   activeAdjustmentId?: number | null;
   update: InternalCaseUpdate;
-}): Promise<void> {
-  await db.insert(caseReasoningSnapshots).values({
-    caseId,
-    signalId: signalId ?? null,
-    activeHypothesisId: activeHypothesisId ?? null,
-    activeAdjustmentId: activeAdjustmentId ?? null,
-    sportDomain: update.sportDomain,
-    activityMovement: update.activityMovement,
-    bodyRegion: update.bodyRegion,
-    movementFamily: update.movementFamily,
-    mechanicalEnvironment: update.mechanicalEnvironment,
-    failureCandidates: update.failureCandidates,
-    dominantFailure: update.dominantFailure,
-    dominantFailureConfidence: update.dominantFailureConfidence,
-    activeLever: update.activeLever,
-    activeTest: update.activeTest,
-  });
+}): Promise<number | null> {
+  try {
+    const [snapshot] = await db
+      .insert(caseReasoningSnapshots)
+      .values({
+        caseId,
+        signalId: signalId ?? null,
+        activeHypothesisId: activeHypothesisId ?? null,
+        activeAdjustmentId: activeAdjustmentId ?? null,
+        sportDomain: update.sportDomain,
+        activityMovement: update.activityMovement,
+        bodyRegion: update.bodyRegion,
+        movementFamily: update.movementFamily,
+        mechanicalEnvironment: update.mechanicalEnvironment,
+        failureCandidates: update.failureCandidates,
+        dominantFailure: update.dominantFailure,
+        dominantFailureConfidence: update.dominantFailureConfidence,
+        activeLever: update.activeLever,
+        activeTest: update.activeTest,
+      })
+      .returning({ id: caseReasoningSnapshots.id });
 
-  console.log("CORELOOP_REASONING_SNAPSHOT_WRITE", {
-    caseId,
-    signalId: signalId ?? null,
-    activeHypothesisId: activeHypothesisId ?? null,
-    activeAdjustmentId: activeAdjustmentId ?? null,
-    sportDomain: update.sportDomain,
-    activityMovement: update.activityMovement,
-    movementFamily: update.movementFamily,
-    mechanicalEnvironment: update.mechanicalEnvironment,
-    dominantFailure: update.dominantFailure,
-    dominantFailureConfidence: update.dominantFailureConfidence,
-    activeLever: update.activeLever,
-    activeTest: update.activeTest,
-  });
+    console.log("CASE_REASONING_SNAPSHOT_WRITE", {
+      caseId,
+      snapshotId: snapshot?.id ?? null,
+      movementFamily: update.movementFamily,
+      mechanicalEnvironment: update.mechanicalEnvironment,
+      dominantFailure: update.dominantFailure,
+      dominantFailureConfidence: update.dominantFailureConfidence,
+      activeLeverPreview: clampText(update.activeLever ?? "", 160),
+      activeTestPreview: clampText(update.activeTest ?? "", 220),
+    });
+
+    return snapshot?.id ?? null;
+  } catch (err) {
+    console.error("CASE_REASONING_SNAPSHOT_WRITE_FAILED", {
+      caseId,
+      ...formatUnknownError(err),
+    });
+    return null;
+  }
 }
 
 async function runInternalCaseEngine({
