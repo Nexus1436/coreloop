@@ -7,6 +7,7 @@ import {
   jsonb,
   index,
   varchar,
+  doublePrecision,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -388,6 +389,57 @@ export const caseOutcomes = pgTable(
 );
 
 /* =====================================================
+   CASE REASONING SNAPSHOTS
+===================================================== */
+
+export const caseReasoningSnapshots = pgTable(
+  "case_reasoning_snapshots",
+  {
+    id: serial("id").primaryKey(),
+
+    caseId: integer("case_id")
+      .notNull()
+      .references(() => cases.id, { onDelete: "cascade" }),
+
+    signalId: integer("signal_id").references(() => caseSignals.id, {
+      onDelete: "set null",
+    }),
+
+    activeHypothesisId: integer("active_hypothesis_id").references(
+      () => caseHypotheses.id,
+      { onDelete: "set null" },
+    ),
+
+    activeAdjustmentId: integer("active_adjustment_id").references(
+      () => caseAdjustments.id,
+      { onDelete: "set null" },
+    ),
+
+    sportDomain: text("sport_domain"),
+    activityMovement: text("activity_movement"),
+    bodyRegion: text("body_region"),
+    movementFamily: text("movement_family"),
+    mechanicalEnvironment: text("mechanical_environment"),
+    failureCandidates: jsonb("failure_candidates"),
+    dominantFailure: text("dominant_failure"),
+    dominantFailureConfidence: doublePrecision(
+      "dominant_failure_confidence",
+    ),
+    activeLever: text("active_lever"),
+    activeTest: text("active_test"),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    caseReasoningCaseIdx: index("case_reasoning_snapshots_case_idx").on(
+      table.caseId,
+    ),
+  }),
+);
+
+/* =====================================================
    INSERT SCHEMAS
 ===================================================== */
 
@@ -428,3 +480,4 @@ export type UserMemory = typeof userMemory.$inferSelect;
 export type InsertUserMemory = z.infer<typeof insertUserMemorySchema>;
 
 export type SessionSignal = typeof sessionSignals.$inferSelect;
+export type CaseReasoningSnapshot = typeof caseReasoningSnapshots.$inferSelect;

@@ -8,6 +8,7 @@ import {
   caseHypotheses,
   caseAdjustments,
   caseOutcomes,
+  caseReasoningSnapshots,
 } from "@shared/schema";
 
 /* =====================================================
@@ -22,6 +23,7 @@ import {
    - caseHypotheses: id, caseId, signalId, hypothesis, confidence, createdAt
    - caseAdjustments: id, caseId, hypothesisId, adjustmentType, cue, mechanicalFocus, createdAt
    - caseOutcomes: id, caseId, adjustmentId, result, userFeedback, createdAt
+   - caseReasoningSnapshots: durable CoreLoop reasoning chain for analytics
 ===================================================== */
 
 // ── Body region extraction from signal text ───────────────────
@@ -130,6 +132,28 @@ export function registerAnalyticsRoutes(app: Express): void {
         })
         .from(caseOutcomes);
 
+      const allReasoningSnapshots = await db
+        .select({
+          id: caseReasoningSnapshots.id,
+          caseId: caseReasoningSnapshots.caseId,
+          sportDomain: caseReasoningSnapshots.sportDomain,
+          activityMovement: caseReasoningSnapshots.activityMovement,
+          bodyRegion: caseReasoningSnapshots.bodyRegion,
+          movementFamily: caseReasoningSnapshots.movementFamily,
+          mechanicalEnvironment: caseReasoningSnapshots.mechanicalEnvironment,
+          failureCandidates: caseReasoningSnapshots.failureCandidates,
+          dominantFailure: caseReasoningSnapshots.dominantFailure,
+          dominantFailureConfidence:
+            caseReasoningSnapshots.dominantFailureConfidence,
+          activeLever: caseReasoningSnapshots.activeLever,
+          activeTest: caseReasoningSnapshots.activeTest,
+          activeHypothesisId: caseReasoningSnapshots.activeHypothesisId,
+          activeAdjustmentId: caseReasoningSnapshots.activeAdjustmentId,
+          createdAt: caseReasoningSnapshots.createdAt,
+        })
+        .from(caseReasoningSnapshots)
+        .orderBy(desc(caseReasoningSnapshots.id));
+
       // ── 2. Build lookup maps ──────────────────────────────
       const signalsByCase = new Map<number, typeof allSignals>();
       for (const s of allSignals) {
@@ -154,6 +178,16 @@ export function registerAnalyticsRoutes(app: Express): void {
         outcomeByCase.set(o.caseId, o);
       }
 
+      const reasoningByCase = new Map<
+        number,
+        (typeof allReasoningSnapshots)[0]
+      >();
+      for (const reasoning of allReasoningSnapshots) {
+        if (!reasoningByCase.has(reasoning.caseId)) {
+          reasoningByCase.set(reasoning.caseId, reasoning);
+        }
+      }
+
       // ── 3. Build flat case records ────────────────────────
       const caseRecords = allCases.map((c) => {
         const signals = signalsByCase.get(c.id) ?? [];
@@ -161,6 +195,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         const hypothesis = hypothesisByCase.get(c.id) ?? null;
         const adjustment = adjustmentByCase.get(c.id) ?? null;
         const outcome = outcomeByCase.get(c.id) ?? null;
+        const reasoning = reasoningByCase.get(c.id) ?? null;
 
         const signalText = primarySignal?.signal ?? null;
 
@@ -173,6 +208,7 @@ export function registerAnalyticsRoutes(app: Express): void {
 
         // Use activityType as the activity/sport label
         const sport =
+          reasoning?.sportDomain ??
           c.activityType ??
           primarySignal?.activityType ??
           c.movementContext ??
@@ -183,9 +219,25 @@ export function registerAnalyticsRoutes(app: Express): void {
           raw_id: c.id,
           user_id: c.userId, // ← included so dashboard can group by user
           signal: signalText ?? "Unknown signal",
-          body_region,
+          body_region: reasoning?.bodyRegion ?? body_region,
           signal_type: primarySignal?.signalType ?? "Unknown",
           sport,
+          sport_domain: reasoning?.sportDomain ?? sport,
+          activity_movement:
+            reasoning?.activityMovement ??
+            primarySignal?.movementContext ??
+            c.movementContext ??
+            "general",
+          movement_family: reasoning?.movementFamily ?? null,
+          mechanical_environment: reasoning?.mechanicalEnvironment ?? null,
+          failure_candidates: reasoning?.failureCandidates ?? null,
+          dominant_failure: reasoning?.dominantFailure ?? null,
+          dominant_failure_confidence:
+            reasoning?.dominantFailureConfidence ?? null,
+          active_lever: reasoning?.activeLever ?? null,
+          active_test: reasoning?.activeTest ?? adjustment?.cue ?? null,
+          active_hypothesis_id: reasoning?.activeHypothesisId ?? null,
+          active_adjustment_id: reasoning?.activeAdjustmentId ?? adjustment?.id ?? null,
           movement_context:
             primarySignal?.movementContext ?? c.movementContext ?? "general",
           hypothesis: hypothesis,

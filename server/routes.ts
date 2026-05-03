@@ -37,6 +37,7 @@ import {
   caseAdjustments,
   caseOutcomes,
   caseReviews,
+  caseReasoningSnapshots,
 } from "@shared/schema";
 
 import {
@@ -1724,6 +1725,47 @@ function classifyMovementFamily(
   return "general";
 }
 
+function deriveSportDomainForAnalytics(
+  userText: string,
+  activityType: string | null | undefined,
+): string | null {
+  const signal = `${userText || ""} ${activityType || ""}`.toLowerCase();
+
+  if (/\bpilates\b|\breformer\b/.test(signal)) return "Pilates";
+  if (/\bracquetball\b/.test(signal)) return "racquetball";
+  if (/\bgolf\b/.test(signal)) return "golf";
+  if (/\brunning\b|\brun\b/.test(signal)) return "running";
+  if (/\blifting\b|\bstrength\b|\bsquat\b|\bdeadlift\b/.test(signal)) {
+    return "lifting";
+  }
+
+  return activityType ?? null;
+}
+
+function deriveActivityMovementForAnalytics(
+  userText: string,
+  movementContext: string | null | undefined,
+): string | null {
+  const signal = `${userText || ""} ${movementContext || ""}`.toLowerCase();
+
+  if (/\bswan dive\b|\bswan\b/.test(signal)) return "Swan Dive";
+  if (/\bleg circles?\b/.test(signal)) return "Leg circles";
+  if (/\bshoulder bridge\b/.test(signal)) return "Shoulder bridge";
+  if (/\bbridge\b/.test(signal)) return "Bridge";
+  if (
+    /\bdrive serve\b/.test(signal) ||
+    (/\bdrive\b/.test(signal) && /\bserve\b/.test(signal))
+  ) {
+    return "drive serve";
+  }
+  if (/\bdeadlift\b|\bhinge\b/.test(signal)) return "deadlift";
+  if (/\bsquat\b/.test(signal)) return "squat";
+  if (/\brunning\b|\brun\b/.test(signal)) return "running";
+  if (/\bswing\b/.test(signal)) return "swing";
+
+  return movementContext ?? null;
+}
+
 function resolveDominantFailurePattern({
   userText,
   activityType,
@@ -1739,11 +1781,7 @@ function resolveDominantFailurePattern({
 }): {
   dominantFailure: string;
   confidence: number;
-  candidates: Array<{
-    failure: string;
-    score: number;
-    evidence: string[];
-  }>;
+  candidates: FailurePatternCandidate[];
 } {
   const text = (userText || "").toLowerCase();
   const movement = (movementContext || "").toLowerCase();
@@ -3242,6 +3280,11 @@ function completeArcFields({
   singleLever: string | null;
   adjustment: string | null;
   currentTest: string | null;
+  movementFamily: string;
+  mechanicalEnvironment: string;
+  failureCandidates: FailurePatternCandidate[];
+  dominantFailure: string;
+  dominantFailureConfidence: number;
 } {
   const normalizedActivity = (activityType || "").toLowerCase();
   const normalizedMovement = (movementContext || "").toLowerCase();
@@ -3251,6 +3294,11 @@ function completeArcFields({
   const movement = normalizeCaseKey(movementContext);
   const region = normalizeBodyRegion(bodyRegion);
   const env = classifyMechanicalEnvironment(userText, activityType, movementContext);
+  const movementFamily = classifyMovementFamily(
+    userText,
+    activityType,
+    movementContext,
+  );
   const failureResolution = resolveDominantFailurePattern({
     userText,
     activityType,
@@ -3284,6 +3332,11 @@ function completeArcFields({
     singleLever,
     adjustment,
     currentTest,
+    movementFamily,
+    mechanicalEnvironment: env,
+    failureCandidates: failureResolution.candidates,
+    dominantFailure: failureResolution.dominantFailure,
+    dominantFailureConfidence: failureResolution.confidence,
   };
 
   if (
@@ -3954,11 +4007,26 @@ type InternalOutcomeStatus =
   | "unknown"
   | null;
 
+type FailurePatternCandidate = {
+  failure: string;
+  score: number;
+  evidence: string[];
+};
+
 type InternalCaseUpdate = {
   signal: string | null;
   bodyRegion: string | null;
   activityType: string | null;
   movementContext: string | null;
+  sportDomain: string | null;
+  activityMovement: string | null;
+  movementFamily: string | null;
+  mechanicalEnvironment: string | null;
+  failureCandidates: FailurePatternCandidate[];
+  dominantFailure: string | null;
+  dominantFailureConfidence: number | null;
+  activeLever: string | null;
+  activeTest: string | null;
   hypothesis: string | null;
   interpretationCorrection: string | null;
   failurePrediction: string | null;
@@ -4187,6 +4255,14 @@ function normalizeInternalCaseUpdate(
     movementContext: normalizedMovementContext,
   });
   console.log("ARC_FIELD_QUALITY_AFTER", arcResult);
+  const sportDomain = deriveSportDomainForAnalytics(
+    userText,
+    normalizedActivityType,
+  );
+  const activityMovement = deriveActivityMovementForAnalytics(
+    userText,
+    normalizedMovementContext,
+  );
 
   const update: InternalCaseUpdate = {
     signal:
@@ -4197,6 +4273,15 @@ function normalizeInternalCaseUpdate(
     bodyRegion: normalizedBodyRegion,
     activityType: normalizedActivityType,
     movementContext: normalizedMovementContext,
+    sportDomain,
+    activityMovement,
+    movementFamily: arcResult.movementFamily,
+    mechanicalEnvironment: arcResult.mechanicalEnvironment,
+    failureCandidates: arcResult.failureCandidates,
+    dominantFailure: arcResult.dominantFailure,
+    dominantFailureConfidence: arcResult.dominantFailureConfidence,
+    activeLever: arcResult.singleLever,
+    activeTest: arcResult.currentTest,
     hypothesis: arcResult.hypothesis,
     interpretationCorrection: arcResult.interpretationCorrection,
     failurePrediction: arcResult.failurePrediction,
@@ -4220,6 +4305,10 @@ function normalizeInternalCaseUpdate(
     interpretationCorrection: update.interpretationCorrection,
     failurePrediction: update.failurePrediction,
     singleLever: update.singleLever,
+    movementFamily: update.movementFamily,
+    mechanicalEnvironment: update.mechanicalEnvironment,
+    dominantFailure: update.dominantFailure,
+    dominantFailureConfidence: update.dominantFailureConfidence,
   });
 
   return update;
@@ -4256,6 +4345,52 @@ async function buildInternalCaseStateSnapshot(caseId: number): Promise<{
           .join(": ")
       : null,
   };
+}
+
+async function persistCaseReasoningSnapshot({
+  caseId,
+  signalId,
+  activeHypothesisId,
+  activeAdjustmentId,
+  update,
+}: {
+  caseId: number;
+  signalId?: number | null;
+  activeHypothesisId?: number | null;
+  activeAdjustmentId?: number | null;
+  update: InternalCaseUpdate;
+}): Promise<void> {
+  await db.insert(caseReasoningSnapshots).values({
+    caseId,
+    signalId: signalId ?? null,
+    activeHypothesisId: activeHypothesisId ?? null,
+    activeAdjustmentId: activeAdjustmentId ?? null,
+    sportDomain: update.sportDomain,
+    activityMovement: update.activityMovement,
+    bodyRegion: update.bodyRegion,
+    movementFamily: update.movementFamily,
+    mechanicalEnvironment: update.mechanicalEnvironment,
+    failureCandidates: update.failureCandidates,
+    dominantFailure: update.dominantFailure,
+    dominantFailureConfidence: update.dominantFailureConfidence,
+    activeLever: update.activeLever,
+    activeTest: update.activeTest,
+  });
+
+  console.log("CORELOOP_REASONING_SNAPSHOT_WRITE", {
+    caseId,
+    signalId: signalId ?? null,
+    activeHypothesisId: activeHypothesisId ?? null,
+    activeAdjustmentId: activeAdjustmentId ?? null,
+    sportDomain: update.sportDomain,
+    activityMovement: update.activityMovement,
+    movementFamily: update.movementFamily,
+    mechanicalEnvironment: update.mechanicalEnvironment,
+    dominantFailure: update.dominantFailure,
+    dominantFailureConfidence: update.dominantFailureConfidence,
+    activeLever: update.activeLever,
+    activeTest: update.activeTest,
+  });
 }
 
 async function runInternalCaseEngine({
@@ -4379,6 +4514,12 @@ JSON shape:
     caseId: currentCase.id,
     bodyRegion: update.bodyRegion,
     activity: update.activityType,
+    sportDomain: update.sportDomain,
+    activityMovement: update.activityMovement,
+    movementFamily: update.movementFamily,
+    mechanicalEnvironment: update.mechanicalEnvironment,
+    dominantFailure: update.dominantFailure,
+    dominantFailureConfidence: update.dominantFailureConfidence,
     hypothesis: clampText(update.hypothesis ?? "", 120),
     interpretationCorrection: clampText(
       update.interpretationCorrection ?? "",
@@ -4438,7 +4579,18 @@ async function persistInternalCaseUpdate({
     });
   }
 
+  const [activeSignal] = await db
+    .select({ id: caseSignals.id })
+    .from(caseSignals)
+    .where(eq(caseSignals.caseId, caseId))
+    .orderBy(desc(caseSignals.id))
+    .limit(1);
+  const activeSignalId = activeSignal?.id ?? latestSignal?.id ?? null;
+
   let activeHypothesis = await getLatestValidHypothesisForCase(caseId);
+  let activeAdjustmentId =
+    (await getLatestValidAdjustmentForCase(caseId))?.id ?? null;
+  let activeAdjustmentText = update.currentTest ?? update.adjustment ?? null;
   const hypothesisValidation = {
     hasHypothesis: Boolean(update.hypothesis),
     isStrongCandidate: update.hypothesis
@@ -4472,7 +4624,7 @@ async function persistInternalCaseUpdate({
         .insert(caseHypotheses)
         .values({
           caseId,
-          signalId: latestSignal?.id ?? null,
+          signalId: activeSignalId,
           hypothesis: update.hypothesis,
           confidence: String(update.confidence || 0.65),
         })
@@ -4539,6 +4691,7 @@ async function persistInternalCaseUpdate({
       activityType: update.activityType,
     });
     const { finalTest } = testValidationResult;
+    activeAdjustmentText = finalTest;
     logLayer1Trace(traceId, "adjustment_test_validation_result", {
       caseId,
       hasNextTest: Boolean(nextTest),
@@ -4585,6 +4738,7 @@ async function persistInternalCaseUpdate({
         })
         .returning({ id: caseAdjustments.id });
 
+      activeAdjustmentId = insertedAdjustment?.id ?? null;
       result.wroteAdjustment = true;
       console.log("INTERNAL_ADJUSTMENT_WRITE", {
         caseId,
@@ -4621,10 +4775,12 @@ async function persistInternalCaseUpdate({
       console.log("INTERNAL_ADJUSTMENT_WRITE", {
         caseId,
         status: "duplicate_skipped",
+        adjustmentId: latestStoredAdjustment?.id ?? null,
         hypothesisId: activeHypothesis.id,
         cuePreview: clampText(adjustmentCue, 180),
         mechanicalFocusPreview: clampText(mechanicalFocus, 180),
       });
+      activeAdjustmentId = latestStoredAdjustment?.id ?? null;
     }
   } else {
     logLayer1Trace(traceId, "adjustment_test_validation_result", {
@@ -4647,6 +4803,18 @@ async function persistInternalCaseUpdate({
       nextTestPreview: clampText(nextTest ?? "", 180),
     });
   }
+
+  await persistCaseReasoningSnapshot({
+    caseId,
+    signalId: activeSignalId,
+    activeHypothesisId: activeHypothesis?.id ?? null,
+    activeAdjustmentId,
+    update: {
+      ...update,
+      activeLever: update.singleLever,
+      activeTest: activeAdjustmentText,
+    },
+  });
 
   if (update.outcomeStatus && update.outcomeStatus !== "unknown") {
     const mappedOutcome =
