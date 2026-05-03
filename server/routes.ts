@@ -3555,6 +3555,16 @@ function areEquivalentDashboardCandidates(
   return leftNormalized !== "" && leftNormalized === rightNormalized;
 }
 
+function areSameAdjustmentText(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftNormalized = normalizeDashboardCandidate(left);
+  const rightNormalized = normalizeDashboardCandidate(right);
+
+  return leftNormalized !== "" && leftNormalized === rightNormalized;
+}
+
 function cleanDashboardTitlePart(
   value: string | null | undefined,
 ): string | null {
@@ -4544,6 +4554,7 @@ async function persistInternalCaseUpdate({
 
     const [latestStoredAdjustment] = await db
       .select({
+        id: caseAdjustments.id,
         cue: caseAdjustments.cue,
         mechanicalFocus: caseAdjustments.mechanicalFocus,
       })
@@ -4553,11 +4564,11 @@ async function persistInternalCaseUpdate({
       .limit(1);
 
     const isDuplicateAdjustment =
-      areEquivalentDashboardCandidates(
+      areSameAdjustmentText(
         adjustmentCue,
         latestStoredAdjustment?.cue,
       ) ||
-      areEquivalentDashboardCandidates(
+      areSameAdjustmentText(
         mechanicalFocus,
         latestStoredAdjustment?.mechanicalFocus,
       );
@@ -4588,6 +4599,24 @@ async function persistInternalCaseUpdate({
         caseId,
         adjustmentId: insertedAdjustment?.id ?? null,
       });
+      if (latestStoredAdjustment?.id) {
+        console.log("INTERNAL_ADJUSTMENT_REPLACED_ACTIVE", {
+          caseId,
+          previousAdjustmentId: latestStoredAdjustment.id,
+          newAdjustmentId: insertedAdjustment?.id ?? null,
+          previousPreview: clampText(
+            pickDashboardDisplayValue([
+              latestStoredAdjustment.cue,
+              latestStoredAdjustment.mechanicalFocus,
+            ]) ?? "",
+            180,
+          ),
+          newPreview: clampText(
+            pickDashboardDisplayValue([adjustmentCue, mechanicalFocus]) ?? "",
+            180,
+          ),
+        });
+      }
     } else {
       console.log("INTERNAL_ADJUSTMENT_WRITE", {
         caseId,
@@ -4743,6 +4772,7 @@ async function buildStructuredCaseStateBlock(
     adjustment:
       internalUpdate?.currentTest ??
       internalUpdate?.adjustment ??
+      (isNewCase ? null : snapshot.latestAdjustment) ??
       null,
     outcome:
       internalUpdate?.outcome ??
@@ -5293,7 +5323,7 @@ async function getDominantRuntimePatternBlock(
         )
         .where(eq(caseAdjustments.caseId, caseRow.id))
         .orderBy(desc(caseAdjustments.id))
-        .limit(2);
+        .limit(1);
 
       const outcomes = await db
         .select({
@@ -6143,6 +6173,7 @@ ${memoryBlock}
 
       let latestAdjustment:
         | {
+            id: number | null;
             caseId: number | null;
             mechanicalFocus: string | null;
             cue: string | null;
@@ -6172,21 +6203,8 @@ ${memoryBlock}
         | undefined;
 
       if (selectedCase) {
-        [latestAdjustment] = await db
-          .select({
-            caseId: caseAdjustments.caseId,
-            mechanicalFocus: caseAdjustments.mechanicalFocus,
-            cue: caseAdjustments.cue,
-            hypothesisId: caseAdjustments.hypothesisId,
-          })
-          .from(caseAdjustments)
-          .innerJoin(
-            caseHypotheses,
-            eq(caseAdjustments.hypothesisId, caseHypotheses.id),
-          )
-          .where(eq(caseAdjustments.caseId, selectedCase.id))
-          .orderBy(desc(caseAdjustments.id))
-          .limit(1);
+        latestAdjustment =
+          (await getLatestValidAdjustmentForCase(selectedCase.id)) ?? undefined;
 
         [latestHypothesis] = await db
           .select({
@@ -6251,6 +6269,7 @@ ${memoryBlock}
         });
         console.log("DASHBOARD_LATEST_ADJUSTMENT", {
           selectedCaseId: selectedCase.id,
+          adjustmentId: latestAdjustment?.id ?? null,
           adjustmentCaseId: latestAdjustment?.caseId ?? null,
           cuePreview: clampText(latestAdjustment?.cue ?? "", 160),
           mechanicalFocusPreview: clampText(
@@ -8007,6 +8026,7 @@ ${ACTIVE_PROMPT}
 
               const [latestStoredAdjustment] = await db
                 .select({
+                  id: caseAdjustments.id,
                   cue: caseAdjustments.cue,
                   mechanicalFocus: caseAdjustments.mechanicalFocus,
                   hypothesisId: caseAdjustments.hypothesisId,
@@ -8017,11 +8037,11 @@ ${ACTIVE_PROMPT}
                 .limit(1);
 
               const isDuplicateAdjustment =
-                areEquivalentDashboardCandidates(
+                areSameAdjustmentText(
                   finalTest,
                   latestStoredAdjustment?.cue,
                 ) ||
-                areEquivalentDashboardCandidates(
+                areSameAdjustmentText(
                   finalTest,
                   latestStoredAdjustment?.mechanicalFocus,
                 );
@@ -8043,6 +8063,21 @@ ${ACTIVE_PROMPT}
                   caseId: resolvedActiveCase.id,
                   adjustmentId: insertedAdjustment?.id ?? null,
                 });
+                if (latestStoredAdjustment?.id) {
+                  console.log("INTERNAL_ADJUSTMENT_REPLACED_ACTIVE", {
+                    caseId: resolvedActiveCase.id,
+                    previousAdjustmentId: latestStoredAdjustment.id,
+                    newAdjustmentId: insertedAdjustment?.id ?? null,
+                    previousPreview: clampText(
+                      pickDashboardDisplayValue([
+                        latestStoredAdjustment.cue,
+                        latestStoredAdjustment.mechanicalFocus,
+                      ]) ?? "",
+                      180,
+                    ),
+                    newPreview: clampText(finalTest, 180),
+                  });
+                }
               }
             }
           }
