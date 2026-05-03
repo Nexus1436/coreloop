@@ -2852,6 +2852,41 @@ function buildMechanicalArcDefaults({
   };
 }
 
+function hasRotationalArcTemplate(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return (
+    /\bdrive[-\s]?serve\b/i.test(text) ||
+    /\bturn from (?:your )?hips\b/i.test(text) ||
+    /\bstart (?:the )?movement from (?:your )?hips before (?:your )?trunk moves\b/i.test(
+      text,
+    )
+  );
+}
+
+function applyControlledStabilityArcRepair(
+  arcResult: {
+    hypothesis: string | null;
+    interpretationCorrection: string | null;
+    failurePrediction: string | null;
+    singleLever: string | null;
+    adjustment: string | null;
+    currentTest: string | null;
+  },
+): void {
+  arcResult.interpretationCorrection =
+    "As your legs lower, your low back is starting to lift, so the movement is shifting out of your trunk and into your lower back.";
+  arcResult.failurePrediction =
+    "If that keeps happening, your lower back will keep taking over any time your legs move lower instead of the trunk holding position.";
+  arcResult.singleLever =
+    "only lower your legs as far as you can without your low back lifting";
+  arcResult.adjustment =
+    "Lower your legs only as far as you can without your low back lifting off the surface.";
+  arcResult.currentTest =
+    "Do 3 slow leg-lowering reps and only go as low as you can without your low back lifting. Let me know if the tightness changes.";
+}
+
 function completeArcFields({
   hypothesis,
   interpretationCorrection,
@@ -2889,6 +2924,7 @@ function completeArcFields({
   const activity = normalizeCaseKey(activityType);
   const movement = normalizeCaseKey(movementContext);
   const region = normalizeBodyRegion(bodyRegion);
+  const env = classifyMechanicalEnvironment(activityType, movementContext);
   const isDriveServeLowBack =
     normalizedActivity.includes("racquetball") &&
     normalizedBody.includes("back") &&
@@ -2923,6 +2959,11 @@ function completeArcFields({
     return arcResult;
   }
 
+  if (env === "controlled_stability") {
+    applyControlledStabilityArcRepair(arcResult);
+    return arcResult;
+  }
+
   if (!hypothesis) {
     return arcResult;
   }
@@ -2933,33 +2974,51 @@ function completeArcFields({
     movementContext,
   });
 
-  if (isShallowArcField(arcResult.interpretationCorrection, "interpretationCorrection")) {
-    arcResult.interpretationCorrection = defaults.interpretationCorrection;
-  }
+  if (env === "rotational_power") {
+    if (isShallowArcField(arcResult.interpretationCorrection, "interpretationCorrection")) {
+      arcResult.interpretationCorrection = defaults.interpretationCorrection;
+    }
 
-  if (isShallowArcField(arcResult.failurePrediction, "failurePrediction")) {
-    arcResult.failurePrediction = defaults.failurePrediction;
-  }
+    if (isShallowArcField(arcResult.failurePrediction, "failurePrediction")) {
+      arcResult.failurePrediction = defaults.failurePrediction;
+    }
 
-  if (isShallowArcField(arcResult.singleLever, "singleLever")) {
-    arcResult.singleLever = defaults.singleLever;
-  }
+    if (isShallowArcField(arcResult.singleLever, "singleLever")) {
+      arcResult.singleLever = defaults.singleLever;
+    }
 
-  arcResult.adjustment = completeAdjustmentField({
-    candidate: arcResult.adjustment,
-    hypothesis,
-    movementContext: movementContext ?? null,
-    bodyRegion: bodyRegion ?? null,
-    activityType: activityType ?? null,
-  });
-  arcResult.currentTest = completeCurrentTestField({
-    candidate: arcResult.currentTest ?? arcResult.adjustment,
-    userText,
-    hypothesis,
-    movementContext: movementContext ?? null,
-    bodyRegion: bodyRegion ?? null,
-    activityType: activityType ?? null,
-  });
+    arcResult.adjustment = completeAdjustmentField({
+      candidate: arcResult.adjustment,
+      hypothesis,
+      movementContext: movementContext ?? null,
+      bodyRegion: bodyRegion ?? null,
+      activityType: activityType ?? null,
+    });
+    arcResult.currentTest = completeCurrentTestField({
+      candidate: arcResult.currentTest ?? arcResult.adjustment,
+      userText,
+      hypothesis,
+      movementContext: movementContext ?? null,
+      bodyRegion: bodyRegion ?? null,
+      activityType: activityType ?? null,
+    });
+  } else {
+    if (hasRotationalArcTemplate(arcResult.interpretationCorrection)) {
+      arcResult.interpretationCorrection = null;
+    }
+    if (hasRotationalArcTemplate(arcResult.failurePrediction)) {
+      arcResult.failurePrediction = null;
+    }
+    if (hasRotationalArcTemplate(arcResult.singleLever)) {
+      arcResult.singleLever = null;
+    }
+    if (hasRotationalArcTemplate(arcResult.adjustment)) {
+      arcResult.adjustment = null;
+    }
+    if (hasRotationalArcTemplate(arcResult.currentTest)) {
+      arcResult.currentTest = null;
+    }
+  }
 
   return arcResult;
 }
