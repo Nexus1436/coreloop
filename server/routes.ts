@@ -1672,6 +1672,58 @@ function classifyMechanicalEnvironment(
   return "general";
 }
 
+function classifyMovementFamily(
+  userText: string,
+  activityType?: string | null,
+  movementContext?: string | null,
+): string {
+  const text = (userText || "").toLowerCase();
+  const activity = (activityType || "").toLowerCase();
+  const movement = (movementContext || "").toLowerCase();
+  const signal = `${text} ${activity} ${movement}`;
+
+  if (/\bswan dive\b|\bswan\b/.test(signal)) {
+    return "swan_dive";
+  }
+
+  if (
+    /\bleg circles?\b|\blegs? lower\b|\bleg lowering\b|\blower my legs\b|\blegs? drop\b/.test(
+      signal,
+    )
+  ) {
+    return "leg_lowering";
+  }
+
+  if (
+    /\bdrive serve\b/.test(signal) ||
+    (/\bdrive\b/.test(signal) && /\bserve\b/.test(signal))
+  ) {
+    return "drive_serve";
+  }
+
+  if (/\bshoulder bridge\b|\bbridge\b/.test(signal)) {
+    return "bridge";
+  }
+
+  if (/\brun\b|\brunning\b/.test(signal)) {
+    return "running";
+  }
+
+  if (/\bsquat\b/.test(signal)) {
+    return "squat";
+  }
+
+  if (/\bdeadlift\b|\bhinge\b/.test(signal)) {
+    return "deadlift";
+  }
+
+  if (/\bswing\b/.test(signal)) {
+    return "swing";
+  }
+
+  return "general";
+}
+
 function resolveDominantFailurePattern({
   userText,
   activityType,
@@ -1867,6 +1919,8 @@ async function shouldStartNewCaseForSignal({
   previousSignalType?: string | null;
   previousMovementContext?: string | null;
   previousActivityType?: string | null;
+  derivedMovementFamily?: string | null;
+  previousMovementFamily?: string | null;
 }> {
   const derived = {
     bodyRegion: derivedBodyRegion,
@@ -1926,12 +1980,34 @@ async function shouldStartNewCaseForSignal({
     previousActivityType,
     previousMovementContext,
   );
+  const derivedMovementFamily = classifyMovementFamily(
+    userText,
+    derivedActivityType,
+    derivedMovementContext,
+  );
+  const previousMovementFamily = classifyMovementFamily(
+    latestSignal.description ?? "",
+    previousActivityType,
+    previousMovementContext,
+  );
+  const movementFamilyBoundary = {
+    derivedMovementFamily,
+    previousMovementFamily,
+  };
 
   console.log("CASE_BOUNDARY_COMPARISON", {
     derived: derivedBodyRegion,
     previous: previousBodyRegion,
     normalizedDerived: normalizedDerivedBodyRegion,
     normalizedPrevious: normalizedPreviousBodyRegion,
+  });
+  console.log("CASE_MOVEMENT_FAMILY_CHECK", {
+    derivedMovementFamily,
+    previousMovementFamily,
+    derivedMovementContext,
+    previousMovementContext,
+    derivedActivityType,
+    previousActivityType,
   });
 
   if (
@@ -1943,6 +2019,21 @@ async function shouldStartNewCaseForSignal({
       return {
         shouldStartNewCase: true,
         reason: `environment_shift:${previousEnvironment}->${derivedEnvironment}`,
+        ...movementFamilyBoundary,
+        ...derived,
+        ...previous,
+      };
+    }
+
+    if (
+      previousMovementFamily !== "general" &&
+      derivedMovementFamily !== "general" &&
+      previousMovementFamily !== derivedMovementFamily
+    ) {
+      return {
+        shouldStartNewCase: true,
+        reason: `movement_family_shift:${previousMovementFamily}->${derivedMovementFamily}`,
+        ...movementFamilyBoundary,
         ...derived,
         ...previous,
       };
@@ -1957,6 +2048,7 @@ async function shouldStartNewCaseForSignal({
       return {
         shouldStartNewCase: true,
         reason: `activity_shift:${previousActivityType}->${derivedActivityType}`,
+        ...movementFamilyBoundary,
         ...derived,
         ...previous,
       };
@@ -1965,6 +2057,7 @@ async function shouldStartNewCaseForSignal({
     return {
       shouldStartNewCase: false,
       reason: "same_case_fit_body_region_compatible",
+      ...movementFamilyBoundary,
       ...derived,
       ...previous,
     };
@@ -1978,6 +2071,7 @@ async function shouldStartNewCaseForSignal({
     return {
       shouldStartNewCase: true,
       reason: `body_region_shift:${previousBodyRegion}->${derivedBodyRegion}`,
+      ...movementFamilyBoundary,
       ...derived,
       ...previous,
     };
@@ -1992,6 +2086,7 @@ async function shouldStartNewCaseForSignal({
     return {
       shouldStartNewCase: false,
       reason: `same_case_fit_context_drift:signal_type:${previousSignalType}->${derivedSignalType}`,
+      ...movementFamilyBoundary,
       ...derived,
       ...previous,
     };
@@ -2006,6 +2101,7 @@ async function shouldStartNewCaseForSignal({
     return {
       shouldStartNewCase: false,
       reason: `same_case_fit_context_drift:movement_context:${previousMovementContext}->${derivedMovementContext}`,
+      ...movementFamilyBoundary,
       ...derived,
       ...previous,
     };
@@ -2020,6 +2116,7 @@ async function shouldStartNewCaseForSignal({
     return {
       shouldStartNewCase: true,
       reason: `activity_shift:${previousActivityType}->${derivedActivityType}`,
+      ...movementFamilyBoundary,
       ...derived,
       ...previous,
     };
@@ -2028,6 +2125,7 @@ async function shouldStartNewCaseForSignal({
   return {
     shouldStartNewCase: false,
     reason: "same_case_fit",
+    ...movementFamilyBoundary,
     ...derived,
     ...previous,
   };
@@ -6825,6 +6923,8 @@ Produce the response now.
               previousBodyRegion: boundaryDecision.previousBodyRegion,
               derivedMovementContext: boundaryDecision.movementContext,
               previousMovementContext: boundaryDecision.previousMovementContext,
+              derivedMovementFamily: boundaryDecision.derivedMovementFamily,
+              previousMovementFamily: boundaryDecision.previousMovementFamily,
               derivedSignalType: boundaryDecision.signalType,
               previousSignalType: boundaryDecision.previousSignalType,
               derivedActivityType: boundaryDecision.activityType,
@@ -6840,6 +6940,8 @@ Produce the response now.
               previousBodyRegion: boundaryDecision.previousBodyRegion,
               derivedMovementContext: boundaryDecision.movementContext,
               previousMovementContext: boundaryDecision.previousMovementContext,
+              derivedMovementFamily: boundaryDecision.derivedMovementFamily,
+              previousMovementFamily: boundaryDecision.previousMovementFamily,
               derivedSignalType: boundaryDecision.signalType,
               previousSignalType: boundaryDecision.previousSignalType,
               derivedActivityType: boundaryDecision.activityType,
