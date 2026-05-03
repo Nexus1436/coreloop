@@ -1604,6 +1604,42 @@ async function resolveReturnToExistingCase({
   return null;
 }
 
+function classifyMechanicalEnvironment(
+  activityType: string | null | undefined,
+  movementContext: string | null | undefined,
+): string {
+  const activity = normalizeOptionalLabel(activityType);
+  const movement = normalizeOptionalLabel(movementContext);
+  const source = `${activity} ${movement}`;
+
+  if (
+    source.includes("racquetball") ||
+    source.includes("serve") ||
+    source.includes("swing")
+  ) {
+    return "rotational_power";
+  }
+
+  if (
+    source.includes("pilates") ||
+    source.includes("leg circles") ||
+    source.includes("lying") ||
+    source.includes("controlled")
+  ) {
+    return "controlled_stability";
+  }
+
+  if (source.includes("walking") || source.includes("running")) {
+    return "locomotion";
+  }
+
+  if (source.includes("deadlift") || source.includes("squat")) {
+    return "strength_loading";
+  }
+
+  return "general";
+}
+
 async function shouldStartNewCaseForSignal({
   userText,
   currentCase,
@@ -1678,6 +1714,14 @@ async function shouldStartNewCaseForSignal({
   };
   const normalizedDerivedBodyRegion = normalizeBodyRegion(derivedBodyRegion);
   const normalizedPreviousBodyRegion = normalizeBodyRegion(previousBodyRegion);
+  const derivedEnvironment = classifyMechanicalEnvironment(
+    derivedActivityType,
+    derivedMovementContext,
+  );
+  const previousEnvironment = classifyMechanicalEnvironment(
+    previousActivityType,
+    previousMovementContext,
+  );
 
   console.log("CASE_BOUNDARY_COMPARISON", {
     derived: derivedBodyRegion,
@@ -1691,6 +1735,29 @@ async function shouldStartNewCaseForSignal({
     isMeaningfulCaseBoundaryValue(derivedBodyRegion) &&
     areCompatibleBodyRegions(previousBodyRegion, derivedBodyRegion)
   ) {
+    if (derivedEnvironment !== previousEnvironment) {
+      return {
+        shouldStartNewCase: true,
+        reason: `environment_shift:${previousEnvironment}->${derivedEnvironment}`,
+        ...derived,
+        ...previous,
+      };
+    }
+
+    if (
+      isMeaningfulCaseBoundaryValue(previousActivityType) &&
+      isMeaningfulCaseBoundaryValue(derivedActivityType) &&
+      normalizeOptionalLabel(previousActivityType) !==
+        normalizeOptionalLabel(derivedActivityType)
+    ) {
+      return {
+        shouldStartNewCase: true,
+        reason: `activity_shift:${previousActivityType}->${derivedActivityType}`,
+        ...derived,
+        ...previous,
+      };
+    }
+
     return {
       shouldStartNewCase: false,
       reason: "same_case_fit_body_region_compatible",
@@ -1747,8 +1814,8 @@ async function shouldStartNewCaseForSignal({
       normalizeOptionalLabel(derivedActivityType)
   ) {
     return {
-      shouldStartNewCase: false,
-      reason: `same_case_fit_context_drift:activity_type:${previousActivityType}->${derivedActivityType}`,
+      shouldStartNewCase: true,
+      reason: `activity_shift:${previousActivityType}->${derivedActivityType}`,
       ...derived,
       ...previous,
     };
