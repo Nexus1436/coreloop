@@ -1672,6 +1672,176 @@ function classifyMechanicalEnvironment(
   return "general";
 }
 
+function resolveDominantFailurePattern({
+  userText,
+  activityType,
+  movementContext,
+  bodyRegion,
+  mechanicalEnvironment,
+}: {
+  userText: string;
+  activityType?: string | null;
+  movementContext?: string | null;
+  bodyRegion?: string | null;
+  mechanicalEnvironment: string;
+}): {
+  dominantFailure: string;
+  confidence: number;
+  candidates: Array<{
+    failure: string;
+    score: number;
+    evidence: string[];
+  }>;
+} {
+  const text = (userText || "").toLowerCase();
+  const movement = (movementContext || "").toLowerCase();
+  const region = (bodyRegion || "").toLowerCase();
+  const activity = (activityType || "").toLowerCase();
+  const signal = `${text} ${activity} ${movement} ${region}`;
+  const candidateMap: Record<string, string[]> = {
+    rotational_power: [
+      "early_rotation",
+      "weight_stuck_back",
+      "overreaching",
+      "hip_trunk_timing",
+    ],
+    controlled_stability: [
+      "range_too_deep",
+      "low_back_lifting",
+      "rib_flare",
+      "pelvis_shift",
+    ],
+    extension_distribution: [
+      "low_back_dominance",
+      "over_lifting_range",
+      "poor_extension_distribution",
+      "neck_shoulder_takeover",
+    ],
+    strength_loading: [
+      "bracing_loss",
+      "hinge_breakdown",
+      "load_shift",
+      "range_overreach",
+    ],
+    locomotion: [
+      "impact_overload",
+      "stride_overreach",
+      "push_off_asymmetry",
+      "cadence_breakdown",
+    ],
+  };
+  const candidates = (candidateMap[mechanicalEnvironment] ?? [
+    "general_load_shift",
+  ]).map((failure) => ({
+    failure,
+    score: 0,
+    evidence: [] as string[],
+  }));
+  const addEvidence = (failure: string, score: number, evidence: string) => {
+    const candidate = candidates.find((item) => item.failure === failure);
+    if (!candidate) return;
+    candidate.score += score;
+    candidate.evidence.push(evidence);
+  };
+  const matches = (pattern: RegExp) => pattern.test(signal);
+
+  if (mechanicalEnvironment === "controlled_stability") {
+    if (matches(/\blower\b|\bgo lower\b|\btoo low\b|\bdrop\b/)) {
+      addEvidence("range_too_deep", 2, "lowering/range depth language");
+    }
+    if (matches(/\barch\b|\barching\b|\bback lifts\b|\blow back lifts\b/)) {
+      addEvidence("low_back_lifting", 3, "arching or low-back lift");
+    }
+    if (matches(/\bribs?\b/)) {
+      addEvidence("rib_flare", 2, "rib flare language");
+    }
+    if (matches(/\bpelvis\b|\bshift\b/)) {
+      addEvidence("pelvis_shift", 2, "pelvis shift language");
+    }
+  } else if (mechanicalEnvironment === "extension_distribution") {
+    if (
+      matches(
+        /\bmostly in my lower back\b|\blower back taking over\b|\bback tight\b|\btight in my lower back\b/,
+      )
+    ) {
+      addEvidence("low_back_dominance", 3, "low-back dominance language");
+    }
+    if (matches(/\blower back\b/) && matches(/\btight\b|\btighten\b|\btightness\b/)) {
+      addEvidence("low_back_dominance", 2, "low-back tightness");
+    }
+    if (matches(/\blift higher\b|\btoo high\b|\btry to lift up\b|\blifting up\b/)) {
+      addEvidence("over_lifting_range", 2, "lifting range language");
+    }
+    if (matches(/\bneck\b|\bshoulder\b/)) {
+      addEvidence("neck_shoulder_takeover", 2, "neck or shoulder takeover");
+    }
+    if (matches(/\bnot smooth\b|\bdoesn'?t feel smooth\b|\bload\b/)) {
+      addEvidence(
+        "poor_extension_distribution",
+        2,
+        "distribution or smoothness language",
+      );
+    }
+  } else if (mechanicalEnvironment === "rotational_power") {
+    if (matches(/\bopen early\b|\bturn early\b/)) {
+      addEvidence("early_rotation", 2, "early turn/opening language");
+    }
+    if (matches(/\bstuck back\b|\bweight back\b/)) {
+      addEvidence("weight_stuck_back", 2, "weight stuck back language");
+    }
+    if (matches(/\breach\b|\breaching\b/)) {
+      addEvidence("overreaching", 2, "reaching language");
+    }
+    if (matches(/\bhips?\b|\btrunk\b|\btiming\b/)) {
+      addEvidence("hip_trunk_timing", 2, "hip/trunk/timing language");
+    }
+    if (matches(/\bserve\b/) && matches(/\bback\b/)) {
+      addEvidence("hip_trunk_timing", 1, "serve with back signal");
+    }
+  } else if (mechanicalEnvironment === "strength_loading") {
+    if (matches(/\bbrace\b|\bbracing\b|\bloose\b/)) {
+      addEvidence("bracing_loss", 2, "bracing language");
+    }
+    if (matches(/\bhinge\b|\bround\b|\bfold\b/)) {
+      addEvidence("hinge_breakdown", 2, "hinge breakdown language");
+    }
+    if (matches(/\bshift\b|\bone side\b|\buneven\b/)) {
+      addEvidence("load_shift", 2, "load shift language");
+    }
+    if (matches(/\btoo low\b|\btoo deep\b|\brange\b/)) {
+      addEvidence("range_overreach", 2, "range overreach language");
+    }
+  } else if (mechanicalEnvironment === "locomotion") {
+    if (matches(/\bimpact\b|\bpounding\b|\bjarring\b/)) {
+      addEvidence("impact_overload", 2, "impact language");
+    }
+    if (matches(/\boverstride\b|\breach\b|\bstride\b/)) {
+      addEvidence("stride_overreach", 2, "stride overreach language");
+    }
+    if (matches(/\bpush off\b|\btoe off\b|\bone side\b/)) {
+      addEvidence("push_off_asymmetry", 2, "push-off asymmetry language");
+    }
+    if (matches(/\bcadence\b|\brhythm\b|\btempo\b/)) {
+      addEvidence("cadence_breakdown", 2, "cadence language");
+    }
+  } else {
+    addEvidence("general_load_shift", 1, "fallback mechanical signal");
+  }
+
+  const dominant = candidates.reduce((best, candidate) =>
+    candidate.score > best.score ? candidate : best,
+  );
+  const totalScore = candidates.reduce((sum, candidate) => sum + candidate.score, 0);
+  const confidence =
+    totalScore > 0 ? Number((dominant.score / totalScore).toFixed(2)) : 0;
+
+  return {
+    dominantFailure: dominant.failure,
+    confidence,
+    candidates,
+  };
+}
+
 async function shouldStartNewCaseForSignal({
   userText,
   currentCase,
@@ -2934,13 +3104,13 @@ function applyExtensionDistributionArcRepair(
   },
 ): void {
   arcResult.interpretationCorrection =
-    "As you lift into Swan Dive, your lower back is taking too much of the extension instead of the lift being distributed through the rest of the body.";
+    "As you lift, your lower back is doing too much of the work instead of the lift being distributed through the rest of the body.";
   arcResult.failurePrediction =
     "If that stays the same, your lower back will keep tightening whenever you try to lift higher.";
   arcResult.singleLever =
     "only lift as high as you can without the lower-back tightness increasing";
   arcResult.adjustment =
-    "Reduce the height of the Swan Dive and only lift to the point where your lower back does not tighten more.";
+    "Reduce the lift height and stop before the lower back tightness increases.";
   arcResult.currentTest =
     "Do 3 slow Swan Dive lifts and only lift as high as you can without the lower-back tightness increasing. Let me know if the tightness changes.";
 }
@@ -2983,12 +3153,25 @@ function completeArcFields({
   const movement = normalizeCaseKey(movementContext);
   const region = normalizeBodyRegion(bodyRegion);
   const env = classifyMechanicalEnvironment(userText, activityType, movementContext);
+  const failureResolution = resolveDominantFailurePattern({
+    userText,
+    activityType,
+    movementContext,
+    bodyRegion,
+    mechanicalEnvironment: env,
+  });
   console.log("ARC_ENV_CLASSIFICATION", {
     env,
     features: extractMechanicalFeatures(userText, activityType, movementContext),
     activityType,
     movementContext,
     bodyRegion,
+  });
+  console.log("FAILURE_PATTERN_RESOLUTION", {
+    mechanicalEnvironment: env,
+    dominantFailure: failureResolution.dominantFailure,
+    confidence: failureResolution.confidence,
+    candidates: failureResolution.candidates,
   });
   const isDriveServeLowBack =
     normalizedActivity.includes("racquetball") &&
@@ -3005,7 +3188,10 @@ function completeArcFields({
     currentTest,
   };
 
-  if (isDriveServeLowBack) {
+  if (
+    isDriveServeLowBack &&
+    failureResolution.dominantFailure === "hip_trunk_timing"
+  ) {
     console.log("ARC_DETERMINISTIC_BRANCH_ACTIVE", {
       activityType,
       movementContext,
@@ -3024,12 +3210,18 @@ function completeArcFields({
     return arcResult;
   }
 
-  if (env === "extension_distribution") {
+  if (
+    env === "extension_distribution" &&
+    failureResolution.dominantFailure === "low_back_dominance"
+  ) {
     applyExtensionDistributionArcRepair(arcResult);
     return arcResult;
   }
 
-  if (env === "controlled_stability") {
+  if (
+    env === "controlled_stability" &&
+    failureResolution.dominantFailure === "low_back_lifting"
+  ) {
     applyControlledStabilityArcRepair(arcResult);
     return arcResult;
   }
