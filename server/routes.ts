@@ -4302,15 +4302,22 @@ async function buildStructuredCaseStateBlock(
   caseId: number,
   internalUpdate: InternalCaseUpdate | null,
   traceId?: string | null,
+  isNewCase = false,
 ): Promise<string> {
   const snapshot = await buildInternalCaseStateSnapshot(caseId);
   const visibleStateInput = {
     caseId,
-    signal: internalUpdate?.signal ?? snapshot.latestSignal ?? null,
+    signal:
+      internalUpdate?.signal ??
+      (isNewCase ? null : snapshot.latestSignal) ??
+      null,
     bodyRegion: internalUpdate?.bodyRegion ?? null,
     activityType: internalUpdate?.activityType ?? null,
     movementContext: internalUpdate?.movementContext ?? null,
-    hypothesis: internalUpdate?.hypothesis ?? snapshot.latestHypothesis ?? null,
+    hypothesis:
+      internalUpdate?.hypothesis ??
+      (isNewCase ? null : snapshot.latestHypothesis) ??
+      null,
     interpretationCorrection: internalUpdate?.interpretationCorrection ?? null,
     failurePrediction: internalUpdate?.failurePrediction ?? null,
     singleLever: internalUpdate?.singleLever ?? null,
@@ -4318,7 +4325,10 @@ async function buildStructuredCaseStateBlock(
       internalUpdate?.currentTest ??
       internalUpdate?.adjustment ??
       null,
-    outcome: internalUpdate?.outcome ?? snapshot.latestOutcome ?? null,
+    outcome:
+      internalUpdate?.outcome ??
+      (isNewCase ? null : snapshot.latestOutcome) ??
+      null,
   };
 
   console.log("VISIBLE_RESPONSE_INPUT", {
@@ -4354,24 +4364,18 @@ If hypothesis exists:
 - include at least one of correction or failure prediction
 - include one lever or test
 
-Signal: ${internalUpdate?.signal ?? snapshot.latestSignal ?? "none"}
-Body region: ${internalUpdate?.bodyRegion ?? "unknown"}
-Activity: ${internalUpdate?.activityType ?? "unknown"}
-Movement context: ${internalUpdate?.movementContext ?? "unknown"}
-Current hypothesis: ${
-    internalUpdate?.hypothesis ?? snapshot.latestHypothesis ?? "none"
-  }
+Signal: ${visibleStateInput.signal ?? "none"}
+Body region: ${visibleStateInput.bodyRegion ?? "unknown"}
+Activity: ${visibleStateInput.activityType ?? "unknown"}
+Movement context: ${visibleStateInput.movementContext ?? "unknown"}
+Current hypothesis: ${visibleStateInput.hypothesis ?? "none"}
 Interpretation correction: ${
-    internalUpdate?.interpretationCorrection ?? "none"
+    visibleStateInput.interpretationCorrection ?? "none"
   }
-Failure prediction: ${internalUpdate?.failurePrediction ?? "none"}
-Single lever: ${internalUpdate?.singleLever ?? "none"}
-Current adjustment/test: ${
-    internalUpdate?.currentTest ??
-    internalUpdate?.adjustment ??
-    "none"
-  }
-Latest outcome: ${internalUpdate?.outcome ?? snapshot.latestOutcome ?? "none"}
+Failure prediction: ${visibleStateInput.failurePrediction ?? "none"}
+Single lever: ${visibleStateInput.singleLever ?? "none"}
+Current adjustment/test: ${visibleStateInput.adjustment ?? "none"}
+Latest outcome: ${visibleStateInput.outcome ?? "none"}
 
 Response rule:
 - Speak from this structured state.
@@ -6431,6 +6435,8 @@ Produce the response now.
       let continuityLatestMovementContext: string | null = null;
       let continuityLatestActivityType: string | null = null;
       let continuityLatestSignalType: string | null = null;
+      let isNewCase = false;
+      let previousCaseIdForNewCase: number | null = null;
 
       try {
         if (shouldCreateCase && derivedCaseContext) {
@@ -6529,6 +6535,7 @@ Produce the response now.
               boundaryDecision.previousSignalType ?? null;
 
             if (boundaryDecision.shouldStartNewCase) {
+              previousCaseIdForNewCase = resolvedActiveCase.id;
               console.log("CASE_BOUNDARY_NEW_CASE", {
                 userId,
                 conversationId: convoId,
@@ -6632,6 +6639,7 @@ Produce the response now.
 
             if (newCase) {
               resolvedActiveCase = newCase;
+              isNewCase = shouldCreateCase && !returnToCaseMatched;
 
               try {
                 await writeCaseSignalIfNew({
@@ -6676,6 +6684,12 @@ Produce the response now.
         console.error("Case creation flow failed:", err);
       }
 
+      console.log("NEW_CASE_ISOLATION", {
+        isNewCase,
+        previousCaseId: previousCaseIdForNewCase,
+        newCaseId: resolvedActiveCase?.id ?? null,
+      });
+
       if (!resolvedActiveCase) {
         resolvedActiveCase = await getConversationOpenCase(userId, convoId);
       }
@@ -6707,7 +6721,7 @@ Produce the response now.
           : "";
 
       const continuityCaseId =
-        continuityContextAllowed && resolvedActiveCase
+        !isNewCase && continuityContextAllowed && resolvedActiveCase
           ? resolvedActiveCase.id
           : null;
       if (continuityCaseId) {
@@ -6846,20 +6860,27 @@ Produce the response now.
       }
 
       const activeHypothesisBlock = continuityCaseId
-        ? await getActiveHypothesisBlock(userId, continuityCaseId)
+        ? isNewCase
+          ? ""
+          : await getActiveHypothesisBlock(userId, continuityCaseId)
         : "";
       const runtimePatternBlock = continuityCaseId
-        ? await getDominantRuntimePatternBlock(userId, continuityCaseId)
+        ? isNewCase
+          ? ""
+          : await getDominantRuntimePatternBlock(userId, continuityCaseId)
         : "";
       const continuityBlock = internalCasePersistResult.update
         ? ""
-        : activeHypothesisBlock || runtimePatternBlock;
+        : isNewCase
+          ? ""
+          : activeHypothesisBlock || runtimePatternBlock;
       const structuredCaseStateBlock =
         !isCaseReview && resolvedActiveCase
           ? await buildStructuredCaseStateBlock(
               resolvedActiveCase.id,
               internalCasePersistResult.update,
               layer1TraceId,
+              isNewCase,
             )
           : "";
       const settingsContextBlock = !isCaseReview
