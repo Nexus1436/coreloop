@@ -1622,12 +1622,20 @@ function extractMechanicalFeatures(
   const hasArching = /arch|arching|back lifts|low back lifts/.test(t);
   const isRotational =
     /serve|swing|throw|rotate|rotation/.test(t) || /serve|swing/.test(m);
+  const hasExtensionDistribution =
+    /swan dive|swan|back extension|prone|lift chest|lifting up|extension|lower back taking over|mostly in my lower back/.test(
+      t,
+    ) ||
+    /swan dive|swan|back extension|prone|lift chest|lifting up|extension/.test(
+      m,
+    );
 
   return {
     isSupine,
     hasLegLowering,
     hasArching,
     isRotational,
+    hasExtensionDistribution,
   };
 }
 
@@ -1637,6 +1645,10 @@ function classifyMechanicalEnvironment(
   movementContext?: string | null,
 ): string {
   const f = extractMechanicalFeatures(userText, activityType, movementContext);
+
+  if (f.hasExtensionDistribution) {
+    return "extension_distribution";
+  }
 
   if (f.isSupine && f.hasLegLowering && f.hasArching) {
     return "controlled_stability";
@@ -2881,6 +2893,8 @@ function hasRotationalArcTemplate(value: string | null | undefined): boolean {
   return (
     /\bdrive[-\s]?serve\b/i.test(text) ||
     /\bturn from (?:your )?hips\b/i.test(text) ||
+    /\bcore engagement\b/i.test(text) ||
+    /\bfocus on stability\b/i.test(text) ||
     /\bstart (?:the )?movement from (?:your )?hips before (?:your )?trunk moves\b/i.test(
       text,
     )
@@ -2907,6 +2921,28 @@ function applyControlledStabilityArcRepair(
     "Lower your legs only as far as you can without your low back lifting off the surface.";
   arcResult.currentTest =
     "Do 3 slow leg-lowering reps and only go as low as you can without your low back lifting. Let me know if the tightness changes.";
+}
+
+function applyExtensionDistributionArcRepair(
+  arcResult: {
+    hypothesis: string | null;
+    interpretationCorrection: string | null;
+    failurePrediction: string | null;
+    singleLever: string | null;
+    adjustment: string | null;
+    currentTest: string | null;
+  },
+): void {
+  arcResult.interpretationCorrection =
+    "As you lift into Swan Dive, your lower back is taking too much of the extension instead of the lift being distributed through the rest of the body.";
+  arcResult.failurePrediction =
+    "If that stays the same, your lower back will keep tightening whenever you try to lift higher.";
+  arcResult.singleLever =
+    "only lift as high as you can without the lower-back tightness increasing";
+  arcResult.adjustment =
+    "Reduce the height of the Swan Dive and only lift to the point where your lower back does not tighten more.";
+  arcResult.currentTest =
+    "Do 3 slow Swan Dive lifts and only lift as high as you can without the lower-back tightness increasing. Let me know if the tightness changes.";
 }
 
 function completeArcFields({
@@ -2985,6 +3021,11 @@ function completeArcFields({
       "Start the drive-serve turn from your hips before your trunk moves.";
     arcResult.currentTest =
       "Do 3 slow drive-serve motions to the left without a ball. Start the turn from your hips before your trunk moves. Let me know if the stiffness and tightness change.";
+    return arcResult;
+  }
+
+  if (env === "extension_distribution") {
+    applyExtensionDistributionArcRepair(arcResult);
     return arcResult;
   }
 
