@@ -4445,7 +4445,7 @@ function pickDashboardDisplayValue(
 ): string | null {
   const normalizedValues = values
     .map((value) => normalizePreviewValue(value))
-    .flatMap((value) => value.split(/\s+—\s+/))
+    .flatMap((value) => (value ?? "").split(/\s+—\s+/))
     .map((value) => normalizePreviewValue(value))
     .filter((value): value is string => Boolean(value));
 
