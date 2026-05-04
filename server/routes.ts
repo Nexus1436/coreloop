@@ -7106,6 +7106,12 @@ ${memoryBlock}
             isFollowUp: boolean | null;
           }
         | undefined;
+      let latestReasoningSnapshot:
+        | {
+            activeLever: string | null;
+            activeTest: string | null;
+          }
+        | undefined;
       let followUpContext: string[] = [];
 
       if (selectedCase) {
@@ -7192,6 +7198,16 @@ ${memoryBlock}
             .from(caseSignals)
             .where(eq(caseSignals.caseId, selectedCase.id))
             .orderBy(desc(caseSignals.id))
+            .limit(1);
+
+          [latestReasoningSnapshot] = await db
+            .select({
+              activeLever: caseReasoningSnapshots.activeLever,
+              activeTest: caseReasoningSnapshots.activeTest,
+            })
+            .from(caseReasoningSnapshots)
+            .where(eq(caseReasoningSnapshots.caseId, selectedCase.id))
+            .orderBy(desc(caseReasoningSnapshots.id))
             .limit(1);
         }
 
@@ -7338,65 +7354,45 @@ ${memoryBlock}
         selectedMechanismSource,
         220,
       );
-
-      const testSourceCandidates = [
-        pickDashboardDisplayValue([
-          latestAdjustment?.cue,
-          latestAdjustment?.mechanicalFocus,
-        ]),
-      ].filter((candidate): candidate is string => Boolean(candidate));
-      const selectedTestSource =
-        testSourceCandidates.find(
-          (candidate) =>
-            isTestLikeText(candidate) &&
-            !areEquivalentDashboardCandidates(
-              candidate,
-              selectedMechanismSource,
-            ),
-        ) ?? null;
-      const currentTest = extractPreviewSnippet(selectedTestSource, 220);
-
-      const shiftSourceCandidates = [
-        {
-          value: pickDashboardDisplayValue([
-            latestAdjustment?.cue,
-            latestAdjustment?.mechanicalFocus,
-          ]),
-          allowLowSignalFallback: false,
-        },
-        {
-          value: normalizePreviewValue(latestHypothesis?.hypothesis),
-          allowLowSignalFallback: false,
-        },
-        {
-          value: normalizePreviewValue(latestOutcome?.userFeedback),
-          allowLowSignalFallback: false,
-        },
-        {
-          value: normalizePreviewValue(latestSignal?.description),
-          allowLowSignalFallback: true,
-        },
-      ].filter(
-        (
-          candidate,
-        ): candidate is {
-          value: string;
-          allowLowSignalFallback: boolean;
-        } => Boolean(candidate.value),
+      const snapshotActiveLever = normalizePreviewValue(
+        latestReasoningSnapshot?.activeLever,
       );
-      const selectedShiftSource =
-        shiftSourceCandidates.find(
-          (candidate) => !isLowSignalShiftText(candidate.value),
-        )?.value ??
-        shiftSourceCandidates.find(
-          (candidate) => candidate.allowLowSignalFallback,
-        )?.value ??
-        null;
-      const lastShift = extractPreviewSnippet(selectedShiftSource, 220);
+      const snapshotActiveTest = normalizePreviewValue(
+        latestReasoningSnapshot?.activeTest,
+      );
+      const latestAdjustmentCue = normalizePreviewValue(latestAdjustment?.cue);
+      const adjustmentFallback = pickDashboardDisplayValue([
+        latestAdjustment?.cue,
+        latestAdjustment?.mechanicalFocus,
+      ]);
+      const currentTest = extractPreviewSnippet(
+        snapshotActiveTest ?? latestAdjustmentCue,
+        220,
+      );
+      const adjustment = extractPreviewSnippet(
+        snapshotActiveLever ?? adjustmentFallback,
+        220,
+      );
+      const nextMove = currentTest;
+      const lastShift = extractPreviewSnippet(
+        snapshotActiveLever ?? latestAdjustmentCue,
+        220,
+      );
       const lastCaseReviewSnippet = extractPreviewSnippet(
         latestCaseReview?.reviewText,
         220,
       );
+
+      console.log("DASHBOARD_FIELD_MAPPING", {
+        caseId: selectedCase?.id ?? null,
+        snapshotActiveLever: clampText(snapshotActiveLever ?? "", 220),
+        snapshotActiveTest: clampText(snapshotActiveTest ?? "", 220),
+        latestAdjustmentCue: clampText(latestAdjustmentCue ?? "", 220),
+        finalCurrentTest: clampText(currentTest ?? "", 220),
+        finalAdjustment: clampText(adjustment ?? "", 220),
+        finalNextMove: clampText(nextMove ?? "", 220),
+        finalLastShift: clampText(lastShift ?? "", 220),
+      });
 
       console.log("DASHBOARD_CASE_STATE_READ", {
         caseId: selectedCase?.id ?? null,
@@ -7415,12 +7411,10 @@ ${memoryBlock}
           ? latestNonMechanicalSignal?.rawSignal ?? null
           : latestSignal?.description ?? null,
         hypothesis: latestHypothesis?.hypothesis ?? null,
-        adjustment: pickDashboardDisplayValue([
-          latestAdjustment?.cue,
-          latestAdjustment?.mechanicalFocus,
-        ]),
+        adjustment,
         currentMechanism,
         currentTest,
+        nextMove,
         lastShift,
         followUpContext,
         lastCaseReviewSnippet,
