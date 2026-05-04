@@ -1693,6 +1693,8 @@ function resolveMechanicalEnvironment({
   mechanicalEnvironment: string;
   confidence: number;
   candidates: MechanicalEnvironmentCandidate[];
+  selectedByPriorityRule: boolean;
+  priorityRule: string;
 } {
   const text = (userText || "").toLowerCase();
   const activity = (activityType || "").toLowerCase();
@@ -1730,10 +1732,17 @@ function resolveMechanicalEnvironment({
   const matches = (pattern: RegExp) => pattern.test(signal);
   const hasShoulderRegion = /\bshoulder\b|\barm\b/.test(region);
   const hasOverheadSignal =
-    matches(/\boverhead\b|\bspike\b|\breach high\b|\breaching high\b|\bhit high\b/) ||
+    matches(/\boverhead\b|\bspike\b|\breach high\b|\breaching high\b|\bhit high\b|\bswing hard\b|\barm overhead\b|\bhigh reach\b/) ||
     (matches(/\bserve\b/) && matches(/\bshoulder\b|\barm\b/));
   const hasCompressionSignals = matches(
     /\bpinch\b|\bpinching\b|\bfront of hip\b|\bhip pinch\b|\bat the bottom\b|\bbottom of squat\b|\bdeep\b|\bgo deep\b|\bdeep squat\b|\bcompressed\b|\bfold\b/,
+  );
+  const hasDepthFoldSignal = matches(
+    /\bdeep\b|\bbottom\b|\bfold\b|\bpinch\b|\bcompressed\b|\bknees to chest\b|\bfront of hip\b/,
+  );
+  const hasHipKneeRegion = /\bhip\b|\bknee\b/.test(region);
+  const hasPositionalStaticSignal = matches(
+    /\bsit all day\b|\bsitting\b|\bdesk\b|\bhaven'?t moved\b|\bnot moved\b|\bnot moving\b|\bstanding for a while\b|\bdriving\b|\bafter sitting\b|\bafter being still\b/,
   );
 
   if (
@@ -1840,6 +1849,40 @@ function resolveMechanicalEnvironment({
 
   addEvidence("general", 1, "fallback environment");
 
+  let priorityRule = "score_only";
+  if ((hasShoulderRegion || matches(/\bshoulder\b/)) && hasOverheadSignal) {
+    addEvidence(
+      "overhead_loading",
+      10,
+      "priority: shoulder overhead beats compression",
+    );
+    addEvidence(
+      "compression_or_fold",
+      -8,
+      "priority penalty: shoulder overhead signal",
+    );
+    priorityRule = "shoulder_overhead_beats_compression";
+  } else if ((hasHipKneeRegion || matches(/\bfront of hip\b|\bhip\b|\bknee\b/)) && hasDepthFoldSignal) {
+    addEvidence(
+      "compression_or_fold",
+      8,
+      "priority: hip/knee depth beats strength",
+    );
+    addEvidence(
+      "strength_loading",
+      -4,
+      "priority penalty: hip/knee depth signal",
+    );
+    priorityRule = "hip_knee_depth_beats_strength";
+  } else if (hasPositionalStaticSignal) {
+    addEvidence(
+      "positional_load",
+      10,
+      "priority: positional static beats inherited movement",
+    );
+    priorityRule = "positional_static_beats_inherited_movement";
+  }
+
   const dominant = candidates.reduce((best, candidate) =>
     candidate.score > best.score ? candidate : best,
   );
@@ -1851,6 +1894,8 @@ function resolveMechanicalEnvironment({
     mechanicalEnvironment: dominant.environment,
     confidence,
     candidates,
+    selectedByPriorityRule: priorityRule !== "score_only",
+    priorityRule,
   };
 }
 
@@ -1863,6 +1908,14 @@ function classifyMovementFamily(
   const activity = (activityType || "").toLowerCase();
   const movement = (movementContext || "").toLowerCase();
   const signal = `${text} ${activity} ${movement}`;
+
+  if (
+    /\bsit all day\b|\bsitting\b|\bdesk\b|\bhaven'?t moved\b|\bnot moved\b|\bnot moving\b|\bstanding for a while\b|\bdriving\b|\bafter sitting\b|\bafter being still\b/.test(
+      text,
+    )
+  ) {
+    return "positional_static";
+  }
 
   if (/\bswan dive\b|\bswan\b/.test(signal)) {
     return "swan_dive";
@@ -3730,6 +3783,8 @@ function completeArcFields({
     bodyRegion,
   });
   console.log("MECHANICAL_ENVIRONMENT_RESOLUTION", {
+    selectedByPriorityRule: envResolution.selectedByPriorityRule,
+    priorityRule: envResolution.priorityRule,
     mechanicalEnvironment: env,
     confidence: envResolution.confidence,
     candidates: envResolution.candidates,
