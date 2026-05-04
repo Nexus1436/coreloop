@@ -1701,12 +1701,16 @@ function resolveMechanicalEnvironment({
   const signal = `${text} ${activity} ${movement} ${region}`;
   const candidates: MechanicalEnvironmentCandidate[] = [
     "rotational_power",
+    "overhead_loading",
     "controlled_stability",
     "extension_distribution",
     "strength_loading",
     "locomotion",
     "impact_deceleration",
-    "overhead_loading",
+    "reach_or_spacing",
+    "compression_or_fold",
+    "coordination_timing",
+    "positional_load",
     "general",
   ].map((environment) => ({
     environment,
@@ -1785,6 +1789,38 @@ function resolveMechanicalEnvironment({
     )
   ) {
     addEvidence("impact_deceleration", 3, "impact or deceleration signal");
+  }
+
+  if (
+    matches(
+      /\breaching\b|\breach\b|\btoo far\b|\bjammed\b|\bcrowded\b|\btoo close\b|\btoo far away\b|\bcontact point\b|\bspacing\b/,
+    )
+  ) {
+    addEvidence("reach_or_spacing", 3, "reach or spacing signal");
+  }
+
+  if (
+    matches(
+      /\bdeep squat\b|\bbottom of squat\b|\bpinch\b|\bfold\b|\bcompressed\b|\bknees to chest\b|\bhip pinch\b|\bfront of hip\b|\bat the bottom\b/,
+    )
+  ) {
+    addEvidence("compression_or_fold", 3, "compression or fold signal");
+  }
+
+  if (
+    matches(
+      /\bout of sync\b|\btiming\b|\bnot smooth\b|\bfeels off\b|\ball at once\b|\bcan'?t coordinate\b|\bcannot coordinate\b|\bsequence\b|\brhythm\b/,
+    )
+  ) {
+    addEvidence("coordination_timing", 3, "coordination or timing signal");
+  }
+
+  if (
+    matches(
+      /\bsitting\b|\bsit all day\b|\bdesk\b|\bdriving\b|\bstanding still\b|\bstanding for a while\b|\blying down\b|\bsleeping\b|\bwake up\b|\bwake up stiff\b|\bafter work\b|\bafter being still\b|\bnot moving\b|\bstiff after sitting\b|\btight after sitting\b|\bafter sitting\b|\bafter standing\b|\bafter sleeping\b|\bnot moved for a while\b/,
+    )
+  ) {
+    addEvidence("positional_load", 4, "static position or sustained posture");
   }
 
   addEvidence("general", 1, "fallback environment");
@@ -1959,6 +1995,36 @@ function resolveDominantFailurePattern({
       "push_off_asymmetry",
       "cadence_breakdown",
     ],
+    impact_deceleration: [
+      "landing_overload",
+      "plant_deceleration",
+      "cutting_control_loss",
+      "jump_down_absorption",
+    ],
+    reach_or_spacing: [
+      "overreach",
+      "crowded_contact",
+      "spacing_mismatch",
+      "contact_point_drift",
+    ],
+    compression_or_fold: [
+      "range_compression",
+      "bottom_position_pinch",
+      "fold_overload",
+      "hip_front_closure",
+    ],
+    coordination_timing: [
+      "sequence_breakdown",
+      "timing_mismatch",
+      "rhythm_loss",
+      "all_at_once_strategy",
+    ],
+    positional_load: [
+      "sustained_position_load",
+      "static_variation_loss",
+      "posture_duration_sensitivity",
+      "stillness_stiffness",
+    ],
     overhead_loading: [
       "shoulder_pinch_top_range",
       "overhead_range_overreach",
@@ -2059,6 +2125,71 @@ function resolveDominantFailurePattern({
     }
     if (matches(/\bcadence\b|\brhythm\b|\btempo\b/)) {
       addEvidence("cadence_breakdown", 2, "cadence language");
+    }
+  } else if (mechanicalEnvironment === "impact_deceleration") {
+    if (matches(/\blanding\b|\bjump down\b/)) {
+      addEvidence("landing_overload", 2, "landing language");
+    }
+    if (matches(/\bplant\b|\bstopping\b|\bdecelerate\b/)) {
+      addEvidence("plant_deceleration", 2, "plant or deceleration language");
+    }
+    if (matches(/\bcutting\b|\bchange direction\b/)) {
+      addEvidence("cutting_control_loss", 2, "cutting/change direction language");
+    }
+    if (matches(/\babsorb\b|\babsorption\b/)) {
+      addEvidence("jump_down_absorption", 2, "absorption language");
+    }
+  } else if (mechanicalEnvironment === "reach_or_spacing") {
+    if (matches(/\breaching\b|\breach\b|\btoo far\b|\btoo far away\b/)) {
+      addEvidence("overreach", 2, "overreach language");
+    }
+    if (matches(/\bjammed\b|\bcrowded\b|\btoo close\b/)) {
+      addEvidence("crowded_contact", 2, "crowded contact language");
+    }
+    if (matches(/\bspacing\b/)) {
+      addEvidence("spacing_mismatch", 2, "spacing language");
+    }
+    if (matches(/\bcontact point\b/)) {
+      addEvidence("contact_point_drift", 2, "contact point language");
+    }
+  } else if (mechanicalEnvironment === "compression_or_fold") {
+    if (matches(/\bdeep squat\b|\bbottom of squat\b|\bat the bottom\b/)) {
+      addEvidence("range_compression", 2, "deep range compression language");
+    }
+    if (matches(/\bpinch\b|\bhip pinch\b|\bfront of hip\b/)) {
+      addEvidence("bottom_position_pinch", 2, "pinch in folded position");
+    }
+    if (matches(/\bfold\b|\bcompressed\b|\bknees to chest\b/)) {
+      addEvidence("fold_overload", 2, "fold/compression language");
+    }
+    if (matches(/\bfront of hip\b/)) {
+      addEvidence("hip_front_closure", 2, "front hip closure language");
+    }
+  } else if (mechanicalEnvironment === "coordination_timing") {
+    if (matches(/\bsequence\b|\bout of sync\b/)) {
+      addEvidence("sequence_breakdown", 2, "sequence language");
+    }
+    if (matches(/\btiming\b/)) {
+      addEvidence("timing_mismatch", 2, "timing language");
+    }
+    if (matches(/\brhythm\b|\bnot smooth\b|\bfeels off\b/)) {
+      addEvidence("rhythm_loss", 2, "rhythm or smoothness language");
+    }
+    if (matches(/\ball at once\b|\bcan'?t coordinate\b|\bcannot coordinate\b/)) {
+      addEvidence("all_at_once_strategy", 2, "coordination collapse language");
+    }
+  } else if (mechanicalEnvironment === "positional_load") {
+    if (matches(/\bsitting\b|\bsit all day\b|\bdesk\b|\bdriving\b|\bstanding still\b|\bstanding for a while\b|\blying down\b|\bsleeping\b/)) {
+      addEvidence("sustained_position_load", 2, "sustained position language");
+    }
+    if (matches(/\bnot moving\b|\bnot moved for a while\b|\bafter being still\b/)) {
+      addEvidence("static_variation_loss", 2, "lack of variation language");
+    }
+    if (matches(/\bafter sitting\b|\bafter standing\b|\bafter work\b|\bafter sleeping\b/)) {
+      addEvidence("posture_duration_sensitivity", 2, "duration sensitivity language");
+    }
+    if (matches(/\bstiff after sitting\b|\btight after sitting\b|\bwake up stiff\b/)) {
+      addEvidence("stillness_stiffness", 2, "stillness stiffness language");
     }
   } else if (mechanicalEnvironment === "overhead_loading") {
     if (matches(/\bfront of (?:my )?shoulder\b|\bshoulder pinch\b|\bpinch\b/)) {
@@ -3434,6 +3565,27 @@ function applyOverheadLoadingArcRepair(
     "Do 3 slow overhead spike motions at partial reach. Stop before the front of the shoulder pinches. Let me know if the pinch changes.";
 }
 
+function applyPositionalLoadArcRepair(
+  arcResult: {
+    hypothesis: string | null;
+    interpretationCorrection: string | null;
+    failurePrediction: string | null;
+    singleLever: string | null;
+    adjustment: string | null;
+    currentTest: string | null;
+  },
+): void {
+  arcResult.interpretationCorrection =
+    "The signal is showing up after staying in one position too long, so the irritated area is taking sustained load without enough variation.";
+  arcResult.failurePrediction =
+    "If that position stays unchanged, the tightness will likely keep building because the load is not being redistributed.";
+  arcResult.singleLever = "change position before the tightness builds";
+  arcResult.adjustment =
+    "Break the position earlier instead of waiting until the tightness is already built up.";
+  arcResult.currentTest =
+    "For the next sitting or standing block, change position for 30 seconds before the tightness builds. Let me know if the tightness changes.";
+}
+
 function completeArcFields({
   hypothesis,
   interpretationCorrection,
@@ -3506,6 +3658,7 @@ function completeArcFields({
     mechanicalEnvironment: env,
     confidence: envResolution.confidence,
     candidates: envResolution.candidates,
+    userTextPreview: clampText(userText, 220),
     activityType,
     movementContext,
     bodyRegion,
@@ -3576,6 +3729,11 @@ function completeArcFields({
 
   if (env === "overhead_loading") {
     applyOverheadLoadingArcRepair(arcResult);
+    return arcResult;
+  }
+
+  if (env === "positional_load") {
+    applyPositionalLoadArcRepair(arcResult);
     return arcResult;
   }
 
