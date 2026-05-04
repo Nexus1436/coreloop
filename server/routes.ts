@@ -1732,6 +1732,9 @@ function resolveMechanicalEnvironment({
   const hasOverheadSignal =
     matches(/\boverhead\b|\bspike\b|\breach high\b|\breaching high\b|\bhit high\b/) ||
     (matches(/\bserve\b/) && matches(/\bshoulder\b|\barm\b/));
+  const hasCompressionSignals = matches(
+    /\bpinch\b|\bpinching\b|\bfront of hip\b|\bhip pinch\b|\bat the bottom\b|\bbottom of squat\b|\bdeep\b|\bgo deep\b|\bdeep squat\b|\bcompressed\b|\bfold\b/,
+  );
 
   if (
     matches(
@@ -1805,6 +1808,18 @@ function resolveMechanicalEnvironment({
     )
   ) {
     addEvidence("compression_or_fold", 3, "compression or fold signal");
+  }
+  if (hasCompressionSignals) {
+    addEvidence(
+      "compression_or_fold",
+      6,
+      "compression priority: pinch/depth signal",
+    );
+    addEvidence(
+      "strength_loading",
+      -2,
+      "strength loading penalty: compression signal present",
+    );
   }
 
   if (
@@ -2008,10 +2023,10 @@ function resolveDominantFailurePattern({
       "contact_point_drift",
     ],
     compression_or_fold: [
-      "range_compression",
+      "hip_compression_at_depth",
+      "range_too_deep",
+      "joint_angle_closure",
       "bottom_position_pinch",
-      "fold_overload",
-      "hip_front_closure",
     ],
     coordination_timing: [
       "sequence_breakdown",
@@ -2153,17 +2168,17 @@ function resolveDominantFailurePattern({
       addEvidence("contact_point_drift", 2, "contact point language");
     }
   } else if (mechanicalEnvironment === "compression_or_fold") {
-    if (matches(/\bdeep squat\b|\bbottom of squat\b|\bat the bottom\b/)) {
-      addEvidence("range_compression", 2, "deep range compression language");
+    if (matches(/\bpinch\b|\bpinching\b|\bhip pinch\b|\bfront of hip\b/)) {
+      addEvidence("hip_compression_at_depth", 4, "hip pinch/compression language");
     }
-    if (matches(/\bpinch\b|\bhip pinch\b|\bfront of hip\b/)) {
-      addEvidence("bottom_position_pinch", 2, "pinch in folded position");
+    if (matches(/\bdeep\b|\bgo deep\b|\bbottom\b|\bbottom of squat\b|\bat the bottom\b/)) {
+      addEvidence("range_too_deep", 3, "deep/bottom range language");
     }
-    if (matches(/\bfold\b|\bcompressed\b|\bknees to chest\b/)) {
-      addEvidence("fold_overload", 2, "fold/compression language");
+    if (matches(/\bcompressed\b|\bclosing\b|\bfold\b|\bknees to chest\b/)) {
+      addEvidence("joint_angle_closure", 3, "joint angle closure language");
     }
-    if (matches(/\bfront of hip\b/)) {
-      addEvidence("hip_front_closure", 2, "front hip closure language");
+    if (matches(/\bat the bottom\b|\bbottom of squat\b|\bpinch\b/)) {
+      addEvidence("bottom_position_pinch", 2, "bottom position pinch");
     }
   } else if (mechanicalEnvironment === "coordination_timing") {
     if (matches(/\bsequence\b|\bout of sync\b/)) {
@@ -3586,6 +3601,27 @@ function applyPositionalLoadArcRepair(
     "For the next sitting or standing block, change position for 30 seconds before the tightness builds. Let me know if the tightness changes.";
 }
 
+function applyCompressionOrFoldArcRepair(
+  arcResult: {
+    hypothesis: string | null;
+    interpretationCorrection: string | null;
+    failurePrediction: string | null;
+    singleLever: string | null;
+    adjustment: string | null;
+    currentTest: string | null;
+  },
+): void {
+  arcResult.interpretationCorrection =
+    "As you go deeper, the hip is closing into a compressed position, which is creating the pinching sensation.";
+  arcResult.failurePrediction =
+    "If you keep going into that depth, the pinch will continue whenever you reach that bottom position.";
+  arcResult.singleLever = "only go as deep as you can without the pinch starting";
+  arcResult.adjustment =
+    "Reduce the depth of your squat so you stay just above the point where the hip pinches.";
+  arcResult.currentTest =
+    "Do 3 slow squats and stop just before the hip pinch begins. Let me know if the pinch changes.";
+}
+
 function completeArcFields({
   hypothesis,
   interpretationCorrection,
@@ -3734,6 +3770,11 @@ function completeArcFields({
 
   if (env === "positional_load") {
     applyPositionalLoadArcRepair(arcResult);
+    return arcResult;
+  }
+
+  if (env === "compression_or_fold") {
+    applyCompressionOrFoldArcRepair(arcResult);
     return arcResult;
   }
 
