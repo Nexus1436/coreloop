@@ -7012,9 +7012,27 @@ ${memoryBlock}
         return res.status(401).json({ error: "Unauthorized" });
       }
 
-      const recentCases = await db
+      const queryConversationId = Array.isArray(req.query?.conversationId)
+        ? req.query.conversationId[0]
+        : req.query?.conversationId;
+      const parsedConversationId =
+        typeof queryConversationId === "string"
+          ? Number(queryConversationId)
+          : Number.NaN;
+      const [latestConversation] = Number.isFinite(parsedConversationId)
+        ? [{ id: parsedConversationId }]
+        : await db
+            .select({ id: conversations.id })
+            .from(conversations)
+            .where(eq(conversations.userId, userId))
+            .orderBy(desc(conversations.createdAt), desc(conversations.id))
+            .limit(1);
+      const currentConversationId = latestConversation?.id ?? null;
+
+      const dashboardEligibleCases = await db
         .select({
           id: cases.id,
+          conversationId: cases.conversationId,
           movementContext: cases.movementContext,
           activityType: cases.activityType,
           caseType: cases.caseType,
@@ -7024,28 +7042,30 @@ ${memoryBlock}
         .from(cases)
         .where(eq(cases.userId, userId))
         .orderBy(desc(cases.updatedAt), desc(cases.id))
-        .limit(12);
+        .limit(50);
 
-      const meaningfulCases = recentCases.filter((row) => {
-        if (row.caseType === "non_mechanical") return true;
+      const openDashboardEligibleCases = dashboardEligibleCases.filter((row) => {
+        const caseType = row.caseType ?? "mechanical";
 
-        const movement = normalizeOptionalLabel(row.movementContext);
-        const activity = normalizeOptionalLabel(row.activityType);
-
-        const isWeakMovement =
-          movement === "" || movement === "general movement";
-
-        const isWeakActivity = activity === "" || activity === "unspecified";
-
-        return !(isWeakMovement && isWeakActivity);
+        return (
+          isOpenCaseStatus(row.status) &&
+          (caseType === "mechanical" || caseType === "non_mechanical")
+        );
       });
 
+      const currentConversationCase =
+        currentConversationId == null
+          ? null
+          : openDashboardEligibleCases.find(
+              (row) => row.conversationId === currentConversationId,
+            ) ?? null;
       const selectedCase =
-        meaningfulCases.find((row) => isOpenCaseStatus(row.status)) ??
-        meaningfulCases[0] ??
-        recentCases.find((row) => isOpenCaseStatus(row.status)) ??
-        recentCases[0] ??
-        null;
+        currentConversationCase ?? openDashboardEligibleCases[0] ?? null;
+      const selectionReason = currentConversationCase
+        ? "current_conversation_case"
+        : selectedCase
+          ? "most_recent_open_case"
+          : "none_found";
 
       let latestAdjustment:
         | {
@@ -7089,7 +7109,8 @@ ${memoryBlock}
       let followUpContext: string[] = [];
 
       if (selectedCase) {
-        const isNonMechanicalCase = selectedCase.caseType === "non_mechanical";
+        const selectedCaseType = selectedCase.caseType ?? "mechanical";
+        const isNonMechanicalCase = selectedCaseType === "non_mechanical";
 
         if (isNonMechanicalCase) {
           [latestNonMechanicalSignal] = await db
@@ -7174,14 +7195,6 @@ ${memoryBlock}
             .limit(1);
         }
 
-        console.log("DASHBOARD_SELECTED_CASE", {
-          userId,
-          selectedCaseId: selectedCase.id,
-          movementContext: selectedCase.movementContext,
-          activityType: selectedCase.activityType,
-          caseType: selectedCase.caseType,
-          status: selectedCase.status,
-        });
         if (isNonMechanicalCase) {
           console.log("DASHBOARD_NON_MECHANICAL_SIGNAL", {
             selectedCaseId: selectedCase.id,
@@ -7241,6 +7254,22 @@ ${memoryBlock}
           }
         }
       }
+
+      console.log("DASHBOARD_SELECTED_CASE", {
+        caseId: selectedCase?.id ?? null,
+        caseType: selectedCase
+          ? selectedCase.caseType ?? "mechanical"
+          : null,
+        selectionReason,
+        conversationId:
+          selectionReason === "current_conversation_case"
+            ? currentConversationId
+            : null,
+        hasMechanicalArtifacts: Boolean(
+          latestSignal || latestHypothesis || latestAdjustment || latestOutcome,
+        ),
+        hasNonMechanicalSignals: Boolean(latestNonMechanicalSignal),
+      });
 
       let latestCaseReview:
         | {
@@ -7380,6 +7409,7 @@ ${memoryBlock}
 
       res.json({
         activeCaseTitle,
+        caseType: selectedCase ? selectedCase.caseType ?? "mechanical" : null,
         investigationState,
         signal: isSelectedNonMechanicalCase
           ? latestNonMechanicalSignal?.rawSignal ?? null
