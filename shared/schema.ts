@@ -8,6 +8,7 @@ import {
   index,
   varchar,
   doublePrecision,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -197,6 +198,43 @@ export const sessionSignals = pgTable(
   },
   (table) => ({
     signalUserIdx: index("session_signals_user_idx").on(table.userId),
+  }),
+);
+
+/* =====================================================
+   NON-MECHANICAL SIGNALS
+===================================================== */
+
+export const nonMechanicalSignals = pgTable(
+  "non_mechanical_signals",
+  {
+    id: serial("id").primaryKey(),
+
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
+    conversationId: integer("conversation_id").references(
+      () => conversations.id,
+      { onDelete: "cascade" },
+    ),
+
+    category: text("category").notNull(),
+    rawSignal: text("raw_signal").notNull(),
+    safetyRelevant: boolean("safety_relevant").default(false).notNull(),
+    responseType: text("response_type"),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    nonMechanicalSignalUserIdx: index(
+      "non_mechanical_signals_user_idx",
+    ).on(table.userId),
+    nonMechanicalSignalConversationIdx: index(
+      "non_mechanical_signals_conversation_idx",
+    ).on(table.conversationId),
   }),
 );
 
@@ -480,4 +518,5 @@ export type UserMemory = typeof userMemory.$inferSelect;
 export type InsertUserMemory = z.infer<typeof insertUserMemorySchema>;
 
 export type SessionSignal = typeof sessionSignals.$inferSelect;
+export type NonMechanicalSignal = typeof nonMechanicalSignals.$inferSelect;
 export type CaseReasoningSnapshot = typeof caseReasoningSnapshots.$inferSelect;

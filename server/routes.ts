@@ -38,6 +38,7 @@ import {
   caseOutcomes,
   caseReviews,
   caseReasoningSnapshots,
+  nonMechanicalSignals,
 } from "@shared/schema";
 
 import {
@@ -1385,6 +1386,126 @@ function deriveSignalType(text: string): string | null {
   ];
 
   return signalPatterns.find((entry) => entry.regex.test(input))?.label ?? null;
+}
+
+type SignalLaneClassification = {
+  lane: "mechanical" | "non_mechanical" | "unclear";
+  category?: string;
+  safetyRelevant?: boolean;
+};
+
+function classifySignalLane(userText: string): SignalLaneClassification {
+  const t = (userText || "").toLowerCase();
+
+  const categoryChecks: Array<{
+    category: string;
+    safetyRelevant: boolean;
+    regex: RegExp;
+  }> = [
+    {
+      category: "appetite_change",
+      safetyRelevant: true,
+      regex:
+        /\b(?:not hungry|no appetite|loss of appetite|lost my appetite|haven'?t been hungry|have not been hungry|don'?t feel hungry|do not feel hungry|not eating)\b/i,
+    },
+    {
+      category: "taste_change",
+      safetyRelevant: true,
+      regex:
+        /\b(?:nothing tastes good|taste(?:s)? (?:bad|off|different|weird)|loss of taste|lost my taste|can'?t taste|cannot taste|food tastes)\b/i,
+    },
+    {
+      category: "dizziness",
+      safetyRelevant: true,
+      regex: /\b(?:dizzy|dizziness|lightheaded|light-headed|vertigo|faint)\b/i,
+    },
+    {
+      category: "medication_effect",
+      safetyRelevant: true,
+      regex:
+        /\b(?:medication|medicine|meds|prescription|side effect|new dose|dosage)\b/i,
+    },
+    {
+      category: "illness",
+      safetyRelevant: true,
+      regex:
+        /\b(?:fever|sick|ill|illness|infection|nausea|vomit|cough|flu|covid)\b/i,
+    },
+    {
+      category: "mood",
+      safetyRelevant: true,
+      regex:
+        /\b(?:depressed|depression|anxious|anxiety|hopeless|panic|mood)\b/i,
+    },
+    {
+      category: "sleep",
+      safetyRelevant: false,
+      regex:
+        /\b(?:can'?t sleep|cannot sleep|haven'?t been sleeping|have not been sleeping|not sleeping|insomnia|sleeping poorly|sleep has been)\b/i,
+    },
+    {
+      category: "fatigue",
+      safetyRelevant: false,
+      regex:
+        /\b(?:tired all the time|fatigue|fatigued|exhausted|wiped out|low energy)\b/i,
+    },
+    {
+      category: "hydration",
+      safetyRelevant: false,
+      regex:
+        /\b(?:dehydrated|dehydration|thirsty|dry mouth|not drinking enough|haven'?t been drinking)\b/i,
+    },
+    {
+      category: "general_health",
+      safetyRelevant: true,
+      regex:
+        /\b(?:weight loss|losing weight|night sweats|appetite|taste|weakness all over|feel unwell)\b/i,
+    },
+  ];
+
+  const matched = categoryChecks.find((entry) => entry.regex.test(t));
+  if (matched) {
+    return {
+      lane: "non_mechanical",
+      category: matched.category,
+      safetyRelevant: matched.safetyRelevant,
+    };
+  }
+
+  if (qualifiesForTimelineSignal(userText)) {
+    return { lane: "mechanical", safetyRelevant: false };
+  }
+
+  return { lane: "unclear", safetyRelevant: false };
+}
+
+function buildNonMechanicalSignalResponse(
+  classification: SignalLaneClassification,
+): string {
+  if (
+    classification.category === "appetite_change" ||
+    classification.category === "taste_change"
+  ) {
+    return "Loss of appetite and taste changes are not something I’d treat as a movement mechanics issue. Because that can come from medical, medication, nutrition, dental, or illness-related causes, it’s worth bringing up with a doctor, especially if it persists, is new, or comes with weight loss, weakness, dizziness, fever, or other changes.";
+  }
+
+  if (classification.category === "dizziness") {
+    return "Dizziness is not something I’d treat as a movement mechanics issue from here. If it’s new, recurring, or coming with fainting, chest pain, weakness, confusion, or trouble breathing, it’s worth getting checked promptly by someone who can evaluate you directly.";
+  }
+
+  if (classification.category === "medication_effect") {
+    return "That sounds more like a possible medication or health-context signal than a movement mechanics issue. I’d bring it up with the clinician or pharmacist connected to that medication, especially if it started after a dose or medication change.";
+  }
+
+  if (classification.safetyRelevant) {
+    return "That does not sound like something I should turn into a movement mechanics investigation. Since it may be medical or systemic rather than mechanical, it’s worth getting it checked by someone who can evaluate you directly, especially if it is new, persistent, or changing.";
+  }
+
+  if (classification.category === "sleep" || classification.category === "fatigue") {
+    return "That sounds more like a general health-context signal than a movement mechanics issue. I’d track when it started and how often it’s happening, and if it keeps showing up or starts affecting your day, it’s worth bringing up with a doctor or clinician.";
+  }
+
+  return "That does not sound like a mechanical movement signal, so I would not turn it into a correction or test. I’d track when it shows up and bring it to someone who can evaluate the broader health context if it persists or changes.";
 }
 
 function normalizeOptionalLabel(value: string | null | undefined): string {
@@ -7240,6 +7361,15 @@ ${memoryBlock}
       const isMedicalSystemic =
         !isCaseReview && isMedicalSystemicSignal(userText);
       const hasNocturnalSupport = hasNocturnalMedicalContext(userText);
+      const signalLane: SignalLaneClassification = !isCaseReview
+        ? classifySignalLane(userText)
+        : { lane: "mechanical", safetyRelevant: false };
+      console.log("SIGNAL_LANE_CLASSIFICATION", {
+        lane: signalLane.lane,
+        category: signalLane.category ?? null,
+        safetyRelevant: Boolean(signalLane.safetyRelevant),
+        userTextPreview: clampText(userText, 180),
+      });
 
       if (isMedicalSystemic) {
         console.log("DOMAIN BOUNDARY: medical/systemic signal detected", {
@@ -7388,6 +7518,67 @@ ${memoryBlock}
           createdAt: new Date(),
         } as any,
       ];
+
+      // ==============================
+      // NON-MECHANICAL SIGNAL LANE
+      // ==============================
+      if (!isCaseReview && signalLane.lane === "non_mechanical") {
+        const nonMechanicalResponseType = signalLane.safetyRelevant
+          ? "non_mechanical_safety_referral"
+          : "non_mechanical_context_tracking";
+        const finalNonMechanicalText =
+          buildNonMechanicalSignalResponse(signalLane);
+
+        try {
+          await db.insert(nonMechanicalSignals).values({
+            userId,
+            conversationId: convoId,
+            category: signalLane.category ?? "general_health",
+            rawSignal: userText,
+            safetyRelevant: Boolean(signalLane.safetyRelevant),
+            responseType: nonMechanicalResponseType,
+          });
+          console.log("NON_MECHANICAL_SIGNAL_WRITE", {
+            userId,
+            conversationId: convoId,
+            category: signalLane.category ?? "general_health",
+            safetyRelevant: Boolean(signalLane.safetyRelevant),
+            responseType: nonMechanicalResponseType,
+          });
+        } catch (err) {
+          console.log("NON_MECHANICAL_SIGNAL_PERSISTENCE_SKIPPED", {
+            userId,
+            conversationId: convoId,
+            category: signalLane.category ?? "general_health",
+            reason: "insert_failed",
+            error: formatUnknownError(err),
+          });
+        }
+
+        logLayer1Trace(layer1TraceId, "layer1_skipped", {
+          conversationId: convoId,
+          reason: "non_mechanical_signal_lane",
+          signalCategory: signalLane.category ?? null,
+          safetyRelevant: Boolean(signalLane.safetyRelevant),
+        });
+
+        res.setHeader("Content-Type", "text/event-stream");
+        const words = finalNonMechanicalText.split(" ");
+        for (const word of words) {
+          res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
+        }
+
+        await db.insert(messages).values({
+          conversationId: convoId,
+          userId,
+          role: "assistant",
+          content: finalNonMechanicalText,
+        });
+
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+        return;
+      }
 
       // ==============================
       // MEDICAL / SYSTEMIC EARLY RETURN

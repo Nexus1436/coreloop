@@ -1,0 +1,15 @@
+CREATE TABLE "non_mechanical_signals" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"user_id" text NOT NULL,
+	"conversation_id" integer,
+	"category" text NOT NULL,
+	"raw_signal" text NOT NULL,
+	"safety_relevant" boolean DEFAULT false NOT NULL,
+	"response_type" text,
+	"created_at" timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+--> statement-breakpoint
+ALTER TABLE "non_mechanical_signals" ADD CONSTRAINT "non_mechanical_signals_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "non_mechanical_signals" ADD CONSTRAINT "non_mechanical_signals_conversation_id_conversations_id_fk" FOREIGN KEY ("conversation_id") REFERENCES "public"."conversations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "non_mechanical_signals_user_idx" ON "non_mechanical_signals" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "non_mechanical_signals_conversation_idx" ON "non_mechanical_signals" USING btree ("conversation_id");
