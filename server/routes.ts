@@ -1957,6 +1957,80 @@ function deriveActivityMovementForAnalytics(
   return movementContext ?? null;
 }
 
+const FAILURE_MAP: Record<string, readonly string[]> = {
+  rotational_power: [
+    "weight_stuck_back",
+    "early_rotation",
+    "late_contact",
+    "spacing_error",
+    "sequence_breakdown",
+    "ribcage_collapse",
+  ],
+
+  overhead_loading: [
+    "shoulder_pinch_top_range",
+    "overhead_range_overreach",
+    "scapular_control_loss",
+    "arm_path_overload",
+    "compensatory_arch",
+  ],
+
+  controlled_stability: [
+    "ribcage_flare",
+    "pelvis_shift",
+    "limb_overload",
+    "range_exceeds_control",
+    "breathing_breakdown",
+  ],
+
+  extension_distribution: [
+    "low_back_dominance",
+    "extension_not_distributed",
+    "range_excess",
+    "glute_non_participation",
+    "neck_overextension",
+  ],
+
+  strength_loading: [
+    "depth_exceeds_control",
+    "joint_load_shift",
+    "bracing_failure",
+    "weight_distribution_error",
+    "range_compensation_pattern",
+  ],
+
+  locomotion: [
+    "overstriding",
+    "push_off_deficit",
+    "impact_imbalance",
+    "cadence_issue",
+    "hip_stability_loss",
+  ],
+
+  impact_deceleration: [
+    "poor_force_absorption",
+    "valgus_collapse",
+    "hip_control_loss",
+    "stiff_landing",
+    "asymmetrical_loading",
+  ],
+
+  compression_or_fold: [
+    "hip_compression_at_depth",
+    "range_too_deep",
+    "joint_angle_closure",
+    "bottom_position_pinch",
+    "structure_loss_in_depth",
+  ],
+
+  positional_load: [
+    "sustained_position_load",
+    "movement_variability_absent",
+    "posture_duration_sensitivity",
+    "stiffness_accumulation",
+  ],
+};
+
 function resolveDominantFailurePattern({
   userText,
   activityType,
@@ -1979,77 +2053,14 @@ function resolveDominantFailurePattern({
   const region = (bodyRegion || "").toLowerCase();
   const activity = (activityType || "").toLowerCase();
   const signal = `${text} ${activity} ${movement} ${region}`;
-  const candidateMap: Record<string, string[]> = {
-    rotational_power: [
-      "early_rotation",
-      "weight_stuck_back",
-      "overreaching",
-      "hip_trunk_timing",
-    ],
-    controlled_stability: [
-      "range_too_deep",
-      "low_back_lifting",
-      "rib_flare",
-      "pelvis_shift",
-    ],
-    extension_distribution: [
-      "low_back_dominance",
-      "over_lifting_range",
-      "poor_extension_distribution",
-      "neck_shoulder_takeover",
-    ],
-    strength_loading: [
-      "bracing_loss",
-      "hinge_breakdown",
-      "load_shift",
-      "range_overreach",
-    ],
-    locomotion: [
-      "impact_overload",
-      "stride_overreach",
-      "push_off_asymmetry",
-      "cadence_breakdown",
-    ],
-    impact_deceleration: [
-      "landing_overload",
-      "plant_deceleration",
-      "cutting_control_loss",
-      "jump_down_absorption",
-    ],
-    reach_or_spacing: [
-      "overreach",
-      "crowded_contact",
-      "spacing_mismatch",
-      "contact_point_drift",
-    ],
-    compression_or_fold: [
-      "hip_compression_at_depth",
-      "range_too_deep",
-      "joint_angle_closure",
-      "bottom_position_pinch",
-    ],
-    coordination_timing: [
-      "sequence_breakdown",
-      "timing_mismatch",
-      "rhythm_loss",
-      "all_at_once_strategy",
-    ],
-    positional_load: [
-      "sustained_position_load",
-      "static_variation_loss",
-      "posture_duration_sensitivity",
-      "stillness_stiffness",
-    ],
-    overhead_loading: [
-      "shoulder_pinch_top_range",
-      "overhead_range_overreach",
-      "scapular_control_loss",
-      "arm_path_overload",
-    ],
-  };
-  const candidates = (candidateMap[mechanicalEnvironment] ?? [
+  const failureSet = FAILURE_MAP[mechanicalEnvironment] ?? [
     "general_load_shift",
-  ]).map((failure) => ({
+  ];
+  console.log("FAILURE_MAP_SELECTED", {
+    mechanicalEnvironment,
+    candidateFailures: failureSet,
+  });
+  const candidates = failureSet.map((failure) => ({
     failure,
     score: 0,
     evidence: [] as string[],
@@ -2064,16 +2075,22 @@ function resolveDominantFailurePattern({
 
   if (mechanicalEnvironment === "controlled_stability") {
     if (matches(/\blower\b|\bgo lower\b|\btoo low\b|\bdrop\b/)) {
-      addEvidence("range_too_deep", 2, "lowering/range depth language");
+      addEvidence("range_exceeds_control", 2, "lowering/range depth language");
     }
     if (matches(/\barch\b|\barching\b|\bback lifts\b|\blow back lifts\b/)) {
-      addEvidence("low_back_lifting", 3, "arching or low-back lift");
+      addEvidence("range_exceeds_control", 3, "arching or low-back lift");
     }
     if (matches(/\bribs?\b/)) {
-      addEvidence("rib_flare", 2, "rib flare language");
+      addEvidence("ribcage_flare", 2, "rib flare language");
     }
     if (matches(/\bpelvis\b|\bshift\b/)) {
       addEvidence("pelvis_shift", 2, "pelvis shift language");
+    }
+    if (matches(/\bleg\b|\blegs\b|\blimb\b/)) {
+      addEvidence("limb_overload", 2, "limb loading language");
+    }
+    if (matches(/\bbreath\b|\bbreathing\b/)) {
+      addEvidence("breathing_breakdown", 2, "breathing language");
     }
   } else if (mechanicalEnvironment === "extension_distribution") {
     if (
@@ -2087,72 +2104,90 @@ function resolveDominantFailurePattern({
       addEvidence("low_back_dominance", 2, "low-back tightness");
     }
     if (matches(/\blift higher\b|\btoo high\b|\btry to lift up\b|\blifting up\b/)) {
-      addEvidence("over_lifting_range", 2, "lifting range language");
+      addEvidence("range_excess", 2, "lifting range language");
     }
     if (matches(/\bneck\b|\bshoulder\b/)) {
-      addEvidence("neck_shoulder_takeover", 2, "neck or shoulder takeover");
+      addEvidence("neck_overextension", 2, "neck or shoulder takeover");
     }
     if (matches(/\bnot smooth\b|\bdoesn'?t feel smooth\b|\bload\b/)) {
       addEvidence(
-        "poor_extension_distribution",
+        "extension_not_distributed",
         2,
         "distribution or smoothness language",
       );
+    }
+    if (matches(/\bglute\b|\bglutes\b/)) {
+      addEvidence("glute_non_participation", 2, "glute participation language");
     }
   } else if (mechanicalEnvironment === "rotational_power") {
     if (matches(/\bopen early\b|\bturn early\b/)) {
       addEvidence("early_rotation", 2, "early turn/opening language");
     }
-    if (matches(/\bstuck back\b|\bweight back\b/)) {
+    if (matches(/\bstuck back\b|\bweight back\b|\bback foot\b|\bnot transferring\b/)) {
       addEvidence("weight_stuck_back", 2, "weight stuck back language");
     }
-    if (matches(/\breach\b|\breaching\b/)) {
-      addEvidence("overreaching", 2, "reaching language");
+    if (matches(/\bjammed\b|\blate\b/)) {
+      addEvidence("late_contact", 2, "late/jammed contact language");
+    }
+    if (matches(/\breach\b|\breaching\b|\bspacing\b|\btoo far\b|\btoo close\b/)) {
+      addEvidence("spacing_error", 2, "spacing/reaching language");
     }
     if (matches(/\bhips?\b|\btrunk\b|\btiming\b/)) {
-      addEvidence("hip_trunk_timing", 2, "hip/trunk/timing language");
+      addEvidence("sequence_breakdown", 2, "hip/trunk/timing language");
     }
     if (matches(/\bserve\b/) && matches(/\bback\b/)) {
-      addEvidence("hip_trunk_timing", 1, "serve with back signal");
+      addEvidence("sequence_breakdown", 1, "serve with back signal");
+    }
+    if (matches(/\brib\b|\bribcage\b|\bcollapse\b/)) {
+      addEvidence("ribcage_collapse", 2, "ribcage collapse language");
     }
   } else if (mechanicalEnvironment === "strength_loading") {
     if (matches(/\bbrace\b|\bbracing\b|\bloose\b/)) {
-      addEvidence("bracing_loss", 2, "bracing language");
+      addEvidence("bracing_failure", 2, "bracing language");
     }
-    if (matches(/\bhinge\b|\bround\b|\bfold\b/)) {
-      addEvidence("hinge_breakdown", 2, "hinge breakdown language");
+    if (matches(/\btoo low\b|\btoo deep\b|\brange\b|\bdepth\b/)) {
+      addEvidence("depth_exceeds_control", 2, "depth/range language");
     }
-    if (matches(/\bshift\b|\bone side\b|\buneven\b/)) {
-      addEvidence("load_shift", 2, "load shift language");
+    if (matches(/\bjoint\b|\bknee\b|\bhip\b|\bback\b/) && matches(/\bshift\b|\bload\b/)) {
+      addEvidence("joint_load_shift", 2, "joint load shift language");
     }
-    if (matches(/\btoo low\b|\btoo deep\b|\brange\b/)) {
-      addEvidence("range_overreach", 2, "range overreach language");
+    if (matches(/\bweight\b|\bpressure\b|\buneven\b|\bone side\b/)) {
+      addEvidence("weight_distribution_error", 2, "weight distribution language");
+    }
+    if (matches(/\bcompensat\b|\bround\b|\bhinge\b/)) {
+      addEvidence("range_compensation_pattern", 2, "compensation pattern language");
     }
   } else if (mechanicalEnvironment === "locomotion") {
     if (matches(/\bimpact\b|\bpounding\b|\bjarring\b/)) {
-      addEvidence("impact_overload", 2, "impact language");
+      addEvidence("impact_imbalance", 2, "impact language");
     }
     if (matches(/\boverstride\b|\breach\b|\bstride\b/)) {
-      addEvidence("stride_overreach", 2, "stride overreach language");
+      addEvidence("overstriding", 2, "stride overreach language");
     }
     if (matches(/\bpush off\b|\btoe off\b|\bone side\b/)) {
-      addEvidence("push_off_asymmetry", 2, "push-off asymmetry language");
+      addEvidence("push_off_deficit", 2, "push-off asymmetry language");
     }
     if (matches(/\bcadence\b|\brhythm\b|\btempo\b/)) {
-      addEvidence("cadence_breakdown", 2, "cadence language");
+      addEvidence("cadence_issue", 2, "cadence language");
+    }
+    if (matches(/\bhip\b|\bstable\b|\bstability\b/)) {
+      addEvidence("hip_stability_loss", 2, "hip stability language");
     }
   } else if (mechanicalEnvironment === "impact_deceleration") {
-    if (matches(/\blanding\b|\bjump down\b/)) {
-      addEvidence("landing_overload", 2, "landing language");
+    if (matches(/\blanding\b|\bjump down\b|\babsorb\b|\babsorption\b/)) {
+      addEvidence("poor_force_absorption", 2, "landing/absorption language");
     }
-    if (matches(/\bplant\b|\bstopping\b|\bdecelerate\b/)) {
-      addEvidence("plant_deceleration", 2, "plant or deceleration language");
+    if (matches(/\bvalgus\b|\bcollapse\b|\bknee cave\b/)) {
+      addEvidence("valgus_collapse", 2, "valgus/collapse language");
     }
-    if (matches(/\bcutting\b|\bchange direction\b/)) {
-      addEvidence("cutting_control_loss", 2, "cutting/change direction language");
+    if (matches(/\bhip\b|\bcutting\b|\bchange direction\b/)) {
+      addEvidence("hip_control_loss", 2, "hip/cutting control language");
     }
-    if (matches(/\babsorb\b|\babsorption\b/)) {
-      addEvidence("jump_down_absorption", 2, "absorption language");
+    if (matches(/\bstiff\b|\brigid\b/)) {
+      addEvidence("stiff_landing", 2, "stiff landing language");
+    }
+    if (matches(/\basymmetrical\b|\basymmetric\b|\bone side\b|\buneven\b/)) {
+      addEvidence("asymmetrical_loading", 2, "asymmetrical loading language");
     }
   } else if (mechanicalEnvironment === "reach_or_spacing") {
     if (matches(/\breaching\b|\breach\b|\btoo far\b|\btoo far away\b/)) {
@@ -2198,13 +2233,13 @@ function resolveDominantFailurePattern({
       addEvidence("sustained_position_load", 2, "sustained position language");
     }
     if (matches(/\bnot moving\b|\bnot moved for a while\b|\bafter being still\b/)) {
-      addEvidence("static_variation_loss", 2, "lack of variation language");
+      addEvidence("movement_variability_absent", 2, "lack of variation language");
     }
     if (matches(/\bafter sitting\b|\bafter standing\b|\bafter work\b|\bafter sleeping\b/)) {
       addEvidence("posture_duration_sensitivity", 2, "duration sensitivity language");
     }
     if (matches(/\bstiff after sitting\b|\btight after sitting\b|\bwake up stiff\b/)) {
-      addEvidence("stillness_stiffness", 2, "stillness stiffness language");
+      addEvidence("stiffness_accumulation", 2, "stillness stiffness language");
     }
   } else if (mechanicalEnvironment === "overhead_loading") {
     if (matches(/\bfront of (?:my )?shoulder\b|\bshoulder pinch\b|\bpinch\b/)) {
@@ -2219,6 +2254,9 @@ function resolveDominantFailurePattern({
     if (matches(/\bswing hard\b|\barm path\b|\bhit\b/)) {
       addEvidence("arm_path_overload", 2, "arm path or swing force language");
     }
+    if (matches(/\barch\b|\barching\b|\blow back\b|\bribs?\b/)) {
+      addEvidence("compensatory_arch", 2, "compensatory arch language");
+    }
   } else {
     addEvidence("general_load_shift", 1, "fallback mechanical signal");
   }
@@ -2229,9 +2267,10 @@ function resolveDominantFailurePattern({
   const totalScore = candidates.reduce((sum, candidate) => sum + candidate.score, 0);
   const confidence =
     totalScore > 0 ? Number((dominant.score / totalScore).toFixed(2)) : 0;
+  const dominantFailure = dominant.score > 0 ? dominant.failure : "general_load_shift";
 
   return {
-    dominantFailure: dominant.failure,
+    dominantFailure,
     confidence,
     candidates,
   };
@@ -3727,7 +3766,7 @@ function completeArcFields({
 
   if (
     isDriveServeLowBack &&
-    failureResolution.dominantFailure === "hip_trunk_timing"
+    failureResolution.dominantFailure === "sequence_breakdown"
   ) {
     console.log("ARC_DETERMINISTIC_BRANCH_ACTIVE", {
       activityType,
@@ -3757,7 +3796,7 @@ function completeArcFields({
 
   if (
     env === "controlled_stability" &&
-    failureResolution.dominantFailure === "low_back_lifting"
+    failureResolution.dominantFailure === "range_exceeds_control"
   ) {
     applyControlledStabilityArcRepair(arcResult);
     return arcResult;
