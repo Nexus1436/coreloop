@@ -1673,6 +1673,136 @@ function classifyMechanicalEnvironment(
   return "general";
 }
 
+type MechanicalEnvironmentCandidate = {
+  environment: string;
+  score: number;
+  evidence: string[];
+};
+
+function resolveMechanicalEnvironment({
+  userText,
+  activityType,
+  movementContext,
+  bodyRegion,
+}: {
+  userText: string;
+  activityType?: string | null;
+  movementContext?: string | null;
+  bodyRegion?: string | null;
+}): {
+  mechanicalEnvironment: string;
+  confidence: number;
+  candidates: MechanicalEnvironmentCandidate[];
+} {
+  const text = (userText || "").toLowerCase();
+  const activity = (activityType || "").toLowerCase();
+  const movement = (movementContext || "").toLowerCase();
+  const region = (bodyRegion || "").toLowerCase();
+  const signal = `${text} ${activity} ${movement} ${region}`;
+  const candidates: MechanicalEnvironmentCandidate[] = [
+    "rotational_power",
+    "controlled_stability",
+    "extension_distribution",
+    "strength_loading",
+    "locomotion",
+    "impact_deceleration",
+    "overhead_loading",
+    "general",
+  ].map((environment) => ({
+    environment,
+    score: 0,
+    evidence: [],
+  }));
+  const addEvidence = (
+    environment: string,
+    score: number,
+    evidence: string,
+  ) => {
+    const candidate = candidates.find((item) => item.environment === environment);
+    if (!candidate) return;
+    candidate.score += score;
+    candidate.evidence.push(evidence);
+  };
+  const matches = (pattern: RegExp) => pattern.test(signal);
+  const hasShoulderRegion = /\bshoulder\b|\barm\b/.test(region);
+  const hasOverheadSignal =
+    matches(/\boverhead\b|\bspike\b|\breach high\b|\breaching high\b|\bhit high\b/) ||
+    (matches(/\bserve\b/) && matches(/\bshoulder\b|\barm\b/));
+
+  if (
+    matches(
+      /\boverhead\b|\bspike\b|\breach high\b|\breaching high\b|\bhit high\b|\bswing hard\b|\bfront of shoulder\b|\bshoulder pinch\b|\bshoulder\b/,
+    )
+  ) {
+    addEvidence("overhead_loading", 3, "overhead or shoulder loading signal");
+  }
+  if ((hasShoulderRegion || matches(/\bshoulder\b/)) && hasOverheadSignal) {
+    addEvidence("overhead_loading", 5, "shoulder region with overhead reach");
+  }
+
+  if (
+    matches(
+      /\brotate\b|\brotation\b|\bturn\b|\bswing\b|\bserve\b|\bdrive serve\b|\bthrow\b|\bhit\b/,
+    )
+  ) {
+    addEvidence("rotational_power", 2, "rotation/swing/serve language");
+  }
+  if (matches(/\bdrive serve\b/)) {
+    addEvidence("rotational_power", 2, "drive serve signal");
+  }
+
+  if (
+    matches(
+      /\bon my back\b|\blying\b|\bsupine\b|\breformer\b|\bleg circles?\b|\blegs? lower\b|\blower my legs\b|\barch\b|\bribs?\b|\bpelvis\b/,
+    )
+  ) {
+    addEvidence("controlled_stability", 3, "supine control signal");
+  }
+
+  if (
+    matches(
+      /\bswan dive\b|\bswan\b|\bback extension\b|\bprone\b|\blift chest\b|\blifting up\b|\bextension\b|\blower back taking over\b|\bmostly in my lower back\b/,
+    )
+  ) {
+    addEvidence("extension_distribution", 3, "extension distribution signal");
+  }
+
+  if (
+    matches(
+      /\bsquat\b|\bdeadlift\b|\bhinge\b|\bpress\b|\bpull\b|\bcarry\b|\bloaded\b|\bweight\b/,
+    )
+  ) {
+    addEvidence("strength_loading", 3, "strength loading signal");
+  }
+
+  if (matches(/\brunning\b|\bwalking\b|\bjogging\b|\bstairs\b|\bstride\b/)) {
+    addEvidence("locomotion", 3, "locomotion signal");
+  }
+
+  if (
+    matches(
+      /\blanding\b|\bcutting\b|\bstopping\b|\bchange direction\b|\bjump down\b|\bdecelerate\b|\bplant\b/,
+    )
+  ) {
+    addEvidence("impact_deceleration", 3, "impact or deceleration signal");
+  }
+
+  addEvidence("general", 1, "fallback environment");
+
+  const dominant = candidates.reduce((best, candidate) =>
+    candidate.score > best.score ? candidate : best,
+  );
+  const totalScore = candidates.reduce((sum, candidate) => sum + candidate.score, 0);
+  const confidence =
+    totalScore > 0 ? Number((dominant.score / totalScore).toFixed(2)) : 0;
+
+  return {
+    mechanicalEnvironment: dominant.environment,
+    confidence,
+    candidates,
+  };
+}
+
 function classifyMovementFamily(
   userText: string,
   activityType?: string | null,
@@ -1685,6 +1815,10 @@ function classifyMovementFamily(
 
   if (/\bswan dive\b|\bswan\b/.test(signal)) {
     return "swan_dive";
+  }
+
+  if (/\boverhead spike\b|\bspike\b/.test(signal)) {
+    return "overhead_spike";
   }
 
   if (
@@ -1732,6 +1866,9 @@ function deriveSportDomainForAnalytics(
   const signal = `${userText || ""} ${activityType || ""}`.toLowerCase();
 
   if (/\bpilates\b|\breformer\b/.test(signal)) return "Pilates";
+  if (/\bvolleyball\b|\boverhead spike\b|\bspike\b/.test(signal)) {
+    return "volleyball";
+  }
   if (/\bbasketball\b|\blayup\b/.test(signal)) return "basketball";
   if (/\bracquetball\b/.test(signal)) return "racquetball";
   if (/\bgolf\b/.test(signal)) return "golf";
@@ -1750,6 +1887,7 @@ function deriveActivityMovementForAnalytics(
   const signal = `${userText || ""} ${movementContext || ""}`.toLowerCase();
 
   if (/\bswan dive\b|\bswan\b/.test(signal)) return "Swan Dive";
+  if (/\boverhead spike\b|\bspike\b/.test(signal)) return "overhead spike";
   if (/\blayup\b/.test(signal)) return "layup";
   if (/\bleg circles?\b/.test(signal)) return "Leg circles";
   if (/\bshoulder bridge\b/.test(signal)) return "Shoulder bridge";
@@ -1820,6 +1958,12 @@ function resolveDominantFailurePattern({
       "stride_overreach",
       "push_off_asymmetry",
       "cadence_breakdown",
+    ],
+    overhead_loading: [
+      "shoulder_pinch_top_range",
+      "overhead_range_overreach",
+      "scapular_control_loss",
+      "arm_path_overload",
     ],
   };
   const candidates = (candidateMap[mechanicalEnvironment] ?? [
@@ -1915,6 +2059,19 @@ function resolveDominantFailurePattern({
     }
     if (matches(/\bcadence\b|\brhythm\b|\btempo\b/)) {
       addEvidence("cadence_breakdown", 2, "cadence language");
+    }
+  } else if (mechanicalEnvironment === "overhead_loading") {
+    if (matches(/\bfront of (?:my )?shoulder\b|\bshoulder pinch\b|\bpinch\b/)) {
+      addEvidence("shoulder_pinch_top_range", 3, "shoulder pinch language");
+    }
+    if (matches(/\boverhead\b|\breach high\b|\breaching high\b|\bhit high\b|\bspike\b/)) {
+      addEvidence("overhead_range_overreach", 2, "overhead reach language");
+    }
+    if (matches(/\bshoulder blade\b|\bscapula\b|\bscapular\b/)) {
+      addEvidence("scapular_control_loss", 2, "shoulder blade control language");
+    }
+    if (matches(/\bswing hard\b|\barm path\b|\bhit\b/)) {
+      addEvidence("arm_path_overload", 2, "arm path or swing force language");
     }
   } else {
     addEvidence("general_load_shift", 1, "fallback mechanical signal");
@@ -3201,6 +3358,8 @@ function hasRotationalArcTemplate(value: string | null | undefined): boolean {
   return (
     /\bdrive[-\s]?serve\b/i.test(text) ||
     /\bturn from (?:your )?hips\b/i.test(text) ||
+    /\bstart from (?:your )?hips\b/i.test(text) ||
+    /\bhip turn\b/i.test(text) ||
     /\bcore engagement\b/i.test(text) ||
     /\bfocus on stability\b/i.test(text) ||
     /\bstart (?:the )?movement from (?:your )?hips before (?:your )?trunk moves\b/i.test(
@@ -3253,6 +3412,28 @@ function applyExtensionDistributionArcRepair(
     "Do 3 slow Swan Dive lifts and only lift as high as you can without the lower-back tightness increasing. Let me know if the tightness changes.";
 }
 
+function applyOverheadLoadingArcRepair(
+  arcResult: {
+    hypothesis: string | null;
+    interpretationCorrection: string | null;
+    failurePrediction: string | null;
+    singleLever: string | null;
+    adjustment: string | null;
+    currentTest: string | null;
+  },
+): void {
+  arcResult.interpretationCorrection =
+    "As you reach high and swing hard, the shoulder is getting loaded at the top of the motion instead of the force staying controlled through the shoulder blade and arm path.";
+  arcResult.failurePrediction =
+    "If that stays the same, the front of the shoulder will keep getting pinched whenever you reach high and swing hard.";
+  arcResult.singleLever =
+    "keep the spike motion below the point where the front of the shoulder pinches";
+  arcResult.adjustment =
+    "Reduce the height and force of the overhead spike motion so the front of the shoulder does not pinch.";
+  arcResult.currentTest =
+    "Do 3 slow overhead spike motions at partial reach. Stop before the front of the shoulder pinches. Let me know if the pinch changes.";
+}
+
 function completeArcFields({
   hypothesis,
   interpretationCorrection,
@@ -3295,7 +3476,13 @@ function completeArcFields({
   const activity = normalizeCaseKey(activityType);
   const movement = normalizeCaseKey(movementContext);
   const region = normalizeBodyRegion(bodyRegion);
-  const env = classifyMechanicalEnvironment(userText, activityType, movementContext);
+  const envResolution = resolveMechanicalEnvironment({
+    userText,
+    activityType,
+    movementContext,
+    bodyRegion,
+  });
+  const env = envResolution.mechanicalEnvironment;
   const movementFamily = classifyMovementFamily(
     userText,
     activityType,
@@ -3311,6 +3498,14 @@ function completeArcFields({
   console.log("ARC_ENV_CLASSIFICATION", {
     env,
     features: extractMechanicalFeatures(userText, activityType, movementContext),
+    activityType,
+    movementContext,
+    bodyRegion,
+  });
+  console.log("MECHANICAL_ENVIRONMENT_RESOLUTION", {
+    mechanicalEnvironment: env,
+    confidence: envResolution.confidence,
+    candidates: envResolution.candidates,
     activityType,
     movementContext,
     bodyRegion,
@@ -3376,6 +3571,11 @@ function completeArcFields({
     failureResolution.dominantFailure === "low_back_lifting"
   ) {
     applyControlledStabilityArcRepair(arcResult);
+    return arcResult;
+  }
+
+  if (env === "overhead_loading") {
+    applyOverheadLoadingArcRepair(arcResult);
     return arcResult;
   }
 
@@ -4265,6 +4465,12 @@ function normalizeInternalCaseUpdate(
     userText,
     normalizedMovementContext,
   );
+  console.log("SPORT_DOMAIN_EXTRACTION", {
+    sportDomain,
+    activityMovement,
+    activityType: normalizedActivityType,
+    movementContext: normalizedMovementContext,
+  });
 
   const update: InternalCaseUpdate = {
     signal:
