@@ -7108,6 +7108,9 @@ ${memoryBlock}
         | undefined;
       let latestReasoningSnapshot:
         | {
+            movementFamily: string | null;
+            mechanicalEnvironment: string | null;
+            dominantFailure: string | null;
             activeLever: string | null;
             activeTest: string | null;
           }
@@ -7202,6 +7205,10 @@ ${memoryBlock}
 
           [latestReasoningSnapshot] = await db
             .select({
+              movementFamily: caseReasoningSnapshots.movementFamily,
+              mechanicalEnvironment:
+                caseReasoningSnapshots.mechanicalEnvironment,
+              dominantFailure: caseReasoningSnapshots.dominantFailure,
               activeLever: caseReasoningSnapshots.activeLever,
               activeTest: caseReasoningSnapshots.activeTest,
             })
@@ -7360,24 +7367,45 @@ ${memoryBlock}
       const snapshotActiveTest = normalizePreviewValue(
         latestReasoningSnapshot?.activeTest,
       );
+      const snapshotMechanicalEnvironment = normalizePreviewValue(
+        latestReasoningSnapshot?.mechanicalEnvironment,
+      );
+      const snapshotDominantFailure = normalizePreviewValue(
+        latestReasoningSnapshot?.dominantFailure,
+      );
+      const snapshotMovementFamily = normalizePreviewValue(
+        latestReasoningSnapshot?.movementFamily,
+      );
+      const snapshotInterpretationCorrection: string | null = null;
+      const snapshotFailurePrediction: string | null = null;
       const latestAdjustmentCue = normalizePreviewValue(latestAdjustment?.cue);
       const adjustmentFallback = pickDashboardDisplayValue([
         latestAdjustment?.cue,
         latestAdjustment?.mechanicalFocus,
       ]);
-      const currentTest = extractPreviewSnippet(
+      const activeTest = extractPreviewSnippet(
         snapshotActiveTest ?? latestAdjustmentCue,
         220,
       );
-      const adjustment = extractPreviewSnippet(
+      const activeLever = extractPreviewSnippet(
         snapshotActiveLever ?? adjustmentFallback,
         220,
       );
-      const nextMove = currentTest;
-      const lastShift = extractPreviewSnippet(
-        snapshotActiveLever ?? latestAdjustmentCue,
+      const interpretationCorrection = extractPreviewSnippet(
+        snapshotInterpretationCorrection,
         220,
       );
+      const failurePrediction = extractPreviewSnippet(
+        snapshotFailurePrediction,
+        220,
+      );
+      const mechanicalEnvironment = snapshotMechanicalEnvironment;
+      const dominantFailure = snapshotDominantFailure;
+      const movementFamily = snapshotMovementFamily;
+      const currentTest = activeTest;
+      const adjustment = activeLever;
+      const nextMove = activeTest;
+      const lastShift = interpretationCorrection;
       const lastCaseReviewSnippet = extractPreviewSnippet(
         latestCaseReview?.reviewText,
         220,
@@ -7385,13 +7413,28 @@ ${memoryBlock}
 
       console.log("DASHBOARD_FIELD_MAPPING", {
         caseId: selectedCase?.id ?? null,
+        caseType: selectedCase ? selectedCase.caseType ?? "mechanical" : null,
+        snapshotInterpretationCorrection: clampText(
+          snapshotInterpretationCorrection ?? "",
+          220,
+        ),
+        snapshotFailurePrediction: clampText(
+          snapshotFailurePrediction ?? "",
+          220,
+        ),
         snapshotActiveLever: clampText(snapshotActiveLever ?? "", 220),
         snapshotActiveTest: clampText(snapshotActiveTest ?? "", 220),
-        latestAdjustmentCue: clampText(latestAdjustmentCue ?? "", 220),
-        finalCurrentTest: clampText(currentTest ?? "", 220),
-        finalAdjustment: clampText(adjustment ?? "", 220),
-        finalNextMove: clampText(nextMove ?? "", 220),
-        finalLastShift: clampText(lastShift ?? "", 220),
+        finalInterpretationCorrection: clampText(
+          interpretationCorrection ?? "",
+          220,
+        ),
+        finalFailurePrediction: clampText(failurePrediction ?? "", 220),
+        finalActiveLever: clampText(activeLever ?? "", 220),
+        finalActiveTest: clampText(activeTest ?? "", 220),
+        legacyLastShift: clampText(lastShift ?? "", 220),
+        legacyAdjustment: clampText(adjustment ?? "", 220),
+        legacyNextMove: clampText(nextMove ?? "", 220),
+        legacyCurrentTest: clampText(currentTest ?? "", 220),
       });
 
       console.log("DASHBOARD_CASE_STATE_READ", {
@@ -7406,11 +7449,19 @@ ${memoryBlock}
       res.json({
         activeCaseTitle,
         caseType: selectedCase ? selectedCase.caseType ?? "mechanical" : null,
+        currentState: investigationState,
         investigationState,
         signal: isSelectedNonMechanicalCase
           ? latestNonMechanicalSignal?.rawSignal ?? null
           : latestSignal?.description ?? null,
         hypothesis: latestHypothesis?.hypothesis ?? null,
+        interpretationCorrection,
+        failurePrediction,
+        activeLever,
+        activeTest,
+        mechanicalEnvironment,
+        dominantFailure,
+        movementFamily,
         adjustment,
         currentMechanism,
         currentTest,
