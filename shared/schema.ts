@@ -202,43 +202,6 @@ export const sessionSignals = pgTable(
 );
 
 /* =====================================================
-   NON-MECHANICAL SIGNALS
-===================================================== */
-
-export const nonMechanicalSignals = pgTable(
-  "non_mechanical_signals",
-  {
-    id: serial("id").primaryKey(),
-
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-
-    conversationId: integer("conversation_id").references(
-      () => conversations.id,
-      { onDelete: "cascade" },
-    ),
-
-    category: text("category").notNull(),
-    rawSignal: text("raw_signal").notNull(),
-    safetyRelevant: boolean("safety_relevant").default(false).notNull(),
-    responseType: text("response_type"),
-
-    createdAt: timestamp("created_at")
-      .default(sql`CURRENT_TIMESTAMP`)
-      .notNull(),
-  },
-  (table) => ({
-    nonMechanicalSignalUserIdx: index(
-      "non_mechanical_signals_user_idx",
-    ).on(table.userId),
-    nonMechanicalSignalConversationIdx: index(
-      "non_mechanical_signals_conversation_idx",
-    ).on(table.conversationId),
-  }),
-);
-
-/* =====================================================
    CASES
 ===================================================== */
 
@@ -258,6 +221,7 @@ export const cases = pgTable(
 
     movementContext: text("movement_context"),
     activityType: text("activity_type"),
+    caseType: text("case_type").default("mechanical").notNull(),
 
     status: text("status").default("open").notNull(),
 
@@ -271,6 +235,50 @@ export const cases = pgTable(
   },
   (table) => ({
     caseUserIdx: index("cases_user_idx").on(table.userId),
+  }),
+);
+
+/* =====================================================
+   NON-MECHANICAL SIGNALS
+===================================================== */
+
+export const nonMechanicalSignals = pgTable(
+  "non_mechanical_signals",
+  {
+    id: serial("id").primaryKey(),
+
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
+    conversationId: integer("conversation_id").references(
+      () => conversations.id,
+      { onDelete: "cascade" },
+    ),
+
+    caseId: integer("case_id").references(() => cases.id, {
+      onDelete: "cascade",
+    }),
+
+    category: text("category").notNull(),
+    rawSignal: text("raw_signal").notNull(),
+    safetyRelevant: boolean("safety_relevant").default(false).notNull(),
+    responseType: text("response_type"),
+
+    createdAt: timestamp("created_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    nonMechanicalSignalUserIdx: index(
+      "non_mechanical_signals_user_idx",
+    ).on(table.userId),
+    nonMechanicalSignalConversationIdx: index(
+      "non_mechanical_signals_conversation_idx",
+    ).on(table.conversationId),
+    nonMechanicalSignalCaseIdx: index(
+      "non_mechanical_signals_case_idx",
+    ).on(table.caseId),
   }),
 );
 

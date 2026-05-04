@@ -1486,26 +1486,46 @@ function buildNonMechanicalSignalResponse(
     classification.category === "appetite_change" ||
     classification.category === "taste_change"
   ) {
-    return "Loss of appetite and taste changes are not something I’d treat as a movement mechanics issue. Because that can come from medical, medication, nutrition, dental, or illness-related causes, it’s worth bringing up with a doctor, especially if it persists, is new, or comes with weight loss, weakness, dizziness, fever, or other changes.";
+    return "Loss of appetite and taste changes aren’t something I’d treat as a movement mechanics issue. Because that can come from medical, medication, nutrition, dental, or illness-related causes, it’s worth bringing up with a doctor, especially if it’s new or persistent.\n\nHow long has this been going on, and have you noticed any weight loss, weakness, dizziness, fever, or recent medication changes?";
   }
 
   if (classification.category === "dizziness") {
-    return "Dizziness is not something I’d treat as a movement mechanics issue from here. If it’s new, recurring, or coming with fainting, chest pain, weakness, confusion, or trouble breathing, it’s worth getting checked promptly by someone who can evaluate you directly.";
+    return "Dizziness is not something I’d treat as a movement mechanics issue from here. If it’s new, recurring, or coming with fainting, chest pain, weakness, confusion, or trouble breathing, it’s worth getting checked promptly by someone who can evaluate you directly.\n\nHow long has it been happening, and does it come with fainting, chest pain, weakness, confusion, or trouble breathing?";
   }
 
   if (classification.category === "medication_effect") {
-    return "That sounds more like a possible medication or health-context signal than a movement mechanics issue. I’d bring it up with the clinician or pharmacist connected to that medication, especially if it started after a dose or medication change.";
+    return "That sounds more like a possible medication or health-context signal than a movement mechanics issue. I’d bring it up with the clinician or pharmacist connected to that medication, especially if it started after a dose or medication change.\n\nDid this start after a new medication, a changed dose, or stopping something?";
   }
 
   if (classification.safetyRelevant) {
-    return "That does not sound like something I should turn into a movement mechanics investigation. Since it may be medical or systemic rather than mechanical, it’s worth getting it checked by someone who can evaluate you directly, especially if it is new, persistent, or changing.";
+    return "That does not sound like something I should turn into a movement mechanics investigation. Since it may be medical or systemic rather than mechanical, it’s worth getting it checked by someone who can evaluate you directly, especially if it is new, persistent, or changing.\n\nHow long has this been going on, and has anything else changed with it?";
   }
 
   if (classification.category === "sleep" || classification.category === "fatigue") {
-    return "That sounds more like a general health-context signal than a movement mechanics issue. I’d track when it started and how often it’s happening, and if it keeps showing up or starts affecting your day, it’s worth bringing up with a doctor or clinician.";
+    return "That sounds more like a general health-context signal than a movement mechanics issue. I’d track when it started and how often it’s happening, and if it keeps showing up or starts affecting your day, it’s worth bringing up with a doctor or clinician.\n\nHow long has this pattern been going on, and is it affecting your normal day?";
   }
 
-  return "That does not sound like a mechanical movement signal, so I would not turn it into a correction or test. I’d track when it shows up and bring it to someone who can evaluate the broader health context if it persists or changes.";
+  return "That does not sound like a mechanical movement signal, so I would not turn it into a correction or test. I’d track when it shows up and bring it to someone who can evaluate the broader health context if it persists or changes.\n\nHow long has this been happening, and has it changed recently?";
+}
+
+function formatNonMechanicalCategoryTitle(
+  category: string | null | undefined,
+): string {
+  const normalized = normalizeCaseKey(category);
+  const titles: Record<string, string> = {
+    appetite_change: "Appetite Change",
+    fatigue: "Fatigue",
+    sleep: "Sleep",
+    dizziness: "Dizziness",
+    illness: "Illness",
+    mood: "Mood",
+    hydration: "Hydration",
+    medication_effect: "Medication Effect",
+    taste_change: "Taste Change",
+    general_health: "General Health Signal",
+  };
+
+  return titles[normalized] ?? "General Health Signal";
 }
 
 function normalizeOptionalLabel(value: string | null | undefined): string {
@@ -1632,6 +1652,7 @@ type ResolvedCaseRow = {
   conversationId: number | null;
   movementContext: string | null;
   activityType: string | null;
+  caseType?: string | null;
   status: string | null;
 };
 
@@ -1646,11 +1667,16 @@ async function getConversationOpenCase(
       conversationId: cases.conversationId,
       movementContext: cases.movementContext,
       activityType: cases.activityType,
+      caseType: cases.caseType,
       status: cases.status,
     })
     .from(cases)
     .where(
-      and(eq(cases.userId, userId), eq(cases.conversationId, conversationId)),
+      and(
+        eq(cases.userId, userId),
+        eq(cases.conversationId, conversationId),
+        ne(cases.caseType, "non_mechanical"),
+      ),
     )
     .orderBy(desc(cases.updatedAt), desc(cases.id))
     .limit(1);
@@ -1697,6 +1723,7 @@ async function resolveReturnToExistingCase({
       conversationId: cases.conversationId,
       movementContext: cases.movementContext,
       activityType: cases.activityType,
+      caseType: cases.caseType,
       status: cases.status,
     })
     .from(cases)
@@ -2800,6 +2827,7 @@ async function resolveCaseReviewTargetCase({
       conversationId: cases.conversationId,
       movementContext: cases.movementContext,
       activityType: cases.activityType,
+      caseType: cases.caseType,
       status: cases.status,
     })
     .from(cases)
@@ -2818,6 +2846,7 @@ async function resolveCaseReviewTargetCase({
       conversationId: cases.conversationId,
       movementContext: cases.movementContext,
       activityType: cases.activityType,
+      caseType: cases.caseType,
       status: cases.status,
     })
     .from(cases)
@@ -6943,6 +6972,7 @@ ${memoryBlock}
           id: cases.id,
           movementContext: cases.movementContext,
           activityType: cases.activityType,
+          caseType: cases.caseType,
           status: cases.status,
           updatedAt: cases.updatedAt,
         })
@@ -6952,6 +6982,8 @@ ${memoryBlock}
         .limit(12);
 
       const meaningfulCases = recentCases.filter((row) => {
+        if (row.caseType === "non_mechanical") return true;
+
         const movement = normalizeOptionalLabel(row.movementContext);
         const activity = normalizeOptionalLabel(row.activityType);
 
@@ -7000,59 +7032,97 @@ ${memoryBlock}
             activityType: string | null;
           }
         | undefined;
+      let latestNonMechanicalSignal:
+        | {
+            caseId: number | null;
+            category: string | null;
+            rawSignal: string | null;
+            safetyRelevant: boolean | null;
+          }
+        | undefined;
 
       if (selectedCase) {
-        latestAdjustment =
-          (await getLatestValidAdjustmentForCase(selectedCase.id)) ?? undefined;
+        const isNonMechanicalCase = selectedCase.caseType === "non_mechanical";
 
-        [latestHypothesis] = await db
-          .select({
-            caseId: caseHypotheses.caseId,
-            hypothesis: caseHypotheses.hypothesis,
-          })
-          .from(caseHypotheses)
-          .where(eq(caseHypotheses.caseId, selectedCase.id))
-          .orderBy(desc(caseHypotheses.id))
-          .limit(1);
+        if (isNonMechanicalCase) {
+          [latestNonMechanicalSignal] = await db
+            .select({
+              caseId: nonMechanicalSignals.caseId,
+              category: nonMechanicalSignals.category,
+              rawSignal: nonMechanicalSignals.rawSignal,
+              safetyRelevant: nonMechanicalSignals.safetyRelevant,
+            })
+            .from(nonMechanicalSignals)
+            .where(eq(nonMechanicalSignals.caseId, selectedCase.id))
+            .orderBy(desc(nonMechanicalSignals.id))
+            .limit(1);
+        } else {
+          latestAdjustment =
+            (await getLatestValidAdjustmentForCase(selectedCase.id)) ??
+            undefined;
 
-        [latestOutcome] = await db
-          .select({
-            caseId: caseOutcomes.caseId,
-            userFeedback: caseOutcomes.userFeedback,
-          })
-          .from(caseOutcomes)
-          .innerJoin(
-            caseAdjustments,
-            eq(caseOutcomes.adjustmentId, caseAdjustments.id),
-          )
-          .innerJoin(
-            caseHypotheses,
-            eq(caseAdjustments.hypothesisId, caseHypotheses.id),
-          )
-          .where(eq(caseOutcomes.caseId, selectedCase.id))
-          .orderBy(desc(caseOutcomes.id))
-          .limit(1);
+          [latestHypothesis] = await db
+            .select({
+              caseId: caseHypotheses.caseId,
+              hypothesis: caseHypotheses.hypothesis,
+            })
+            .from(caseHypotheses)
+            .where(eq(caseHypotheses.caseId, selectedCase.id))
+            .orderBy(desc(caseHypotheses.id))
+            .limit(1);
 
-        [latestSignal] = await db
-          .select({
-            caseId: caseSignals.caseId,
-            description: caseSignals.description,
-            bodyRegion: caseSignals.bodyRegion,
-            movementContext: caseSignals.movementContext,
-            activityType: caseSignals.activityType,
-          })
-          .from(caseSignals)
-          .where(eq(caseSignals.caseId, selectedCase.id))
-          .orderBy(desc(caseSignals.id))
-          .limit(1);
+          [latestOutcome] = await db
+            .select({
+              caseId: caseOutcomes.caseId,
+              userFeedback: caseOutcomes.userFeedback,
+            })
+            .from(caseOutcomes)
+            .innerJoin(
+              caseAdjustments,
+              eq(caseOutcomes.adjustmentId, caseAdjustments.id),
+            )
+            .innerJoin(
+              caseHypotheses,
+              eq(caseAdjustments.hypothesisId, caseHypotheses.id),
+            )
+            .where(eq(caseOutcomes.caseId, selectedCase.id))
+            .orderBy(desc(caseOutcomes.id))
+            .limit(1);
+
+          [latestSignal] = await db
+            .select({
+              caseId: caseSignals.caseId,
+              description: caseSignals.description,
+              bodyRegion: caseSignals.bodyRegion,
+              movementContext: caseSignals.movementContext,
+              activityType: caseSignals.activityType,
+            })
+            .from(caseSignals)
+            .where(eq(caseSignals.caseId, selectedCase.id))
+            .orderBy(desc(caseSignals.id))
+            .limit(1);
+        }
 
         console.log("DASHBOARD_SELECTED_CASE", {
           userId,
           selectedCaseId: selectedCase.id,
           movementContext: selectedCase.movementContext,
           activityType: selectedCase.activityType,
+          caseType: selectedCase.caseType,
           status: selectedCase.status,
         });
+        if (isNonMechanicalCase) {
+          console.log("DASHBOARD_NON_MECHANICAL_SIGNAL", {
+            selectedCaseId: selectedCase.id,
+            signalCaseId: latestNonMechanicalSignal?.caseId ?? null,
+            category: latestNonMechanicalSignal?.category ?? null,
+            safetyRelevant: latestNonMechanicalSignal?.safetyRelevant ?? null,
+            rawSignalPreview: clampText(
+              latestNonMechanicalSignal?.rawSignal ?? "",
+              160,
+            ),
+          });
+        }
         console.log("DASHBOARD_LATEST_SIGNAL", {
           selectedCaseId: selectedCase.id,
           signalCaseId: latestSignal?.caseId ?? null,
@@ -7133,11 +7203,15 @@ ${memoryBlock}
         count: caseReviewsList.length,
       });
 
-      const activeCaseTitle = buildActiveCaseTitle(
-        selectedCase?.movementContext,
-        selectedCase?.activityType,
-        latestSignal?.bodyRegion,
-      );
+      const isSelectedNonMechanicalCase =
+        selectedCase?.caseType === "non_mechanical";
+      const activeCaseTitle = isSelectedNonMechanicalCase
+        ? formatNonMechanicalCategoryTitle(latestNonMechanicalSignal?.category)
+        : buildActiveCaseTitle(
+            selectedCase?.movementContext,
+            selectedCase?.activityType,
+            latestSignal?.bodyRegion,
+          );
       const investigationState = !selectedCase
         ? null
         : String(selectedCase.status ?? "")
@@ -7235,7 +7309,9 @@ ${memoryBlock}
       res.json({
         activeCaseTitle,
         investigationState,
-        signal: latestSignal?.description ?? null,
+        signal: isSelectedNonMechanicalCase
+          ? latestNonMechanicalSignal?.rawSignal ?? null
+          : latestSignal?.description ?? null,
         hypothesis: latestHypothesis?.hypothesis ?? null,
         adjustment: pickDashboardDisplayValue([
           latestAdjustment?.cue,
@@ -7528,11 +7604,29 @@ ${memoryBlock}
           : "non_mechanical_context_tracking";
         const finalNonMechanicalText =
           buildNonMechanicalSignalResponse(signalLane);
+        const [nonMechanicalCase] = await db
+          .insert(cases)
+          .values({
+            userId,
+            conversationId: convoId,
+            movementContext: null,
+            activityType: null,
+            caseType: "non_mechanical",
+            status: "open",
+          })
+          .returning();
+
+        console.log("NON_MECHANICAL_CASE_CREATED", {
+          caseId: nonMechanicalCase.id,
+          category: signalLane.category ?? "general_health",
+          safetyRelevant: Boolean(signalLane.safetyRelevant),
+        });
 
         try {
           await db.insert(nonMechanicalSignals).values({
             userId,
             conversationId: convoId,
+            caseId: nonMechanicalCase.id,
             category: signalLane.category ?? "general_health",
             rawSignal: userText,
             safetyRelevant: Boolean(signalLane.safetyRelevant),
@@ -7541,6 +7635,7 @@ ${memoryBlock}
           console.log("NON_MECHANICAL_SIGNAL_WRITE", {
             userId,
             conversationId: convoId,
+            caseId: nonMechanicalCase.id,
             category: signalLane.category ?? "general_health",
             safetyRelevant: Boolean(signalLane.safetyRelevant),
             responseType: nonMechanicalResponseType,
@@ -7549,6 +7644,7 @@ ${memoryBlock}
           console.log("NON_MECHANICAL_SIGNAL_PERSISTENCE_SKIPPED", {
             userId,
             conversationId: convoId,
+            caseId: nonMechanicalCase.id,
             category: signalLane.category ?? "general_health",
             reason: "insert_failed",
             error: formatUnknownError(err),
@@ -7557,6 +7653,7 @@ ${memoryBlock}
 
         logLayer1Trace(layer1TraceId, "layer1_skipped", {
           conversationId: convoId,
+          caseId: nonMechanicalCase.id,
           reason: "non_mechanical_signal_lane",
           signalCategory: signalLane.category ?? null,
           safetyRelevant: Boolean(signalLane.safetyRelevant),
