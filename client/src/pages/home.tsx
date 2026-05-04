@@ -44,10 +44,20 @@ export type ConversationThread = {
 };
 
 type DashboardData = {
+  caseType: string | null;
   activeCaseTitle: string | null;
+  currentState: string | null;
   investigationState: string | null;
   signal: string | null;
   hypothesis: string | null;
+  interpretationCorrection: string | null;
+  failurePrediction: string | null;
+  activeLever: string | null;
+  activeTest: string | null;
+  nextMove: string | null;
+  mechanicalEnvironment: string | null;
+  dominantFailure: string | null;
+  movementFamily: string | null;
   adjustment: string | null;
   currentMechanism: string | null;
   currentTest: string | null;
@@ -85,10 +95,20 @@ const defaultSettings: InterloopSettingsValues = {
 };
 
 const defaultDashboardData: DashboardData = {
+  caseType: null,
   activeCaseTitle: null,
+  currentState: null,
   investigationState: null,
   signal: null,
   hypothesis: null,
+  interpretationCorrection: null,
+  failurePrediction: null,
+  activeLever: null,
+  activeTest: null,
+  nextMove: null,
+  mechanicalEnvironment: null,
+  dominantFailure: null,
+  movementFamily: null,
   adjustment: null,
   currentMechanism: null,
   currentTest: null,
@@ -594,29 +614,53 @@ export default function Home() {
         ["evidence", "hypothesis"],
       ]);
       const adjustment = getNestedString(data, [
+        ["activeLever"],
         ["adjustment"],
-        ["nextMove"],
         ["currentCase", "adjustment"],
-        ["currentCase", "nextMove"],
         ["currentCase", "latestAdjustment"],
         ["currentCase", "evidence", "adjustment"],
         ["activeCase", "adjustment"],
-        ["activeCase", "nextMove"],
         ["activeCase", "latestAdjustment"],
         ["activeCase", "evidence", "adjustment"],
         ["caseEvidence", "adjustment"],
         ["evidence", "adjustment"],
       ]);
+      const activeTest = getNestedString(data, [["activeTest"]]);
+      const activeLever = getNestedString(data, [["activeLever"]]);
+      const interpretationCorrection = getNestedString(data, [
+        ["interpretationCorrection"],
+      ]);
+      const nextMove = getNestedString(data, [
+        ["activeTest"],
+        ["nextMove"],
+        ["currentTest"],
+      ]);
+      const lastShift = getNestedString(data, [
+        ["interpretationCorrection"],
+        ["lastShift"],
+      ]);
 
       setDashboardData({
+        caseType: data?.caseType ?? null,
         activeCaseTitle: data?.activeCaseTitle ?? null,
+        currentState: data?.currentState ?? null,
         investigationState: data?.investigationState ?? null,
         signal,
         hypothesis,
-        adjustment,
+        interpretationCorrection,
+        failurePrediction: getNestedString(data, [["failurePrediction"]]),
+        activeLever,
+        activeTest,
+        nextMove,
+        mechanicalEnvironment: getNestedString(data, [
+          ["mechanicalEnvironment"],
+        ]),
+        dominantFailure: getNestedString(data, [["dominantFailure"]]),
+        movementFamily: getNestedString(data, [["movementFamily"]]),
+        adjustment: activeLever ?? adjustment,
         currentMechanism: data?.currentMechanism ?? null,
-        currentTest: data?.currentTest ?? null,
-        lastShift: data?.lastShift ?? null,
+        currentTest: activeTest ?? data?.currentTest ?? null,
+        lastShift,
         lastCaseReviewSnippet: data?.lastCaseReviewSnippet ?? null,
         caseReviewsList: Array.isArray(data?.caseReviewsList)
           ? data.caseReviewsList
@@ -1542,7 +1586,20 @@ if (!resp.ok) {
     [playMessageResponse, playUITone],
   );
 
-  const currentStateValue = dashboardData.investigationState ?? "No active case";
+  const currentStateValue =
+    dashboardData.currentState ??
+    dashboardData.investigationState ??
+    "No active case";
+  const currentTestValue =
+    dashboardData.activeTest ?? dashboardData.currentTest;
+  const adjustmentValue =
+    dashboardData.activeLever ?? dashboardData.adjustment;
+  const nextMoveValue =
+    dashboardData.activeTest ??
+    dashboardData.nextMove ??
+    dashboardData.currentTest;
+  const lastShiftValue =
+    dashboardData.interpretationCorrection ?? dashboardData.lastShift;
   const lastUpdatedDate = dashboardData.caseReviewsList?.[0]?.createdAt
     ? new Date(dashboardData.caseReviewsList[0].createdAt)
     : null;
@@ -1580,7 +1637,7 @@ if (!resp.ok) {
     },
     {
       label: "Current Test",
-      value: dashboardData.currentTest,
+      value: currentTestValue,
     },
   ];
   const currentCaseRows = [
@@ -1602,15 +1659,15 @@ if (!resp.ok) {
       : []),
     {
       label: "Last Shift",
-      value: dashboardData.lastShift,
+      value: lastShiftValue,
     },
     {
       label: "Adjustment",
-      value: dashboardData.adjustment,
+      value: adjustmentValue,
     },
     {
       label: "Next Move",
-      value: dashboardData.adjustment,
+      value: nextMoveValue,
     },
   ];
 

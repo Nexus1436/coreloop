@@ -7446,6 +7446,25 @@ ${memoryBlock}
         investigationState,
       });
 
+      console.log("DASHBOARD_RESPONSE_FIELDS", {
+        caseId: selectedCase?.id ?? null,
+        caseType: selectedCase ? selectedCase.caseType ?? "mechanical" : null,
+        activeLever: clampText(activeLever ?? "", 220),
+        activeTest: clampText(activeTest ?? "", 220),
+        currentTest: clampText(currentTest ?? "", 220),
+        adjustment: clampText(adjustment ?? "", 220),
+        nextMove: clampText(nextMove ?? "", 220),
+        lastShift: clampText(lastShift ?? "", 220),
+        interpretationCorrection: clampText(
+          interpretationCorrection ?? "",
+          220,
+        ),
+        failurePrediction: clampText(failurePrediction ?? "", 220),
+        mechanicalEnvironment: clampText(mechanicalEnvironment ?? "", 220),
+        dominantFailure: clampText(dominantFailure ?? "", 220),
+        movementFamily: clampText(movementFamily ?? "", 220),
+      });
+
       res.json({
         activeCaseTitle,
         caseType: selectedCase ? selectedCase.caseType ?? "mechanical" : null,
