@@ -263,6 +263,7 @@ export const nonMechanicalSignals = pgTable(
     category: text("category").notNull(),
     rawSignal: text("raw_signal").notNull(),
     safetyRelevant: boolean("safety_relevant").default(false).notNull(),
+    isFollowUp: boolean("is_follow_up").default(false).notNull(),
     responseType: text("response_type"),
 
     createdAt: timestamp("created_at")

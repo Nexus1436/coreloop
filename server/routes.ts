@@ -1528,6 +1528,51 @@ function formatNonMechanicalCategoryTitle(
   return titles[normalized] ?? "General Health Signal";
 }
 
+function isNonMechanicalFollowUpAnswer(userText: string): boolean {
+  const t = (userText || "").toLowerCase();
+
+  return /\b(?:\d+\s*(?:day|days|week|weeks|month|months)|one\s+(?:day|week|month)|two\s+(?:days|weeks|months)|three\s+(?:days|weeks|months)|a\s+(?:day|week|month)|since|started|going on|recently|no weight loss|weight loss|dizzy|dizziness|weak|weakness|fever|medication|medicine|meds|changed meds|changed medication|new medication)\b/i.test(
+    t,
+  );
+}
+
+function buildNonMechanicalFollowUpResponse(userText: string): string {
+  if (/\b(?:two weeks|2\s*weeks)\b/i.test(userText)) {
+    return "Since it’s been going on for about two weeks, it’s worth bringing up with a healthcare professional so they can check for medical, medication, nutrition, dental, or illness-related causes.";
+  }
+
+  if (/\b(?:weight loss|dizzy|dizziness|weak|weakness|fever)\b/i.test(userText)) {
+    return "That added context is worth keeping with this signal, and it makes this more appropriate for a healthcare professional than a movement mechanics investigation.";
+  }
+
+  return "I’ll keep that context with this signal. Since this is medical or health-context information rather than a movement mechanics issue, it’s worth bringing up with a healthcare professional if it persists or keeps changing.";
+}
+
+async function getActiveNonMechanicalCaseForUser(
+  userId: string,
+): Promise<ResolvedCaseRow | null> {
+  const [activeCase] = await db
+    .select({
+      id: cases.id,
+      userId: cases.userId,
+      conversationId: cases.conversationId,
+      movementContext: cases.movementContext,
+      activityType: cases.activityType,
+      caseType: cases.caseType,
+      status: cases.status,
+    })
+    .from(cases)
+    .where(and(eq(cases.userId, userId), eq(cases.caseType, "non_mechanical")))
+    .orderBy(desc(cases.updatedAt), desc(cases.id))
+    .limit(1);
+
+  if (!activeCase || !isOpenCaseStatus(activeCase.status)) {
+    return null;
+  }
+
+  return activeCase;
+}
+
 function normalizeOptionalLabel(value: string | null | undefined): string {
   return normalizeCaseKey(value);
 }
@@ -7038,8 +7083,10 @@ ${memoryBlock}
             category: string | null;
             rawSignal: string | null;
             safetyRelevant: boolean | null;
+            isFollowUp: boolean | null;
           }
         | undefined;
+      let followUpContext: string[] = [];
 
       if (selectedCase) {
         const isNonMechanicalCase = selectedCase.caseType === "non_mechanical";
@@ -7051,11 +7098,35 @@ ${memoryBlock}
               category: nonMechanicalSignals.category,
               rawSignal: nonMechanicalSignals.rawSignal,
               safetyRelevant: nonMechanicalSignals.safetyRelevant,
+              isFollowUp: nonMechanicalSignals.isFollowUp,
             })
             .from(nonMechanicalSignals)
-            .where(eq(nonMechanicalSignals.caseId, selectedCase.id))
+            .where(
+              and(
+                eq(nonMechanicalSignals.caseId, selectedCase.id),
+                eq(nonMechanicalSignals.isFollowUp, false),
+              ),
+            )
             .orderBy(desc(nonMechanicalSignals.id))
             .limit(1);
+
+          const followUpRows = await db
+            .select({
+              rawSignal: nonMechanicalSignals.rawSignal,
+            })
+            .from(nonMechanicalSignals)
+            .where(
+              and(
+                eq(nonMechanicalSignals.caseId, selectedCase.id),
+                eq(nonMechanicalSignals.isFollowUp, true),
+              ),
+            )
+            .orderBy(asc(nonMechanicalSignals.id))
+            .limit(10);
+
+          followUpContext = followUpRows
+            .map((row) => normalizePreviewValue(row.rawSignal))
+            .filter((value): value is string => Boolean(value));
         } else {
           latestAdjustment =
             (await getLatestValidAdjustmentForCase(selectedCase.id)) ??
@@ -7121,6 +7192,7 @@ ${memoryBlock}
               latestNonMechanicalSignal?.rawSignal ?? "",
               160,
             ),
+            followUpCount: followUpContext.length,
           });
         }
         console.log("DASHBOARD_LATEST_SIGNAL", {
@@ -7320,6 +7392,7 @@ ${memoryBlock}
         currentMechanism,
         currentTest,
         lastShift,
+        followUpContext,
         lastCaseReviewSnippet,
         caseReviewsList,
       });
@@ -7598,6 +7671,107 @@ ${memoryBlock}
       // ==============================
       // NON-MECHANICAL SIGNAL LANE
       // ==============================
+      const activeNonMechanicalCase =
+        !isCaseReview ? await getActiveNonMechanicalCaseForUser(userId) : null;
+      const shouldCaptureNonMechanicalFollowUp =
+        Boolean(activeNonMechanicalCase) &&
+        isNonMechanicalFollowUpAnswer(userText);
+
+      if (
+        !isCaseReview &&
+        activeNonMechanicalCase &&
+        shouldCaptureNonMechanicalFollowUp
+      ) {
+        const [previousNonMechanicalSignal] = await db
+          .select({
+            category: nonMechanicalSignals.category,
+            safetyRelevant: nonMechanicalSignals.safetyRelevant,
+          })
+          .from(nonMechanicalSignals)
+          .where(eq(nonMechanicalSignals.caseId, activeNonMechanicalCase.id))
+          .orderBy(desc(nonMechanicalSignals.id))
+          .limit(1);
+        const followUpCategory =
+          previousNonMechanicalSignal?.category ??
+          signalLane.category ??
+          "general_health";
+        const followUpSafetyRelevant =
+          previousNonMechanicalSignal?.safetyRelevant ??
+          Boolean(signalLane.safetyRelevant);
+        const followUpResponseType = followUpSafetyRelevant
+          ? "non_mechanical_followup_safety_context"
+          : "non_mechanical_followup_context";
+        const finalNonMechanicalFollowUpText =
+          buildNonMechanicalFollowUpResponse(userText);
+
+        try {
+          await db.insert(nonMechanicalSignals).values({
+            userId,
+            conversationId: convoId,
+            caseId: activeNonMechanicalCase.id,
+            category: followUpCategory,
+            rawSignal: userText,
+            safetyRelevant: Boolean(followUpSafetyRelevant),
+            isFollowUp: true,
+            responseType: followUpResponseType,
+          });
+          await db
+            .update(cases)
+            .set({ updatedAt: new Date() })
+            .where(eq(cases.id, activeNonMechanicalCase.id));
+          console.log("NON_MECHANICAL_FOLLOWUP_CAPTURED", {
+            caseId: activeNonMechanicalCase.id,
+            category: followUpCategory,
+            rawSignalPreview: clampText(userText, 180),
+            safetyRelevant: Boolean(followUpSafetyRelevant),
+          });
+        } catch (err) {
+          console.log("NON_MECHANICAL_FOLLOWUP_SKIPPED", {
+            reason: "insert_failed",
+            caseId: activeNonMechanicalCase.id,
+            userTextPreview: clampText(userText, 180),
+            error: formatUnknownError(err),
+          });
+        }
+
+        logLayer1Trace(layer1TraceId, "layer1_skipped", {
+          conversationId: convoId,
+          caseId: activeNonMechanicalCase.id,
+          reason: "non_mechanical_followup_lane",
+          signalCategory: followUpCategory,
+          safetyRelevant: Boolean(followUpSafetyRelevant),
+        });
+
+        res.setHeader("Content-Type", "text/event-stream");
+        const words = finalNonMechanicalFollowUpText.split(" ");
+        for (const word of words) {
+          res.write(`data: ${JSON.stringify({ content: word + " " })}\n\n`);
+        }
+
+        await db.insert(messages).values({
+          conversationId: convoId,
+          userId,
+          role: "assistant",
+          content: finalNonMechanicalFollowUpText,
+        });
+
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+        return;
+      }
+
+      if (
+        !isCaseReview &&
+        activeNonMechanicalCase &&
+        signalLane.lane !== "non_mechanical"
+      ) {
+        console.log("NON_MECHANICAL_FOLLOWUP_SKIPPED", {
+          reason: "no_followup_context_indicator",
+          caseId: activeNonMechanicalCase.id,
+          userTextPreview: clampText(userText, 180),
+        });
+      }
+
       if (!isCaseReview && signalLane.lane === "non_mechanical") {
         const nonMechanicalResponseType = signalLane.safetyRelevant
           ? "non_mechanical_safety_referral"
@@ -7630,6 +7804,7 @@ ${memoryBlock}
             category: signalLane.category ?? "general_health",
             rawSignal: userText,
             safetyRelevant: Boolean(signalLane.safetyRelevant),
+            isFollowUp: false,
             responseType: nonMechanicalResponseType,
           });
           console.log("NON_MECHANICAL_SIGNAL_WRITE", {

@@ -8,6 +8,7 @@ CREATE TABLE "non_mechanical_signals" (
 	"category" text NOT NULL,
 	"raw_signal" text NOT NULL,
 	"safety_relevant" boolean DEFAULT false NOT NULL,
+	"is_follow_up" boolean DEFAULT false NOT NULL,
 	"response_type" text,
 	"created_at" timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
