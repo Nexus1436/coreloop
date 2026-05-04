@@ -7698,38 +7698,42 @@ ${memoryBlock}
         const followUpSafetyRelevant =
           previousNonMechanicalSignal?.safetyRelevant ??
           Boolean(signalLane.safetyRelevant);
-        const followUpResponseType = followUpSafetyRelevant
-          ? "non_mechanical_followup_safety_context"
-          : "non_mechanical_followup_context";
+        const followUpResponseType = "non_mechanical_followup";
+        const followUpRawSignal = userText;
         const finalNonMechanicalFollowUpText =
           buildNonMechanicalFollowUpResponse(userText);
 
         try {
-          await db.insert(nonMechanicalSignals).values({
-            userId,
-            conversationId: convoId,
+          const [insertedNonMechanicalSignal] = await db
+            .insert(nonMechanicalSignals)
+            .values({
+              userId,
+              conversationId: convoId,
+              caseId: activeNonMechanicalCase.id,
+              category: followUpCategory,
+              rawSignal: followUpRawSignal,
+              safetyRelevant: Boolean(followUpSafetyRelevant),
+              isFollowUp: true,
+              responseType: followUpResponseType,
+            })
+            .returning({ id: nonMechanicalSignals.id });
+          console.log("NON_MECHANICAL_FOLLOWUP_CAPTURED", {
             caseId: activeNonMechanicalCase.id,
-            category: followUpCategory,
-            rawSignal: userText,
-            safetyRelevant: Boolean(followUpSafetyRelevant),
+            insertedSignalId: insertedNonMechanicalSignal.id,
             isFollowUp: true,
-            responseType: followUpResponseType,
+            rawSignalPreview: clampText(followUpRawSignal, 180),
+            category: followUpCategory,
+            safetyRelevant: Boolean(followUpSafetyRelevant),
           });
           await db
             .update(cases)
             .set({ updatedAt: new Date() })
             .where(eq(cases.id, activeNonMechanicalCase.id));
-          console.log("NON_MECHANICAL_FOLLOWUP_CAPTURED", {
-            caseId: activeNonMechanicalCase.id,
-            category: followUpCategory,
-            rawSignalPreview: clampText(userText, 180),
-            safetyRelevant: Boolean(followUpSafetyRelevant),
-          });
         } catch (err) {
           console.log("NON_MECHANICAL_FOLLOWUP_SKIPPED", {
             reason: "insert_failed",
             caseId: activeNonMechanicalCase.id,
-            userTextPreview: clampText(userText, 180),
+            userTextPreview: clampText(followUpRawSignal, 180),
             error: formatUnknownError(err),
           });
         }
