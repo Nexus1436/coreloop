@@ -4628,8 +4628,29 @@ function pickDashboardDisplayValue(
 function qualifiesForTimelineSignal(text: string): boolean {
   if (isMovementContextFatigueSignal(text)) return true;
 
-  return /pain|painful|tight|tightness|hurt|hurts|hurting|issue|problem|tweak|tweaked|strain|strained|straining|tension|discomfort|catching|catch|pinch|pinching|pinched|irritated|irritation|sore|soreness|stiff|stiffness|aggravated|aggravating|flare|flaring up|acting up|feels weird|feels wrong|not comfortable|uncomfortable|not sitting right|pulling|tugging|ache|aching|doesn't feel right|doesnt feel right|can't|cannot|struggle|confused|off|feels off|not right|not working|can't rotate|cant rotate|can't load|cant load|timing is off|timing feels off|mechanics feel wrong|movement is weird|doesn't feel stable|not stable|unstable|out of position|can't control|cant control|not coordinated|coordination is off|out of sync|awkward|something is off|rotation feels off|trunk rotation feels wrong/i.test(
-    text.trim(),
+  const input = text.trim();
+  const phraseMatch = input.match(
+    /\b(giving me a hard time|bothering me|acting up|giving out|not holding up)\b/i,
+  );
+
+  if (phraseMatch) {
+    const hasBodyRegion = Boolean(deriveBodyRegion(input));
+    const hasMovementContext = hasAnyActivitySignalInMessage(input);
+    const qualifies = hasBodyRegion || hasMovementContext;
+
+    console.log("TIMELINE_SIGNAL_PHRASE_MATCH", {
+      matched: true,
+      phrase: phraseMatch[1],
+      hasBodyRegion,
+      hasMovementContext,
+      qualifies,
+    });
+
+    if (qualifies) return true;
+  }
+
+  return /pain|painful|tight|tightness|hurt|hurts|hurting|issue|problem|tweak|tweaked|strain|strained|straining|tension|discomfort|catching|catch|pinch|pinching|pinched|irritated|irritation|sore|soreness|stiff|stiffness|aggravated|aggravating|flare|flaring up|feels weird|feels wrong|not comfortable|uncomfortable|not sitting right|pulling|tugging|ache|aching|doesn't feel right|doesnt feel right|can't|cannot|struggle|confused|off|feels off|not right|not working|can't rotate|cant rotate|can't load|cant load|timing is off|timing feels off|mechanics feel wrong|movement is weird|doesn't feel stable|not stable|unstable|out of position|can't control|cant control|not coordinated|coordination is off|out of sync|awkward|something is off|rotation feels off|trunk rotation feels wrong/i.test(
+    input,
   );
 }
 
@@ -6881,13 +6902,13 @@ function softenDisplayedActiveTestLanguage(text: string): {
 
   let softenedText = originalText
     .replace(
-      /\bDo\s+3\s+slow\s+digging\s+motions[^.!?]*\.\s*(?:Tell me|Let me know)\s+if\s+(?:the\s+)?([^.!?]+?)\s+changes\.?/gi,
+      /\b(?:Do|Try)\s+3\s+slow\s+digging\s+motions[^.!?]*\.\s*(?:Tell me|Let me know)\s+if\s+(?:the\s+)?([^.!?]+?)\s+changes\.?/gi,
       (_match, signal: string) =>
         `Try it a few times as you come out of the dig and tell me if the ${signal.trim()} changes.`,
     )
     .replace(
-      /\bDo\s+3\s+slow\s+([a-z][a-z\s-]{2,40}?)\s+motions[^.!?]*\.\s*(?:Tell me|Let me know)\s+(?:what changes|if\s+[^.!?]+?changes)\.?/gi,
-      "Try it a few times and tell me what changes.",
+      /\b(?:Do|Try)\s+3\s+slow\s+([a-z][a-z\s-]{2,40}?)\s+(?:motions|swings|reps)[^.!?]*(?:\.\s*(?:Tell me|Let me know)\s+(?:what changes|if\s+[^.!?]+?changes)\.?)?/gi,
+      "Try it a few times during the same motion and tell me what changes.",
     )
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -6895,6 +6916,96 @@ function softenDisplayedActiveTestLanguage(text: string): {
   return {
     text: softenedText,
     modified: softenedText !== originalText,
+  };
+}
+
+function finalLayer2SurfaceCleanup(text: string): {
+  text: string;
+  modified: boolean;
+  reasons: string[];
+} {
+  const originalText = text.trim();
+  const reasons = new Set<string>();
+  if (!originalText) return { text: originalText, modified: false, reasons: [] };
+
+  let cleanedText = originalText;
+
+  const toImperativeVerb = (verbRoot: string): string => {
+    const lowerRoot = verbRoot.toLowerCase();
+    const irregular: Record<string, string> = {
+      brac: "brace",
+      driv: "drive",
+      ensur: "ensure",
+      organiz: "organize",
+      rotat: "rotate",
+      stabiliz: "stabilize",
+    };
+
+    if (irregular[lowerRoot]) return irregular[lowerRoot];
+    if (/(?:at|iz)$/.test(lowerRoot)) return `${lowerRoot}e`;
+    return lowerRoot;
+  };
+
+  const replaceAndTrack = (
+    pattern: RegExp,
+    replacement: string | ((...args: any[]) => string),
+    reason: string,
+  ) => {
+    const nextText = cleanedText.replace(pattern, replacement as any);
+    if (nextText !== cleanedText) {
+      reasons.add(reason);
+      cleanedText = nextText;
+    }
+  };
+
+  replaceAndTrack(/\buse\s+ensuring\b/gi, "ensure", "use_verb_ing");
+  replaceAndTrack(/\buse\s+adjusting\b/gi, "adjust", "use_verb_ing");
+  replaceAndTrack(/\buse\s+focusing\s+on\b/gi, "focus on", "use_verb_ing");
+  replaceAndTrack(/\buse\s+focusing\b/gi, "focus", "use_verb_ing");
+  replaceAndTrack(/\buse\s+keeping\b/gi, "keep", "use_verb_ing");
+  replaceAndTrack(/\buse\s+moving\b/gi, "move", "use_verb_ing");
+  replaceAndTrack(/\buse\s+activating\b/gi, "activate", "use_verb_ing");
+  replaceAndTrack(
+    /\buse\s+([a-z]{4,})ing\b/gi,
+    (_match: string, verbRoot: string) => toImperativeVerb(verbRoot),
+    "use_verb_ing",
+  );
+  replaceAndTrack(/\bmake sure to\b/gi, "", "orphaned_fragment");
+  replaceAndTrack(/\bmake sure\b/gi, "", "orphaned_fragment");
+
+  const compactedText = cleanedText
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^\s*(?:[-*•]|\d+[\.)])\s*$/, "")
+        .replace(/^\s*[:;,-]\s*/, "")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/\s+([,.!?])/g, "$1")
+        .trim(),
+    )
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (compactedText !== cleanedText) {
+    reasons.add("orphaned_fragment");
+    cleanedText = compactedText;
+  }
+
+  const capitalizedText = cleanedText.replace(
+    /(^|[.!?]\s+|\n+)([a-z])/g,
+    (_match, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`,
+  );
+
+  if (capitalizedText !== cleanedText) {
+    reasons.add("capitalized_sentence_start");
+    cleanedText = capitalizedText;
+  }
+
+  return {
+    text: cleanedText,
+    modified: cleanedText !== originalText,
+    reasons: Array.from(reasons),
   };
 }
 
@@ -10525,6 +10636,18 @@ ${ACTIVE_PROMPT}
         outcomeResult: hasLaneOutcomeFeedback ? internalOutcomeResult : null,
       });
       finalText = outcomeExpression.text;
+
+      const beforeFinalSurfaceCleanup = finalText;
+      const finalSurfaceCleanup = finalLayer2SurfaceCleanup(finalText);
+      finalText = finalSurfaceCleanup.text;
+
+      console.log("LAYER2_FINAL_SURFACE_CLEANUP", {
+        caseId: resolvedActiveCase?.id ?? null,
+        modified: finalSurfaceCleanup.modified,
+        reasons: finalSurfaceCleanup.reasons,
+        originalLength: beforeFinalSurfaceCleanup.length,
+        finalLength: finalText.length,
+      });
 
       console.log("LAYER2_FORMAT_CLEANUP", {
         caseId: resolvedActiveCase?.id ?? null,
