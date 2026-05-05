@@ -1111,13 +1111,13 @@ function hasAnyActivitySignalInMessage(text: string): boolean {
 
   if (buildCompactMovementContext(input)) return true;
 
-  return /\b(?:racquetball|tennis|pickleball|squash|badminton|golf|run|running|jog|jogging|walk|walking|cycl(?:e|ing)|bike|biking|swim|swimming|lift|lifting|weightlift|crossfit|pilates|yoga|climb|climbing|row|rowing|basketball|soccer|football|baseball|hockey|martial arts|boxing|kickboxing|danc(?:e|ing)|ballet|squat|deadlift|lunge|serve|serving|swing|swinging|forehand|backhand|backswing|contact point|rotate|rotation|turning|hinge|hinging|reach|reaching|workout|training|practice|gym|session|sit|sitting|sat|seat|seated|chair|desk|computer|laptop|driv(?:e|ing|en)|sleep|sleeping|slept|asleep|bed|couch|sofa|waking|wake|woken|posture)\b/i.test(
+  return /\b(?:racquetball|volleyball|tennis|pickleball|squash|badminton|golf|run|running|jog|jogging|walk|walking|cycl(?:e|ing)|bike|biking|swim|swimming|lift|lifting|weightlift|crossfit|pilates|yoga|climb|climbing|row|rowing|basketball|soccer|football|baseball|hockey|martial arts|boxing|kickboxing|danc(?:e|ing)|ballet|squat|deadlift|lunge|serve|serving|swing|swinging|forehand|backhand|backswing|contact point|dig|digging|pass|passing|rotate|rotation|turning|hinge|hinging|reach|reaching|workout|training|practice|gym|session|sit|sitting|sat|seat|seated|chair|desk|computer|laptop|driv(?:e|ing|en)|sleep|sleeping|slept|asleep|bed|couch|sofa|waking|wake|woken|posture)\b/i.test(
     input,
   );
 }
 
 function hasExplicitActivityInText(text: string): boolean {
-  return /\b(?:racquetball|tennis|pickleball|squash|badminton|golf|run|running|jog|jogging|walk|walking|cycle|cycling|bike|biking|swim|swimming|lift|lifting|weightlift|crossfit|pilates|yoga|climb|climbing|row|rowing|basketball|soccer|football|baseball|hockey|martial arts|boxing|kickboxing|dance|dancing|ballet|squat|deadlift|lunge)\b/i.test(
+  return /\b(?:racquetball|volleyball|tennis|pickleball|squash|badminton|golf|run|running|jog|jogging|walk|walking|cycle|cycling|bike|biking|swim|swimming|lift|lifting|weightlift|crossfit|pilates|yoga|climb|climbing|row|rowing|basketball|soccer|football|baseball|hockey|martial arts|boxing|kickboxing|dance|dancing|ballet|squat|deadlift|lunge|dig|digging|pass|passing)\b/i.test(
     text.trim(),
   );
 }
@@ -1148,6 +1148,7 @@ function deriveCaseContext(
     { label: "pickleball", regex: /\bpickleball\b/i },
     { label: "squash", regex: /\bsquash\b/i },
     { label: "badminton", regex: /\bbadminton\b/i },
+    { label: "volleyball", regex: /\bvolleyball\b/i },
 
     { label: "golf", regex: /\bgolf\b|\bgolf swing\b|\btee shot\b/i },
 
@@ -1256,6 +1257,13 @@ function deriveCaseContext(
   }
 
   if (isRacquetballContext) {
+    console.log("CASE_ACTIVITY_DETECTED", {
+      activityType: "racquetball",
+      movementContext: clampText(movementContext || "serve mechanics", 80),
+      explicitActivityDetected: hasExplicitActivityInText(input),
+      userTextPreview: clampText(input, 180),
+    });
+
     return {
       movementContext: clampText(movementContext || "serve mechanics", 80),
       activityType: "racquetball",
@@ -1303,6 +1311,13 @@ function deriveCaseContext(
   if (!movementContext) {
     movementContext = "general movement";
   }
+
+  console.log("CASE_ACTIVITY_DETECTED", {
+    activityType: finalActivity,
+    movementContext: clampText(movementContext, 80),
+    explicitActivityDetected: hasExplicitActivityInText(input),
+    userTextPreview: clampText(input, 180),
+  });
 
   return {
     movementContext: clampText(movementContext, 80),
@@ -1366,6 +1381,10 @@ function deriveSignalType(text: string): string | null {
       regex: /\bweak\b|\bweakness\b|\bcan'?t generate force\b|\bno power\b/i,
     },
     {
+      label: "fatigue_signal",
+      regex: /\bfatigue\b|\bfatigued\b|\btired\b|\bburning\b/i,
+    },
+    {
       label: "limitation",
       regex:
         /\bcan'?t\b|\bcannot\b|\blimited\b|\blimitation\b|\brestricted\b|\bdoesn'?t let me\b/i,
@@ -1385,7 +1404,15 @@ function deriveSignalType(text: string): string | null {
     },
   ];
 
-  return signalPatterns.find((entry) => entry.regex.test(input))?.label ?? null;
+  const signalType =
+    signalPatterns.find((entry) => entry.regex.test(input))?.label ?? null;
+
+  console.log("SIGNAL_TYPE_DETECTED", {
+    signalType,
+    userTextPreview: clampText(input, 180),
+  });
+
+  return signalType;
 }
 
 type SignalLaneClassification = {
@@ -2139,21 +2166,35 @@ function classifyMovementFamily(
   const activity = (activityType || "").toLowerCase();
   const movement = (movementContext || "").toLowerCase();
   const signal = `${text} ${activity} ${movement}`;
+  const finish = (movementFamily: string) => {
+    console.log("MOVEMENT_FAMILY_DETECTED", {
+      movementFamily,
+      activityType: activityType ?? null,
+      movementContext: movementContext ?? null,
+      userTextPreview: clampText(userText, 180),
+    });
+
+    return movementFamily;
+  };
 
   if (
     /\bsit all day\b|\bsitting\b|\bdesk\b|\bhaven'?t moved\b|\bnot moved\b|\bnot moving\b|\bstanding for a while\b|\bdriving\b|\bafter sitting\b|\bafter being still\b/.test(
       text,
     )
   ) {
-    return "positional_static";
+    return finish("positional_static");
   }
 
   if (/\bswan dive\b|\bswan\b/.test(signal)) {
-    return "swan_dive";
+    return finish("swan_dive");
   }
 
   if (/\boverhead spike\b|\bspike\b/.test(signal)) {
-    return "overhead_spike";
+    return finish("overhead_spike");
+  }
+
+  if (/\bdig\b|\bdigging\b|\bpass\b|\bpassing\b/.test(signal)) {
+    return finish("digging");
   }
 
   if (
@@ -2161,37 +2202,37 @@ function classifyMovementFamily(
       signal,
     )
   ) {
-    return "leg_lowering";
+    return finish("leg_lowering");
   }
 
   if (
     /\bdrive serve\b/.test(signal) ||
     (/\bdrive\b/.test(signal) && /\bserve\b/.test(signal))
   ) {
-    return "drive_serve";
+    return finish("drive_serve");
   }
 
   if (/\bshoulder bridge\b|\bbridge\b/.test(signal)) {
-    return "bridge";
+    return finish("bridge");
   }
 
   if (/\brun\b|\brunning\b/.test(signal)) {
-    return "running";
+    return finish("running");
   }
 
   if (/\bsquat\b/.test(signal)) {
-    return "squat";
+    return finish("squat");
   }
 
   if (/\bdeadlift\b|\bhinge\b/.test(signal)) {
-    return "deadlift";
+    return finish("deadlift");
   }
 
   if (/\bswing\b/.test(signal)) {
-    return "swing";
+    return finish("swing");
   }
 
-  return "general";
+  return finish("general");
 }
 
 function deriveSportDomainForAnalytics(
@@ -4707,6 +4748,32 @@ function getOutcomeRoutingLabels(
   return null;
 }
 
+function normalizeStoredOutcomeResult(
+  result: string | null | undefined,
+): string | null {
+  const raw = normalizePreviewValue(result);
+  if (!raw) return null;
+
+  const detected = detectOutcomeResult(raw);
+  if (detected === "Improved") return "improved";
+  if (detected === "Worse") return "worse";
+  if (detected === "Same") return "unchanged";
+
+  const normalized = normalizeCaseKey(raw);
+  if (normalized === "same") return "unchanged";
+  if (
+    normalized === "improved" ||
+    normalized === "worse" ||
+    normalized === "unchanged" ||
+    normalized === "mixed" ||
+    normalized === "changed_unclear"
+  ) {
+    return normalized;
+  }
+
+  return normalized || null;
+}
+
 function getCaseContextMismatchReason({
   candidate,
   latestSignal,
@@ -6489,9 +6556,11 @@ function cleanCoachingLanguage(text: string): {
 
   const replacements: Array<[RegExp, string]> = [
     [/\btry focusing on\b/gi, "start"],
+    [/\bfocus on adjusting\b/gi, "adjust"],
+    [/\bfocus on keeping\b/gi, "keep"],
+    [/\bfocus on moving\b/gi, "move"],
     [/\bfocus on initiating\b/gi, "start"],
     [/\bfocus on starting\b/gi, "start"],
-    [/\bfocus on\b/gi, "use"],
     [/\bmake sure to use your hips\b/gi, "use your hips"],
     [/\bmake sure your hips are involved\b/gi, "use your hips first"],
     [/\bmake sure to\b/gi, ""],
@@ -6801,6 +6870,32 @@ function replaceDisplayedTestWithProbe({
   }
 
   return paragraphs.join("\n\n").trim();
+}
+
+function softenDisplayedActiveTestLanguage(text: string): {
+  text: string;
+  modified: boolean;
+} {
+  const originalText = text.trim();
+  if (!originalText) return { text: originalText, modified: false };
+
+  let softenedText = originalText
+    .replace(
+      /\bDo\s+3\s+slow\s+digging\s+motions[^.!?]*\.\s*(?:Tell me|Let me know)\s+if\s+(?:the\s+)?([^.!?]+?)\s+changes\.?/gi,
+      (_match, signal: string) =>
+        `Try it a few times as you come out of the dig and tell me if the ${signal.trim()} changes.`,
+    )
+    .replace(
+      /\bDo\s+3\s+slow\s+([a-z][a-z\s-]{2,40}?)\s+motions[^.!?]*\.\s*(?:Tell me|Let me know)\s+(?:what changes|if\s+[^.!?]+?changes)\.?/gi,
+      "Try it a few times and tell me what changes.",
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return {
+    text: softenedText,
+    modified: softenedText !== originalText,
+  };
 }
 
 function enforceLayer2BehavioralCompleteness({
@@ -9985,7 +10080,8 @@ Produce the response now.
             : 0;
           const isDuplicateRecentOutcome =
             Boolean(latestOutcome) &&
-            latestOutcome?.result === outcomeRoutingLabels.storedResult &&
+            normalizeStoredOutcomeResult(latestOutcome?.result) ===
+              normalizeStoredOutcomeResult(outcomeRoutingLabels.storedResult) &&
             latestOutcome?.adjustmentId === (validAdjustment?.id ?? null) &&
             latestCreatedAtMs > 0 &&
             Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
@@ -9994,7 +10090,9 @@ Produce the response now.
             await db.insert(caseOutcomes).values({
               caseId: outcomeCase.id,
               adjustmentId: validAdjustment?.id ?? null,
-              result: outcomeRoutingLabels.storedResult,
+              result:
+                normalizeStoredOutcomeResult(outcomeRoutingLabels.storedResult) ??
+                outcomeRoutingLabels.storedResult,
               userFeedback: userText,
             });
             routedOutcomePersisted = true;
@@ -10419,6 +10517,9 @@ ${ACTIVE_PROMPT}
         });
       }
 
+      const softenedActiveTest = softenDisplayedActiveTestLanguage(finalText);
+      finalText = softenedActiveTest.text;
+
       const outcomeExpression = enforceOutcomeFeedbackExpression({
         text: finalText,
         outcomeResult: hasLaneOutcomeFeedback ? internalOutcomeResult : null,
@@ -10431,6 +10532,7 @@ ${ACTIVE_PROMPT}
         coachingCleaned: coachingCleanup.cleaned,
         nonEnglishDetected,
         singleLeverForced: leverEnforced.modified,
+        activeTestSoftened: softenedActiveTest.modified,
         outcomeFeedbackCompressed: outcomeExpression.modified,
         originalLength: assistantText.length,
         finalLength: finalText.length,
@@ -10649,12 +10751,21 @@ ${ACTIVE_PROMPT}
 
       const shouldRunAssistantExtractionFallback =
         extractionResponseType === "investigation" &&
-        !internalCasePersistResult.attempted;
+        !internalCasePersistResult.attempted &&
+        !hasLaneOutcomeFeedback;
+      if (hasLaneOutcomeFeedback && extractionResponseType === "investigation") {
+        console.log("OUTCOME_FALLBACK_BLOCKED", {
+          caseId: resolvedActiveCase?.id ?? null,
+          extractionResponseType,
+          internalCaseAttempted: internalCasePersistResult.attempted,
+        });
+      }
       logLayer1Trace(layer1TraceId, "assistant_text_extraction_fallback_decision", {
         conversationId: convoId,
         caseId: resolvedActiveCase?.id ?? null,
         extractionResponseType,
         internalCaseAttempted: internalCasePersistResult.attempted,
+        hasLaneOutcomeFeedback,
         shouldRunAssistantExtractionFallback,
       });
 
@@ -11052,6 +11163,8 @@ ${ACTIVE_PROMPT}
           const outcomeResult = detectOutcomeResult(userText);
 
           if (outcomeResult) {
+            const normalizedOutcomeResult =
+              normalizeStoredOutcomeResult(outcomeResult);
             if (!resolvedActiveCase) {
               resolvedActiveCase = await getConversationOpenCase(userId, convoId);
             }
@@ -11089,18 +11202,19 @@ ${ACTIVE_PROMPT}
 
                 const isDuplicateRecentOutcome =
                   Boolean(latestOutcome) &&
-                  String(latestOutcome.result ?? "") === outcomeResult &&
+                  normalizeStoredOutcomeResult(latestOutcome.result) ===
+                    normalizedOutcomeResult &&
                   latestOutcome?.adjustmentId === validAdjustment.id &&
                   latestCreatedAtMs > 0 &&
                   Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
 
-                if (!isDuplicateRecentOutcome) {
+                if (!isDuplicateRecentOutcome && normalizedOutcomeResult) {
                   const [insertedOutcome] = await db
                     .insert(caseOutcomes)
                     .values({
                       caseId: activeCase.id,
                       adjustmentId: validAdjustment.id,
-                      result: outcomeResult,
+                      result: normalizedOutcomeResult,
                       userFeedback: userText,
                     })
                     .returning({
@@ -11109,7 +11223,7 @@ ${ACTIVE_PROMPT}
                   console.log("EXTRACT_OUTCOME_FOUND", {
                     caseId: activeCase.id,
                     adjustmentId: validAdjustment.id,
-                    result: outcomeResult,
+                    result: normalizedOutcomeResult,
                   });
                   console.log("EXTRACT_WRITE_SUCCESS", {
                     type: "outcome",
@@ -11117,7 +11231,7 @@ ${ACTIVE_PROMPT}
                     outcomeId: insertedOutcome?.id ?? null,
                   });
 
-                  if (outcomeResult === "Improved") {
+                  if (normalizedOutcomeResult === "improved") {
                     await db
                       .update(cases)
                       .set({ status: "resolved" })
@@ -11290,6 +11404,11 @@ ${ACTIVE_PROMPT}
         return res.status(400).json({ error: "Missing required fields" });
       }
 
+      const normalizedResult = normalizeStoredOutcomeResult(String(result));
+      if (!normalizedResult) {
+        return res.status(400).json({ error: "Invalid result" });
+      }
+
       if (
         adjustmentId != null &&
         (!Number.isFinite(numericAdjustmentId) || !numericAdjustmentId)
@@ -11312,12 +11431,12 @@ ${ACTIVE_PROMPT}
       await db.insert(caseOutcomes).values({
         caseId: numericCaseId,
         adjustmentId: validAdjustment.id,
-        result,
+        result: normalizedResult,
         userFeedback: userFeedback ?? null,
       });
 
       const outcomeClassification = detectOutcomeResult(
-        `${String(result ?? "")} ${String(userFeedback ?? "")}`.trim(),
+        `${normalizedResult} ${String(userFeedback ?? "")}`.trim(),
       );
 
       if (outcomeClassification === "Improved") {
