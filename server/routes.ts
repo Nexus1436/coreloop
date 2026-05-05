@@ -5837,6 +5837,136 @@ function isTestOnlyResponse(text: string, currentTest: string): boolean {
   return withoutTest.replace(/\s+/g, " ").trim().length < 80;
 }
 
+function hasOutcomeFeedbackClosure(text: string): boolean {
+  return /\b(?:let me know|tell me|report back|what changed|what changes|better,\s*worse,\s*or\s*the\s*same|if it changes|whether it changes|whether it feels|what happens after|what happens with|how it feels after)\b/i.test(
+    text,
+  );
+}
+
+function stripVisibleLayer1Labels(text: string): string {
+  return text
+    .split("\n")
+    .map((line) =>
+      line.replace(
+        /^\s*(?:[-*]\s*)?(?:\*\*)?(?:Dominant failure|Mechanical environment|Failure prediction|Interpretation correction|Active lever|Active test)(?:\*\*)?\s*:\s*/i,
+        "",
+      ),
+    )
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function firstSentence(text: string | null | undefined): string | null {
+  const normalized = normalizePreviewValue(text);
+  if (!normalized) return null;
+
+  return normalized.split(/(?<=[.!?])\s+/)[0]?.trim() || null;
+}
+
+function appendLayer2Sentence(text: string, sentence: string): string {
+  const trimmedText = text.trim();
+  const trimmedSentence = sentence.trim();
+  if (!trimmedSentence) return trimmedText;
+
+  if (!trimmedText) return trimmedSentence;
+
+  return `${trimmedText}\n\n${trimmedSentence}`;
+}
+
+function enforceLayer2BehavioralCompleteness({
+  text,
+  hypothesis,
+  interpretationCorrection,
+  failurePrediction: _failurePrediction,
+  activeLever: _activeLever,
+  activeTest,
+}: {
+  text: string;
+  hypothesis?: string | null;
+  interpretationCorrection?: string | null;
+  failurePrediction?: string | null;
+  activeLever?: string | null;
+  activeTest?: string | null;
+}): {
+  text: string;
+  repaired: boolean;
+  reasons: string[];
+} {
+  const reasons: string[] = [];
+  let finalText = stripVisibleLayer1Labels(text);
+
+  if (finalText !== text.trim()) {
+    reasons.push("stripped_visible_layer1_labels");
+  }
+
+  const normalizedHypothesis = normalizePreviewValue(hypothesis);
+  const normalizedCorrection = normalizePreviewValue(interpretationCorrection);
+  const normalizedActiveTest = normalizePreviewValue(activeTest);
+
+  if (!normalizedHypothesis && !normalizedActiveTest) {
+    return {
+      text: finalText,
+      repaired: reasons.length > 0,
+      reasons,
+    };
+  }
+
+  const mechanismSource =
+    firstSentence(normalizedCorrection) ?? firstSentence(normalizedHypothesis);
+  const hasMechanism =
+    Boolean(
+      normalizedCorrection &&
+        areEquivalentDashboardCandidates(finalText, normalizedCorrection),
+    ) ||
+    Boolean(
+      normalizedHypothesis &&
+        areEquivalentDashboardCandidates(finalText, normalizedHypothesis),
+    ) ||
+    Boolean(
+      mechanismSource &&
+        normalizeDashboardCandidate(finalText).includes(
+          normalizeDashboardCandidate(mechanismSource),
+        ),
+    );
+
+  if (
+    normalizedHypothesis &&
+    normalizedActiveTest &&
+    mechanismSource &&
+    (!hasMechanism || isTestOnlyResponse(finalText, normalizedActiveTest))
+  ) {
+    finalText = `${mechanismSource}\n\n${finalText}`.trim();
+    reasons.push(
+      isTestOnlyResponse(text, normalizedActiveTest)
+        ? "prepended_mechanism_for_test_only_response"
+        : "prepended_missing_mechanism",
+    );
+  }
+
+  if (
+    normalizedActiveTest &&
+    !responseIncludesCurrentTest(finalText, normalizedActiveTest)
+  ) {
+    finalText = appendLayer2Sentence(finalText, normalizedActiveTest);
+    reasons.push("appended_missing_active_test");
+  }
+
+  if (normalizedActiveTest && !hasOutcomeFeedbackClosure(finalText)) {
+    finalText = appendLayer2Sentence(
+      finalText,
+      "Let me know whether it feels better, worse, or the same.",
+    );
+    reasons.push("appended_outcome_feedback_closure");
+  }
+
+  return {
+    text: finalText,
+    repaired: reasons.length > 0,
+    reasons,
+  };
+}
+
 async function buildSessionSummaryContext({
   userId,
   conversationId,
@@ -8991,7 +9121,29 @@ ${ACTIVE_PROMPT}
         }
       }
 
-      const finalText = assistantText;
+      const layer2State = internalCasePersistResult.update;
+      const layer2Enforcement = enforceLayer2BehavioralCompleteness({
+        text: assistantText,
+        hypothesis: layer2State?.hypothesis,
+        interpretationCorrection: layer2State?.interpretationCorrection,
+        failurePrediction: layer2State?.failurePrediction,
+        activeLever: layer2State?.activeLever ?? layer2State?.singleLever,
+        activeTest: layer2State?.activeTest ?? layer2State?.currentTest,
+      });
+      const finalText = layer2Enforcement.text;
+
+      console.log("LAYER2_ENFORCER_RESULT", {
+        caseId: resolvedActiveCase?.id ?? null,
+        repaired: layer2Enforcement.repaired,
+        reasons: layer2Enforcement.reasons,
+        hasHypothesis: Boolean(layer2State?.hypothesis),
+        hasActiveTest: Boolean(
+          layer2State?.activeTest ?? layer2State?.currentTest,
+        ),
+        hasClosure: hasOutcomeFeedbackClosure(finalText),
+        originalLength: assistantText.length,
+        finalLength: finalText.length,
+      });
 
       if (!isCaseReview) {
         const userSignaledClosure = detectUserClosureSignal(userText);
