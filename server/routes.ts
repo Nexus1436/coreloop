@@ -6235,6 +6235,96 @@ function appendLayer2Sentence(text: string, sentence: string): string {
   return `${trimmedText}\n\n${trimmedSentence}`;
 }
 
+function containsLayer2CoachingBleed(text: string): boolean {
+  const normalized = normalizePreviewValue(text) ?? "";
+  if (!normalized) return false;
+
+  if (/^\s*(?:[-*•]|\d+[\.)])\s+/m.test(normalized)) return true;
+
+  if (
+    /\b(?:also|in addition|another thing|consider|make sure to|recovery routine|recovery|pacing|general fitness|monitor)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (/\bfocus on\b.+\band\b.+/i.test(normalized)) return true;
+
+  const instructionMatches = normalized.match(
+    /\b(?:try|do|start|keep|focus|monitor|work on|consider|make sure|add|avoid|pace|recover|practice)\b/gi,
+  );
+
+  return (instructionMatches?.length ?? 0) > 2;
+}
+
+function isLikelyLayer2InstructionParagraph(text: string): boolean {
+  const normalized = normalizePreviewValue(text) ?? "";
+  if (!normalized) return false;
+
+  return (
+    /^\s*(?:[-*•]|\d+[\.)])\s+/m.test(normalized) ||
+    /\b(?:try|do|start|keep|focus|monitor|work on|consider|make sure|add|avoid|pace|recover|practice|also|in addition|another thing|recovery|pacing)\b/i.test(
+      normalized,
+    )
+  );
+}
+
+function enforceSingleLever({
+  text,
+  activeLever,
+  activeTest,
+}: {
+  text: string;
+  activeLever?: string | null;
+  activeTest?: string | null;
+}): { text: string; modified: boolean; reason?: string } {
+  const normalizedActiveLever = normalizePreviewValue(activeLever);
+  if (!normalizedActiveLever) {
+    return { text, modified: false };
+  }
+
+  const originalText = text.trim();
+  if (!containsLayer2CoachingBleed(originalText)) {
+    return { text: originalText, modified: false };
+  }
+
+  const mechanismParagraphs = originalText
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .filter((paragraph) => !isLikelyLayer2InstructionParagraph(paragraph))
+    .filter(
+      (paragraph) =>
+        !areEquivalentDashboardCandidates(paragraph, normalizedActiveLever),
+    );
+
+  const nextParts = [...mechanismParagraphs, normalizedActiveLever];
+  const normalizedActiveTest = normalizePreviewValue(activeTest);
+
+  if (
+    normalizedActiveTest &&
+    !responseIncludesCurrentTest(nextParts.join("\n\n"), normalizedActiveTest)
+  ) {
+    nextParts.push(normalizedActiveTest);
+  }
+
+  let finalText = nextParts.join("\n\n").trim();
+
+  if (normalizedActiveTest && !hasOutcomeFeedbackClosure(finalText)) {
+    finalText = appendLayer2Sentence(
+      finalText,
+      "Let me know whether it feels better, worse, or the same.",
+    );
+  }
+
+  return {
+    text: finalText,
+    modified: finalText !== originalText,
+    reason: "multi_instruction_detected",
+  };
+}
+
 function enforceLayer2BehavioralCompleteness({
   text,
   hypothesis,
@@ -9738,7 +9828,22 @@ ${ACTIVE_PROMPT}
         activeLever: layer2ActiveLever,
         activeTest: layer2ActiveTest,
       });
-      const finalText = layer2Enforcement.text;
+      let finalText = layer2Enforcement.text;
+      const leverEnforced = enforceSingleLever({
+        text: finalText,
+        activeLever: layer2ActiveLever,
+        activeTest: layer2ActiveTest,
+      });
+
+      if (leverEnforced.modified) {
+        finalText = leverEnforced.text;
+        console.log("LAYER2_SINGLE_LEVER_ENFORCED", {
+          caseId: resolvedActiveCase?.id ?? null,
+          reason: leverEnforced.reason,
+          originalLength: layer2Enforcement.text.length,
+          finalLength: finalText.length,
+        });
+      }
 
       console.log("LAYER2_ENFORCER_RESULT", {
         caseId: resolvedActiveCase?.id ?? null,
