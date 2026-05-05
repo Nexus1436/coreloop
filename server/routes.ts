@@ -1394,8 +1394,46 @@ type SignalLaneClassification = {
   safetyRelevant?: boolean;
 };
 
+function getMovementFatigueRouting(text: string): {
+  isFatigueSignal: boolean;
+  hasMovementContext: boolean;
+  isMovementContextFatigue: boolean;
+} {
+  const input = String(text ?? "").trim();
+  if (!input) {
+    return {
+      isFatigueSignal: false,
+      hasMovementContext: false,
+      isMovementContextFatigue: false,
+    };
+  }
+
+  const isFatigueSignal =
+    /\b(?:fatigue|fatigued|tired|stamina|endurance|muscle load|burn|heavy legs|legs? (?:get|gets|getting|got|are|is|feel|feels|felt) tired|legs? (?:get|gets|getting|got|are|is|feel|feels|felt) fatigued)\b/i.test(
+      input,
+    );
+  const hasMovementContext =
+    /\b(?:racquetball|game|games|match|matches|serve|serves|swing|shot|shots|footwork|movement|mechanics|knee|knees|hip|hips|shoulder|shoulders|leg|legs|quad|quads|hamstring|hamstrings|calf|calves|ribs?|pelvis|stacked|posture|load|loading|rotation|rotate|bend|bending|step|push|cut|sprint|lateral|overhead|reps?|sets?|repeated)\b/i.test(
+      input,
+    );
+
+  return {
+    isFatigueSignal,
+    hasMovementContext,
+    isMovementContextFatigue: isFatigueSignal && hasMovementContext,
+  };
+}
+
+function isMovementContextFatigueSignal(text: string): boolean {
+  return getMovementFatigueRouting(text).isMovementContextFatigue;
+}
+
 function classifySignalLane(userText: string): SignalLaneClassification {
   const t = (userText || "").toLowerCase();
+
+  if (isMovementContextFatigueSignal(userText)) {
+    return { lane: "mechanical", safetyRelevant: false };
+  }
 
   const categoryChecks: Array<{
     category: string;
@@ -4479,6 +4517,8 @@ function pickDashboardDisplayValue(
 }
 
 function qualifiesForTimelineSignal(text: string): boolean {
+  if (isMovementContextFatigueSignal(text)) return true;
+
   return /pain|painful|tight|tightness|hurt|hurts|hurting|issue|problem|tweak|tweaked|strain|strained|straining|tension|discomfort|catching|catch|pinch|pinching|pinched|irritated|irritation|sore|soreness|stiff|stiffness|aggravated|aggravating|flare|flaring up|acting up|feels weird|feels wrong|not comfortable|uncomfortable|not sitting right|pulling|tugging|ache|aching|doesn't feel right|doesnt feel right|can't|cannot|struggle|confused|off|feels off|not right|not working|can't rotate|cant rotate|can't load|cant load|timing is off|timing feels off|mechanics feel wrong|movement is weird|doesn't feel stable|not stable|unstable|out of position|can't control|cant control|not coordinated|coordination is off|out of sync|awkward|something is off|rotation feels off|trunk rotation feels wrong/i.test(
     text.trim(),
   );
@@ -8349,9 +8389,23 @@ ${memoryBlock}
       const isMedicalSystemic =
         !isCaseReview && isMedicalSystemicSignal(userText);
       const hasNocturnalSupport = hasNocturnalMedicalContext(userText);
+      const movementFatigueRouting = getMovementFatigueRouting(userText);
       const signalLane: SignalLaneClassification = !isCaseReview
         ? classifySignalLane(userText)
         : { lane: "mechanical", safetyRelevant: false };
+      if (movementFatigueRouting.isFatigueSignal) {
+        console.log("MOVEMENT_FATIGUE_ROUTING", {
+          isFatigueSignal: movementFatigueRouting.isFatigueSignal,
+          hasMovementContext: movementFatigueRouting.hasMovementContext,
+          routedAs: movementFatigueRouting.isMovementContextFatigue
+            ? "mechanical"
+            : "health",
+          reason: movementFatigueRouting.isMovementContextFatigue
+            ? "movement_context_fatigue"
+            : "general_or_systemic_fatigue",
+          userTextPreview: clampText(userText, 180),
+        });
+      }
       console.log("SIGNAL_LANE_CLASSIFICATION", {
         lane: signalLane.lane,
         category: signalLane.category ?? null,
@@ -8514,7 +8568,8 @@ ${memoryBlock}
         !isCaseReview ? await getActiveNonMechanicalCaseForUser(userId) : null;
       const shouldCaptureNonMechanicalFollowUp =
         Boolean(activeNonMechanicalCase) &&
-        isNonMechanicalFollowUpAnswer(userText);
+        isNonMechanicalFollowUpAnswer(userText) &&
+        !movementFatigueRouting.isMovementContextFatigue;
 
       if (
         !isCaseReview &&
