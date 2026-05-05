@@ -6518,6 +6518,111 @@ function cleanCoachingLanguage(text: string): {
   };
 }
 
+function enforceLeverPrecision(text: string): {
+  text: string;
+  modified: boolean;
+} {
+  const originalText = text.trim();
+  if (!originalText) return { text: originalText, modified: false };
+
+  let refinedText = originalText;
+
+  const precisionReplacements: Array<[RegExp, string]> = [
+    [
+      /\b(?:try\s+)?(?:using\s+)?keeping\s+the\s+shoulder\s+blade\s+stable\s+and\s+moving\s+with\s+the\s+arm\b/gi,
+      "keep the shoulder blade moving with the arm as you swing back",
+    ],
+    [
+      /\buse\s+keeping\s+the\s+shoulder\s+blade\s+moving\s+with\s+the\s+arm\b/gi,
+      "keep the shoulder blade moving with the arm as you swing back",
+    ],
+    [
+      /\b(?:engage|control|use|activate|engaging|controlling|using|activating)\s+the\s+shoulder\s+blade\s+and\s+trunk\s+earlier(?:\s+in\s+the\s+motion)?\b/gi,
+      "start the backswing by moving the shoulder blade before the arm",
+    ],
+    [
+      /\b(?:engage|control|use|activate|engaging|controlling|using|activating)\s+your\s+shoulder\s+blade\s+and\s+trunk\s+earlier(?:\s+in\s+the\s+motion)?\b/gi,
+      "start the backswing by moving the shoulder blade before the arm",
+    ],
+    [
+      /\b(?:engage|control|use|activate|engaging|controlling|using|activating)\s+the\s+shoulder\s+blade\s+earlier(?:\s+in\s+the\s+motion)?\b/gi,
+      "start the backswing by moving the shoulder blade before the arm",
+    ],
+    [
+      /\b(?:engage|control|use|activate|engaging|controlling|using|activating)\s+your\s+shoulder\s+blade\s+earlier(?:\s+in\s+the\s+motion)?\b/gi,
+      "start the backswing by moving the shoulder blade before the arm",
+    ],
+    [
+      /\b(?:engage|activate)\s+the\s+hips?\b/gi,
+      "move the hips",
+    ],
+    [
+      /\b(?:engage|activate)\s+your\s+hips?\b/gi,
+      "move your hips",
+    ],
+    [
+      /\bcontrol\s+the\s+hips?\b/gi,
+      "start with the hips",
+    ],
+    [
+      /\bcontrol\s+your\s+hips?\b/gi,
+      "start with your hips",
+    ],
+  ];
+
+  for (const [pattern, replacement] of precisionReplacements) {
+    refinedText = refinedText.replace(pattern, replacement);
+  }
+
+  refinedText = refinedText
+    .replace(/\bshoulder blade and trunk\b/gi, "shoulder blade")
+    .replace(/\bhips? and trunk\b/gi, (match) =>
+      match.toLowerCase().startsWith("hip") ? "hips" : "hip",
+    )
+    .replace(/\btry using keeping\b/gi, "keep")
+    .replace(/\busing keeping\b/gi, "keep")
+    .replace(/\buse keeping\b/gi, "keep")
+    .replace(/\btry keep\b/gi, "keep")
+    .replace(/\buse moving\b/gi, "move")
+    .replace(/\bactivate moving\b/gi, "move")
+    .replace(/\bengage moving\b/gi, "move")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([,.!?])/g, "$1")
+    .trim();
+
+  const hasShoulderBladeLever =
+    /\b(?:keep|start|move)\b[^.!?\n]*\bshoulder blade\b/i.test(refinedText);
+  const hasBackswingTiming =
+    /\b(?:as you swing back|at the start of the backswing|before the arm|as you reach back|before the arm moves)\b/i.test(
+      refinedText,
+    );
+
+  if (hasShoulderBladeLever && !hasBackswingTiming) {
+    refinedText = refinedText.replace(
+      /\b(keep|move)\s+(the\s+)?shoulder\s+blade([^.!?\n]*)([.!?]?)/i,
+      (_match, verb: string, article: string = "", rest: string, punctuation: string = "") =>
+        `${verb} ${article ?? ""}shoulder blade${rest} as you swing back${punctuation || "."}`,
+    );
+  }
+
+  refinedText = refinedText
+    .replace(
+      /\bTry\s+3\s+slow\s+spike\s+motions,\s*(?:start|starting)\s+the\s+backswing\s+by\s+moving\s+the\s+shoulder\s+blade\s+before\s+the\s+arm\.?\s*Tell\s+me\b/gi,
+      "Try 3 slow spike motions, starting the backswing with the shoulder blade before the arm moves. Tell me",
+    )
+    .replace(
+      /\bDo\s+3\s+slow\s+spike\s+motions,\s*(?:start|starting)\s+the\s+backswing\s+by\s+moving\s+the\s+shoulder\s+blade\s+before\s+the\s+arm\.?\s*Tell\s+me\b/gi,
+      "Try 3 slow spike motions, starting the backswing with the shoulder blade before the arm moves. Tell me",
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return {
+    text: refinedText,
+    modified: refinedText !== originalText,
+  };
+}
+
 function detectNonEnglishOutput(text: string): boolean {
   const normalized = normalizePreviewValue(text) ?? "";
   if (!normalized) return false;
@@ -10297,6 +10402,20 @@ ${ACTIVE_PROMPT}
           caseId: resolvedActiveCase?.id ?? null,
           reason: testDisplayQuality.reason,
           probePreview: clampText(testDisplayQuality.probeText ?? "", 180),
+        });
+      }
+
+      const beforeLeverPrecision = finalText;
+      const leverPrecision = enforceLeverPrecision(finalText);
+
+      if (leverPrecision.modified) {
+        finalText = leverPrecision.text;
+
+        console.log("LAYER2_LEVER_PRECISION_APPLIED", {
+          caseId: resolvedActiveCase?.id ?? null,
+          modified: true,
+          originalLength: beforeLeverPrecision.length,
+          finalLength: finalText.length,
         });
       }
 
