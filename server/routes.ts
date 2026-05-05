@@ -4484,6 +4484,98 @@ function qualifiesForTimelineSignal(text: string): boolean {
   );
 }
 
+type CaseLaneDecisionReason =
+  | "technique_question"
+  | "mechanics_discussion"
+  | "physical_signal"
+  | "performance_breakdown"
+  | "fatigue_signal"
+  | "outcome_feedback"
+  | "unclear";
+
+function classifyCaseLaneDecisionForLog({
+  userText,
+  shouldCreateCase,
+  hasOutcomeFeedback,
+}: {
+  userText: string;
+  shouldCreateCase: boolean;
+  hasOutcomeFeedback: boolean;
+}): {
+  lane: "conversation_only" | "investigation_case";
+  reason: CaseLaneDecisionReason;
+  confidence: number;
+} {
+  const text = userText.trim();
+
+  if (hasOutcomeFeedback) {
+    return {
+      lane: "investigation_case",
+      reason: "outcome_feedback",
+      confidence: 1,
+    };
+  }
+
+  if (shouldCreateCase) {
+    if (/\b(?:pain|painful|hurt|hurts|hurting|tight|tightness|stiff|stiffness|sore|soreness|ache|aching|discomfort|unstable|instability)\b/i.test(text)) {
+      return {
+        lane: "investigation_case",
+        reason: "physical_signal",
+        confidence: 1,
+      };
+    }
+
+    if (/\b(?:fatigue|fatigued|tired|breakdown|breaks down|los(?:e|ing) control|can't control|cant control|not stable|unstable|off timing|out of sync|awkward|mechanics feel wrong|movement is weird|no power)\b/i.test(text)) {
+      return {
+        lane: "investigation_case",
+        reason: /\b(?:fatigue|fatigued|tired)\b/i.test(text)
+          ? "fatigue_signal"
+          : "performance_breakdown",
+        confidence: 0.7,
+      };
+    }
+
+    return {
+      lane: "investigation_case",
+      reason: "physical_signal",
+      confidence: 0.7,
+    };
+  }
+
+  if (/\b(?:what does that mean|mechanic|mechanics|opens? (?:his|her|their)?\s*(?:chest|hips?)|kane|adam|watching|analysis|analyze|theory|why does)\b/i.test(text)) {
+    return {
+      lane: "conversation_only",
+      reason: "mechanics_discussion",
+      confidence: 0.7,
+    };
+  }
+
+  if (/\b(?:where should|how should|what should|contact point|grip|stance|serve|swing|technique|cue|drill)\b/i.test(text)) {
+    return {
+      lane: "conversation_only",
+      reason: "technique_question",
+      confidence: 0.7,
+    };
+  }
+
+  return {
+    lane: "conversation_only",
+    reason: "unclear",
+    confidence: 0.5,
+  };
+}
+
+function hasOutcomeFeedbackForLaneLog(
+  userText: string,
+  detectedOutcome: ReturnType<typeof detectOutcomeResult>,
+): boolean {
+  if (detectedOutcome) return true;
+
+  return /\b(?:tested|tried|did|used)\b.*\b(?:cue|test|drill|adjustment|that|it)\b.*\b(?:changed|better|worse|same|unchanged|different|helped)\b|\b(?:cue|test|drill|adjustment)\b.*\b(?:changed|better|worse|same|unchanged|different|helped)\b/i.test(
+    userText.trim(),
+  );
+}
+
 // ==============================
 // OUTCOME DETECTION
 // ==============================
@@ -8772,10 +8864,15 @@ Produce the response now.
         wroteOutcome: false,
         update: null,
       };
+      const internalOutcomeResult = detectOutcomeResult(userText);
+      const hasLaneOutcomeFeedback = hasOutcomeFeedbackForLaneLog(
+        userText,
+        internalOutcomeResult,
+      );
+      let shouldRunInternalCaseEngine = false;
 
       if (!isCaseReview && resolvedActiveCase) {
-        const internalOutcomeResult = detectOutcomeResult(userText);
-        const shouldRunInternalCaseEngine =
+        shouldRunInternalCaseEngine =
           shouldCreateCase ||
           Boolean(internalOutcomeResult) ||
           dependsOnPriorConversationContext(userText);
@@ -8861,6 +8958,37 @@ Produce the response now.
           shouldCreateCase,
         });
       }
+
+      const caseLaneDecision = classifyCaseLaneDecisionForLog({
+        userText,
+        shouldCreateCase,
+        hasOutcomeFeedback: hasLaneOutcomeFeedback,
+      });
+      const createsInvestigativeCase =
+        !isCaseReview &&
+        caseLaneDecision.lane === "investigation_case" &&
+        Boolean(resolvedActiveCase) &&
+        (shouldCreateCase ||
+          hasLaneOutcomeFeedback ||
+          shouldRunInternalCaseEngine);
+
+      console.log("CASE_LANE_DECISION", {
+        lane: createsInvestigativeCase
+          ? "investigation_case"
+          : "conversation_only",
+        reason: createsInvestigativeCase
+          ? caseLaneDecision.reason
+          : caseLaneDecision.lane === "conversation_only"
+            ? caseLaneDecision.reason
+            : "unclear",
+        confidence: createsInvestigativeCase
+          ? caseLaneDecision.confidence
+          : caseLaneDecision.lane === "conversation_only"
+            ? caseLaneDecision.confidence
+            : 0.5,
+        createsCase: createsInvestigativeCase,
+        caseId: createsInvestigativeCase ? resolvedActiveCase?.id ?? null : null,
+      });
 
       const activeHypothesisBlock = continuityCaseId
         ? isNewCase
