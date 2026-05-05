@@ -3466,6 +3466,43 @@ function isValidConcreteTest(value: string | null | undefined): boolean {
   return getConcreteTestInvalidReason(value) === null;
 }
 
+function hasExplicitDriveServeContext(
+  ...values: Array<string | null | undefined>
+): boolean {
+  return /\bdrive[-\s]?serves?\b/i.test(
+    values
+      .map((value) => normalizePreviewValue(value))
+      .filter(Boolean)
+      .join(" "),
+  );
+}
+
+function getAdjustmentContextRejectionReason({
+  candidate,
+  userText,
+  movementContext,
+  bodyRegion,
+  activityType,
+}: {
+  candidate: string | null | undefined;
+  userText?: string | null;
+  movementContext?: string | null;
+  bodyRegion?: string | null;
+  activityType?: string | null;
+}): string | null {
+  const candidateText = normalizePreviewValue(candidate);
+  if (!candidateText) return null;
+
+  if (
+    /\bdrive[-\s]?serve\b/i.test(candidateText) &&
+    !hasExplicitDriveServeContext(userText, movementContext, bodyRegion, activityType)
+  ) {
+    return "drive_serve_candidate_without_explicit_drive_serve_context";
+  }
+
+  return null;
+}
+
 function buildFallbackConcreteTest({
   userText,
   hypothesis,
@@ -3490,7 +3527,7 @@ function buildFallbackConcreteTest({
         ? "low-back tightness"
         : `${region} symptom`;
 
-  if (/\bdrive[-\s]?serve|drive serves|serve|serving|racquetball\b/i.test(source)) {
+  if (hasExplicitDriveServeContext(source) && /\bracquetball\b/i.test(source)) {
     const direction = /\bleft\b/i.test(source) ? " to the left" : "";
     return `Do 3 slow drive-serve motions${direction} without a ball. Start the turn from your hips before your trunk moves. Let me know if the stiffness and tightness change.`;
   }
@@ -3543,6 +3580,16 @@ function enforceConcreteTestCandidate({
     bodyRegion,
     activityType,
   });
+  const fallbackRejectionReason = getAdjustmentContextRejectionReason({
+    candidate: fallback,
+    userText,
+    movementContext,
+    bodyRegion,
+    activityType,
+  });
+  const finalFallback = fallbackRejectionReason
+    ? `Do 3 slow reps of the movement that triggered it and change one thing: start from the hips before the trunk moves. Tell me what changes.`
+    : fallback;
 
   console.log("TEST_VALIDATION_RESULT", {
     caseId,
@@ -3551,10 +3598,31 @@ function enforceConcreteTestCandidate({
   });
   console.log("TEST_WRITE_READY", {
     caseId,
-    preview: fallback.slice(0, 80),
+    preview: finalFallback.slice(0, 80),
+  });
+  console.log("CORRECTIVE_ADJUSTMENT_SOURCE", {
+    selectedCaseId: caseId,
+    adjustmentId: null,
+    adjustmentCaseId: caseId,
+    source: "deterministic_fallback",
+    textPreview: clampText(finalFallback, 180),
+    rejectedStaleAdjustment: Boolean(fallbackRejectionReason),
+    rejectionReason: fallbackRejectionReason,
+  });
+  console.log("DRIVE_SERVE_FALLBACK_GUARD", {
+    caseId,
+    candidatePreview: clampText(fallback, 180),
+    explicitDriveServeContext: hasExplicitDriveServeContext(
+      userText,
+      movementContext,
+      bodyRegion,
+      activityType,
+    ),
+    accepted: !fallbackRejectionReason,
+    rejectionReason: fallbackRejectionReason,
   });
 
-  return { finalTest: fallback, usedFallback: true, reason };
+  return { finalTest: finalFallback, usedFallback: true, reason };
 }
 
 function isStrongHypothesisCandidate(
@@ -3791,9 +3859,9 @@ function buildMechanicalArcDefaults({
   const movement = normalizeCaseKey(movementContext);
   const region = normalizeBodyRegion(bodyRegion);
   const isLowBack = region === "low back" || region === "back";
-  const isServe = /\bserve\b/.test(movement);
+  const isDriveServe = hasExplicitDriveServeContext(movementContext);
 
-  if (activity === "racquetball" && isServe && isLowBack) {
+  if (activity === "racquetball" && isDriveServe && isLowBack) {
     return {
       interpretationCorrection:
         "The trunk is starting before the hips, so the serve load is staying in the right low back instead of transferring out through rotation.",
@@ -5177,7 +5245,7 @@ function completeAdjustmentField({
 
   if (
     activity === "racquetball" &&
-    /\bserve\b/.test(movement) &&
+    hasExplicitDriveServeContext(movementContext) &&
     (region === "low back" || region === "back") &&
     (!candidate ||
       isGenericAdjustmentFillerText(candidate) ||
@@ -5235,7 +5303,7 @@ function normalizeInternalCaseUpdate(
     normalizedMovementContext = "golf swing";
   } else if (
     normalizeCaseKey(normalizedActivityType) === "racquetball" &&
-    /\bserve\b/i.test(
+    /\bdrive[-\s]?serve|drive serves\b/i.test(
       `${userText} ${normalizedMovementContext ?? ""}`,
     )
   ) {
@@ -5763,10 +5831,27 @@ async function persistInternalCaseUpdate({
       usedFallback: testValidationResult.usedFallback,
       invalidReason: testValidationResult.reason,
     });
-    const testContextMismatchReason = getCaseContextMismatchReason({
-      candidate: finalTest,
-      latestSignal,
-      update,
+    const testContextMismatchReason =
+      getAdjustmentContextRejectionReason({
+        candidate: finalTest,
+        userText,
+        movementContext: update.movementContext,
+        bodyRegion: update.bodyRegion,
+        activityType: update.activityType,
+      }) ??
+      getCaseContextMismatchReason({
+        candidate: finalTest,
+        latestSignal,
+        update,
+      });
+    console.log("ADJUSTMENT_WRITE_CONTEXT_GUARD", {
+      caseId,
+      movementContext: update.movementContext,
+      activityType: update.activityType,
+      bodyRegion: update.bodyRegion,
+      candidatePreview: clampText(finalTest ?? "", 180),
+      accepted: !testContextMismatchReason,
+      rejectionReason: testContextMismatchReason,
     });
 
     if (testContextMismatchReason) {
@@ -5892,10 +5977,28 @@ async function persistInternalCaseUpdate({
   }
 
   if (activeAdjustmentText && !rejectedStaleActiveTest) {
-    const snapshotTestMismatchReason = getCaseContextMismatchReason({
-      candidate: activeAdjustmentText,
-      latestSignal,
-      update,
+    const snapshotTestMismatchReason =
+      getAdjustmentContextRejectionReason({
+        candidate: activeAdjustmentText,
+        userText,
+        movementContext: update.movementContext,
+        bodyRegion: update.bodyRegion,
+        activityType: update.activityType,
+      }) ??
+      getCaseContextMismatchReason({
+        candidate: activeAdjustmentText,
+        latestSignal,
+        update,
+      });
+
+    console.log("ADJUSTMENT_WRITE_CONTEXT_GUARD", {
+      caseId,
+      movementContext: update.movementContext,
+      activityType: update.activityType,
+      bodyRegion: update.bodyRegion,
+      candidatePreview: clampText(activeAdjustmentText ?? "", 180),
+      accepted: !snapshotTestMismatchReason,
+      rejectionReason: snapshotTestMismatchReason,
     });
 
     if (snapshotTestMismatchReason) {
@@ -5926,6 +6029,21 @@ async function persistInternalCaseUpdate({
     });
   }
 
+  if (rejectedStaleActiveTest) {
+    console.log("SNAPSHOT_TEST_REJECTED_ONLY", {
+      caseId,
+      activeTestRejected: true,
+      preservedFields: [
+        "movementFamily",
+        "mechanicalEnvironment",
+        "dominantFailure",
+        "activeLever",
+        "interpretationCorrection",
+        "failurePrediction",
+      ],
+    });
+  }
+
   await persistCaseReasoningSnapshot({
     caseId,
     signalId: activeSignalId,
@@ -5933,19 +6051,13 @@ async function persistInternalCaseUpdate({
     activeAdjustmentId,
     update: {
       ...update,
-      movementFamily: rejectedStaleActiveTest ? null : update.movementFamily,
-      mechanicalEnvironment: rejectedStaleActiveTest
-        ? null
-        : update.mechanicalEnvironment,
-      dominantFailure: rejectedStaleActiveTest ? null : update.dominantFailure,
-      activeLever: rejectedStaleActiveTest ? null : update.singleLever,
-      activeTest: activeAdjustmentText,
-      interpretationCorrection: rejectedStaleActiveTest
-        ? null
-        : update.interpretationCorrection,
-      failurePrediction: rejectedStaleActiveTest
-        ? null
-        : update.failurePrediction,
+      movementFamily: update.movementFamily,
+      mechanicalEnvironment: update.mechanicalEnvironment,
+      dominantFailure: update.dominantFailure,
+      activeLever: update.singleLever,
+      activeTest: rejectedStaleActiveTest ? null : activeAdjustmentText,
+      interpretationCorrection: update.interpretationCorrection,
+      failurePrediction: update.failurePrediction,
     },
   });
 
@@ -7879,6 +7991,7 @@ ${memoryBlock}
             caseId: number | null;
             activeLever: string | null;
             activeTest: string | null;
+            activeAdjustmentId: number | null;
             interpretationCorrection: string | null;
             failurePrediction: string | null;
           }
@@ -7983,6 +8096,7 @@ ${memoryBlock}
               dominantFailure: caseReasoningSnapshots.dominantFailure,
               activeLever: caseReasoningSnapshots.activeLever,
               activeTest: caseReasoningSnapshots.activeTest,
+              activeAdjustmentId: caseReasoningSnapshots.activeAdjustmentId,
               interpretationCorrection:
                 caseReasoningSnapshots.interpretationCorrection,
               failurePrediction: caseReasoningSnapshots.failurePrediction,
@@ -8400,6 +8514,31 @@ ${memoryBlock}
         rejectedStaleActiveLever: Boolean(
           rejectedStaleSnapshot || rejectedStaleAdjustment,
         ),
+      });
+      console.log("CORRECTIVE_ADJUSTMENT_SOURCE", {
+        selectedCaseId: selectedCase?.id ?? null,
+        adjustmentId: snapshotActiveTest
+          ? latestReasoningSnapshot?.activeAdjustmentId ?? null
+          : adjustmentFallback
+            ? latestAdjustment?.id ?? null
+            : null,
+        adjustmentCaseId: snapshotActiveTest
+          ? latestReasoningSnapshot?.caseId ?? null
+          : latestAdjustment?.caseId ?? null,
+        source: snapshotActiveTest
+          ? "latest_same_case_snapshot"
+          : adjustmentFallback
+            ? "same_case_adjustment_row"
+            : "none",
+        textPreview: clampText(activeTest ?? activeLever ?? "", 180),
+        rejectedStaleAdjustment: Boolean(
+          rejectedStaleSnapshot || rejectedStaleAdjustment,
+        ),
+        rejectionReason: rejectedStaleSnapshot
+          ? "snapshot_case_mismatch"
+          : rejectedStaleAdjustment
+            ? "adjustment_case_mismatch"
+            : null,
       });
 
       console.log("DASHBOARD_FIELD_MAPPING", {
@@ -10454,6 +10593,21 @@ ${ACTIVE_PROMPT}
                     latestSignalSnapshot?.activityType ??
                     resolvedActiveCase.activityType,
                 });
+                const fallbackRejectionReason = getAdjustmentContextRejectionReason({
+                  candidate: finalTest,
+                  userText,
+                  movementContext:
+                    latestSignalSnapshot?.movementContext ??
+                    resolvedActiveCase.movementContext,
+                  bodyRegion: latestSignalSnapshot?.bodyRegion ?? null,
+                  activityType:
+                    latestSignalSnapshot?.activityType ??
+                    resolvedActiveCase.activityType,
+                });
+                if (fallbackRejectionReason) {
+                  finalTest =
+                    "Do 3 slow reps of the movement that triggered it and change one thing: start from the hips before the trunk moves. Tell me what changes.";
+                }
                 console.log("TEST_VALIDATION_RESULT", {
                   caseId: resolvedActiveCase.id,
                   valid: false,
@@ -10463,61 +10617,119 @@ ${ACTIVE_PROMPT}
                   caseId: resolvedActiveCase.id,
                   preview: finalTest.slice(0, 80),
                 });
+                console.log("CORRECTIVE_ADJUSTMENT_SOURCE", {
+                  selectedCaseId: resolvedActiveCase.id,
+                  adjustmentId: null,
+                  adjustmentCaseId: resolvedActiveCase.id,
+                  source: "deterministic_fallback",
+                  textPreview: clampText(finalTest, 180),
+                  rejectedStaleAdjustment: Boolean(fallbackRejectionReason),
+                  rejectionReason: fallbackRejectionReason,
+                });
+                console.log("DRIVE_SERVE_FALLBACK_GUARD", {
+                  caseId: resolvedActiveCase.id,
+                  candidatePreview: clampText(finalTest, 180),
+                  explicitDriveServeContext: hasExplicitDriveServeContext(
+                    userText,
+                    latestSignalSnapshot?.movementContext ??
+                      resolvedActiveCase.movementContext,
+                    latestSignalSnapshot?.bodyRegion ?? null,
+                    latestSignalSnapshot?.activityType ??
+                      resolvedActiveCase.activityType,
+                  ),
+                  accepted: !fallbackRejectionReason,
+                  rejectionReason: fallbackRejectionReason,
+                });
               }
 
-              const [latestStoredAdjustment] = await db
-                .select({
-                  id: caseAdjustments.id,
-                  cue: caseAdjustments.cue,
-                  mechanicalFocus: caseAdjustments.mechanicalFocus,
-                  hypothesisId: caseAdjustments.hypothesisId,
-                })
-                .from(caseAdjustments)
-                .where(eq(caseAdjustments.caseId, resolvedActiveCase.id))
-                .orderBy(desc(caseAdjustments.id))
-                .limit(1);
+              const adjustmentWriteRejectionReason =
+                getAdjustmentContextRejectionReason({
+                  candidate: finalTest,
+                  userText,
+                  movementContext:
+                    latestSignalSnapshot?.movementContext ??
+                    resolvedActiveCase.movementContext,
+                  bodyRegion: latestSignalSnapshot?.bodyRegion ?? null,
+                  activityType:
+                    latestSignalSnapshot?.activityType ??
+                    resolvedActiveCase.activityType,
+                });
 
-              const isDuplicateAdjustment =
-                areSameAdjustmentText(
-                  finalTest,
-                  latestStoredAdjustment?.cue,
-                ) ||
-                areSameAdjustmentText(
-                  finalTest,
-                  latestStoredAdjustment?.mechanicalFocus,
-                );
+              console.log("ADJUSTMENT_WRITE_CONTEXT_GUARD", {
+                caseId: resolvedActiveCase.id,
+                movementContext:
+                  latestSignalSnapshot?.movementContext ??
+                  resolvedActiveCase.movementContext,
+                activityType:
+                  latestSignalSnapshot?.activityType ??
+                  resolvedActiveCase.activityType,
+                bodyRegion: latestSignalSnapshot?.bodyRegion ?? null,
+                candidatePreview: clampText(finalTest ?? "", 180),
+                accepted: !adjustmentWriteRejectionReason,
+                rejectionReason: adjustmentWriteRejectionReason,
+              });
 
-              if (!isDuplicateAdjustment) {
-                const [insertedAdjustment] = await db
-                  .insert(caseAdjustments)
-                  .values({
-                    caseId: resolvedActiveCase.id,
-                    hypothesisId: validHypothesis.id,
-                    cue: finalTest,
-                    mechanicalFocus: finalTest,
-                  })
-                  .returning({
-                    id: caseAdjustments.id,
-                  });
-                console.log("EXTRACT_WRITE_SUCCESS", {
+              if (adjustmentWriteRejectionReason) {
+                console.log("EXTRACT_WRITE_FAIL", {
                   type: "adjustment",
                   caseId: resolvedActiveCase.id,
-                  adjustmentId: insertedAdjustment?.id ?? null,
+                  reason: adjustmentWriteRejectionReason,
                 });
-                if (latestStoredAdjustment?.id) {
-                  console.log("INTERNAL_ADJUSTMENT_REPLACED_ACTIVE", {
+              } else {
+                const [latestStoredAdjustment] = await db
+                  .select({
+                    id: caseAdjustments.id,
+                    cue: caseAdjustments.cue,
+                    mechanicalFocus: caseAdjustments.mechanicalFocus,
+                    hypothesisId: caseAdjustments.hypothesisId,
+                  })
+                  .from(caseAdjustments)
+                  .where(eq(caseAdjustments.caseId, resolvedActiveCase.id))
+                  .orderBy(desc(caseAdjustments.id))
+                  .limit(1);
+
+                const isDuplicateAdjustment =
+                  areSameAdjustmentText(
+                    finalTest,
+                    latestStoredAdjustment?.cue,
+                  ) ||
+                  areSameAdjustmentText(
+                    finalTest,
+                    latestStoredAdjustment?.mechanicalFocus,
+                  );
+
+                if (!isDuplicateAdjustment) {
+                  const [insertedAdjustment] = await db
+                    .insert(caseAdjustments)
+                    .values({
+                      caseId: resolvedActiveCase.id,
+                      hypothesisId: validHypothesis.id,
+                      cue: finalTest,
+                      mechanicalFocus: finalTest,
+                    })
+                    .returning({
+                      id: caseAdjustments.id,
+                    });
+                  console.log("EXTRACT_WRITE_SUCCESS", {
+                    type: "adjustment",
                     caseId: resolvedActiveCase.id,
-                    previousAdjustmentId: latestStoredAdjustment.id,
-                    newAdjustmentId: insertedAdjustment?.id ?? null,
-                    previousPreview: clampText(
-                      pickDashboardDisplayValue([
-                        latestStoredAdjustment.cue,
-                        latestStoredAdjustment.mechanicalFocus,
-                      ]) ?? "",
-                      180,
-                    ),
-                    newPreview: clampText(finalTest, 180),
+                    adjustmentId: insertedAdjustment?.id ?? null,
                   });
+                  if (latestStoredAdjustment?.id) {
+                    console.log("INTERNAL_ADJUSTMENT_REPLACED_ACTIVE", {
+                      caseId: resolvedActiveCase.id,
+                      previousAdjustmentId: latestStoredAdjustment.id,
+                      newAdjustmentId: insertedAdjustment?.id ?? null,
+                      previousPreview: clampText(
+                        pickDashboardDisplayValue([
+                          latestStoredAdjustment.cue,
+                          latestStoredAdjustment.mechanicalFocus,
+                        ]) ?? "",
+                        180,
+                      ),
+                      newPreview: clampText(finalTest, 180),
+                    });
+                  }
                 }
               }
             }
