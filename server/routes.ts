@@ -22,7 +22,7 @@ import OpenAI from "openai";
 import { ElevenLabsClient } from "elevenlabs";
 import { toFile } from "openai/uploads";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { eq, asc, desc, and, ne, isNull, sql, inArray } from "drizzle-orm";
+import { eq, asc, desc, and, ne, isNull, sql, inArray, or } from "drizzle-orm";
 
 import { db } from "./db";
 
@@ -1731,6 +1731,36 @@ async function getConversationOpenCase(
   }
 
   return conversationOpenCase;
+}
+
+async function getMostRecentOpenMechanicalCaseForUser(
+  userId: string,
+): Promise<ResolvedCaseRow | null> {
+  const [latestOpenCase] = await db
+    .select({
+      id: cases.id,
+      userId: cases.userId,
+      conversationId: cases.conversationId,
+      movementContext: cases.movementContext,
+      activityType: cases.activityType,
+      caseType: cases.caseType,
+      status: cases.status,
+    })
+    .from(cases)
+    .where(
+      and(
+        eq(cases.userId, userId),
+        or(isNull(cases.caseType), ne(cases.caseType, "non_mechanical")),
+      ),
+    )
+    .orderBy(desc(cases.updatedAt), desc(cases.id))
+    .limit(1);
+
+  if (!latestOpenCase || !isOpenCaseStatus(latestOpenCase.status)) {
+    return null;
+  }
+
+  return latestOpenCase;
 }
 
 function hasExplicitNewCaseLanguage(text: string): boolean {
@@ -4576,6 +4606,29 @@ function hasOutcomeFeedbackForLaneLog(
   );
 }
 
+function getOutcomeRoutingLabels(
+  userText: string,
+  detectedOutcome: ReturnType<typeof detectOutcomeResult>,
+): { logLabel: string; storedResult: string } | null {
+  if (detectedOutcome === "Improved") {
+    return { logLabel: "improved", storedResult: "Improved" };
+  }
+
+  if (detectedOutcome === "Worse") {
+    return { logLabel: "worse", storedResult: "Worse" };
+  }
+
+  if (detectedOutcome === "Same") {
+    return { logLabel: "unchanged", storedResult: "Same" };
+  }
+
+  if (/\b(?:changed|different)\b/i.test(userText)) {
+    return { logLabel: "changed_unclear", storedResult: "changed_unclear" };
+  }
+
+  return null;
+}
+
 // ==============================
 // OUTCOME DETECTION
 // ==============================
@@ -7400,6 +7453,7 @@ ${memoryBlock}
             movementFamily: string | null;
             mechanicalEnvironment: string | null;
             dominantFailure: string | null;
+            caseId: number | null;
             activeLever: string | null;
             activeTest: string | null;
             interpretationCorrection: string | null;
@@ -7496,6 +7550,7 @@ ${memoryBlock}
 
           [latestReasoningSnapshot] = await db
             .select({
+              caseId: caseReasoningSnapshots.caseId,
               movementFamily: caseReasoningSnapshots.movementFamily,
               mechanicalEnvironment:
                 caseReasoningSnapshots.mechanicalEnvironment,
@@ -7771,31 +7826,49 @@ ${memoryBlock}
         selectedMechanismSource,
         220,
       );
+      const snapshotCaseId =
+        latestReasoningSnapshot?.caseId === selectedCase?.id
+          ? latestReasoningSnapshot.caseId
+          : null;
+      const adjustmentCaseId =
+        latestAdjustment?.caseId === selectedCase?.id
+          ? latestAdjustment.caseId
+          : null;
+      const rejectedStaleSnapshot =
+        latestReasoningSnapshot?.caseId != null &&
+        latestReasoningSnapshot.caseId !== selectedCase?.id;
+      const rejectedStaleAdjustment =
+        latestAdjustment?.caseId != null &&
+        latestAdjustment.caseId !== selectedCase?.id;
       const snapshotActiveLever = normalizePreviewValue(
-        latestReasoningSnapshot?.activeLever,
+        snapshotCaseId ? latestReasoningSnapshot?.activeLever : null,
       );
       const snapshotActiveTest = normalizePreviewValue(
-        latestReasoningSnapshot?.activeTest,
+        snapshotCaseId ? latestReasoningSnapshot?.activeTest : null,
       );
       const snapshotMechanicalEnvironment = normalizePreviewValue(
-        latestReasoningSnapshot?.mechanicalEnvironment,
+        snapshotCaseId ? latestReasoningSnapshot?.mechanicalEnvironment : null,
       );
       const snapshotDominantFailure = normalizePreviewValue(
-        latestReasoningSnapshot?.dominantFailure,
+        snapshotCaseId ? latestReasoningSnapshot?.dominantFailure : null,
       );
       const snapshotMovementFamily = normalizePreviewValue(
-        latestReasoningSnapshot?.movementFamily,
+        snapshotCaseId ? latestReasoningSnapshot?.movementFamily : null,
       );
       const snapshotInterpretationCorrection = normalizePreviewValue(
-        latestReasoningSnapshot?.interpretationCorrection,
+        snapshotCaseId
+          ? latestReasoningSnapshot?.interpretationCorrection
+          : null,
       );
       const snapshotFailurePrediction = normalizePreviewValue(
-        latestReasoningSnapshot?.failurePrediction,
+        snapshotCaseId ? latestReasoningSnapshot?.failurePrediction : null,
       );
-      const latestAdjustmentCue = normalizePreviewValue(latestAdjustment?.cue);
+      const latestAdjustmentCue = normalizePreviewValue(
+        adjustmentCaseId ? latestAdjustment?.cue : null,
+      );
       const adjustmentFallback = pickDashboardDisplayValue([
-        latestAdjustment?.cue,
-        latestAdjustment?.mechanicalFocus,
+        adjustmentCaseId ? latestAdjustment?.cue : null,
+        adjustmentCaseId ? latestAdjustment?.mechanicalFocus : null,
       ]);
       const activeTest = extractPreviewSnippet(
         snapshotActiveTest ?? latestAdjustmentCue,
@@ -7824,6 +7897,28 @@ ${memoryBlock}
         latestCaseReview?.reviewText,
         220,
       );
+
+      console.log("DASHBOARD_CASE_FIELD_ISOLATION", {
+        selectedCaseId: selectedCase?.id ?? null,
+        snapshotCaseId: latestReasoningSnapshot?.caseId ?? null,
+        adjustmentCaseId: latestAdjustment?.caseId ?? null,
+        activeTestSource: snapshotActiveTest
+          ? "snapshot"
+          : latestAdjustmentCue
+            ? "adjustment"
+            : null,
+        activeLeverSource: snapshotActiveLever
+          ? "snapshot"
+          : adjustmentFallback
+            ? "adjustment"
+            : null,
+        rejectedStaleActiveTest: Boolean(
+          rejectedStaleSnapshot || rejectedStaleAdjustment,
+        ),
+        rejectedStaleActiveLever: Boolean(
+          rejectedStaleSnapshot || rejectedStaleAdjustment,
+        ),
+      });
 
       console.log("DASHBOARD_FIELD_MAPPING", {
         caseId: selectedCase?.id ?? null,
@@ -8464,6 +8559,15 @@ Produce the response now.
       let resolvedActiveCase: ResolvedCaseRow | null = null;
 
       resolvedActiveCase = await getConversationOpenCase(userId, convoId);
+      const internalOutcomeResult = detectOutcomeResult(userText);
+      const hasLaneOutcomeFeedback = hasOutcomeFeedbackForLaneLog(
+        userText,
+        internalOutcomeResult,
+      );
+
+      if (!resolvedActiveCase && hasLaneOutcomeFeedback && !isCaseReview) {
+        resolvedActiveCase = await getMostRecentOpenMechanicalCaseForUser(userId);
+      }
 
       const memory = await getMemory(userId);
       const persistedSettingsForContext = buildPersistedSettings(
@@ -8472,7 +8576,9 @@ Produce the response now.
         (existingUser as any)?.profileImageUrl,
       );
       const shouldCreateCase =
-        !isCaseReview && qualifiesForTimelineSignal(userText);
+        !isCaseReview &&
+        qualifiesForTimelineSignal(userText) &&
+        !hasLaneOutcomeFeedback;
       const derivedCaseContext = shouldCreateCase
         ? deriveCaseContext(userText, persistedSettingsForContext)
         : null;
@@ -8864,17 +8970,12 @@ Produce the response now.
         wroteOutcome: false,
         update: null,
       };
-      const internalOutcomeResult = detectOutcomeResult(userText);
-      const hasLaneOutcomeFeedback = hasOutcomeFeedbackForLaneLog(
-        userText,
-        internalOutcomeResult,
-      );
       let shouldRunInternalCaseEngine = false;
 
       if (!isCaseReview && resolvedActiveCase) {
         shouldRunInternalCaseEngine =
           shouldCreateCase ||
-          Boolean(internalOutcomeResult) ||
+          hasLaneOutcomeFeedback ||
           dependsOnPriorConversationContext(userText);
         logLayer1Trace(layer1TraceId, "layer1_run_decision", {
           conversationId: convoId,
@@ -8956,6 +9057,70 @@ Produce the response now.
           skipped: true,
           reason: isCaseReview ? "case_review" : "no_resolved_active_case",
           shouldCreateCase,
+        });
+      }
+
+      if (!isCaseReview && hasLaneOutcomeFeedback) {
+        const outcomeRoutingLabels = getOutcomeRoutingLabels(
+          userText,
+          internalOutcomeResult,
+        );
+        const outcomeCase = resolvedActiveCase;
+        const validAdjustment =
+          outcomeCase
+            ? await getValidAdjustmentForOutcomeWrite({
+                caseId: outcomeCase.id,
+              })
+            : null;
+        let routedOutcomePersisted = internalCasePersistResult.wroteOutcome;
+
+        if (
+          outcomeCase &&
+          validAdjustment &&
+          outcomeRoutingLabels &&
+          !routedOutcomePersisted
+        ) {
+          const [latestOutcome] = await db
+            .select({
+              id: caseOutcomes.id,
+              result: caseOutcomes.result,
+              adjustmentId: caseOutcomes.adjustmentId,
+              createdAt: caseOutcomes.createdAt,
+            })
+            .from(caseOutcomes)
+            .where(eq(caseOutcomes.adjustmentId, validAdjustment.id))
+            .orderBy(desc(caseOutcomes.id))
+            .limit(1);
+          const latestCreatedAtMs = latestOutcome?.createdAt
+            ? new Date(latestOutcome.createdAt).getTime()
+            : 0;
+          const isDuplicateRecentOutcome =
+            Boolean(latestOutcome) &&
+            latestOutcome?.result === outcomeRoutingLabels.storedResult &&
+            latestOutcome?.adjustmentId === validAdjustment.id &&
+            latestCreatedAtMs > 0 &&
+            Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
+
+          if (!isDuplicateRecentOutcome) {
+            await db.insert(caseOutcomes).values({
+              caseId: outcomeCase.id,
+              adjustmentId: validAdjustment.id,
+              result: outcomeRoutingLabels.storedResult,
+              userFeedback: userText,
+            });
+            routedOutcomePersisted = true;
+          }
+        }
+
+        console.log("OUTCOME_FEEDBACK_ROUTED", {
+          userId,
+          conversationId: convoId,
+          outcomeCaseId: outcomeCase?.id ?? null,
+          activeTestId: validAdjustment?.id ?? null,
+          activeAdjustmentId: validAdjustment?.id ?? null,
+          outcomeLabel: outcomeRoutingLabels?.logLabel ?? null,
+          rawOutcomePreview: clampText(userText, 180),
+          persisted: routedOutcomePersisted,
         });
       }
 
@@ -9250,13 +9415,38 @@ ${ACTIVE_PROMPT}
       }
 
       const layer2State = internalCasePersistResult.update;
+      const layer2CaseId = layer2State ? resolvedActiveCase?.id ?? null : null;
+      const rawLayer2ActiveTest =
+        layer2State?.activeTest ?? layer2State?.currentTest ?? null;
+      const rawLayer2ActiveLever =
+        layer2State?.activeLever ?? layer2State?.singleLever ?? null;
+      const staleLayer2StateSuppressed =
+        Boolean(layer2State) &&
+        Boolean(resolvedActiveCase) &&
+        layer2CaseId !== resolvedActiveCase?.id;
+      const layer2ActiveTest = staleLayer2StateSuppressed
+        ? null
+        : rawLayer2ActiveTest;
+      const layer2ActiveLever = staleLayer2StateSuppressed
+        ? null
+        : rawLayer2ActiveLever;
+      console.log("ACTIVE_CASE_STATE_SELECTION", {
+        resolvedActiveCaseId: resolvedActiveCase?.id ?? null,
+        layer2CaseId,
+        activeTestCaseId: layer2ActiveTest ? layer2CaseId : null,
+        activeLeverCaseId: layer2ActiveLever ? layer2CaseId : null,
+        outcomeCaseId: layer2State?.outcomeStatus ? layer2CaseId : null,
+        usingActiveTest: Boolean(layer2ActiveTest),
+        activeTestPreview: clampText(layer2ActiveTest ?? "", 180),
+        staleActiveTestSuppressed: staleLayer2StateSuppressed,
+      });
       const layer2Enforcement = enforceLayer2BehavioralCompleteness({
         text: assistantText,
         hypothesis: layer2State?.hypothesis,
         interpretationCorrection: layer2State?.interpretationCorrection,
         failurePrediction: layer2State?.failurePrediction,
-        activeLever: layer2State?.activeLever ?? layer2State?.singleLever,
-        activeTest: layer2State?.activeTest ?? layer2State?.currentTest,
+        activeLever: layer2ActiveLever,
+        activeTest: layer2ActiveTest,
       });
       const finalText = layer2Enforcement.text;
 
