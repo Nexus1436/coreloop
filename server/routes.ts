@@ -6910,12 +6910,111 @@ function softenDisplayedActiveTestLanguage(text: string): {
       /\b(?:Do|Try)\s+3\s+slow\s+([a-z][a-z\s-]{2,40}?)\s+(?:motions|swings|reps)[^.!?]*(?:\.\s*(?:Tell me|Let me know)\s+(?:what changes|if\s+[^.!?]+?changes)\.?)?/gi,
       "Try it a few times during the same motion and tell me what changes.",
     )
+    .replace(
+      /\bTry\s+3\s+(?:practice\s+swings|digging\s+motions)[^.!?]*(?:\.\s*(?:Tell me|Let me know)\s+(?:what changes|if\s+[^.!?]+?changes)\.?)?/gi,
+      "Try it a few times during the same motion and tell me what changes.",
+    )
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
   return {
     text: softenedText,
     modified: softenedText !== originalText,
+  };
+}
+
+function removeLayer2ContextDrift({
+  text,
+  userText,
+  layer2State,
+  resolvedActiveCase,
+}: {
+  text: string;
+  userText: string;
+  layer2State?: InternalCaseUpdate | null;
+  resolvedActiveCase?: ResolvedCaseRow | null;
+}): {
+  text: string;
+  removed: boolean;
+  terms: string[];
+} {
+  const originalText = text.trim();
+  if (!originalText) return { text: originalText, removed: false, terms: [] };
+
+  const allowedContext = [
+    userText,
+    resolvedActiveCase?.activityType,
+    resolvedActiveCase?.movementContext,
+    layer2State?.signal,
+    layer2State?.bodyRegion,
+    layer2State?.activityType,
+    layer2State?.movementContext,
+  ]
+    .filter((value): value is string => Boolean(normalizePreviewValue(value)))
+    .join(" ");
+
+  const forbiddenTerms: Array<{ label: string; regex: RegExp }> = [
+    { label: "cycling", regex: /\bcycling\b/i },
+    { label: "bike", regex: /\b(?:bike|biking|bicycle)\b/i },
+    { label: "lumbar", regex: /\blumbar\b/i },
+    { label: "low back", regex: /\blow back|lower back\b/i },
+  ];
+
+  const driftTerms = forbiddenTerms
+    .filter(
+      ({ regex }) =>
+        regex.test(originalText) && !regex.test(allowedContext),
+    )
+    .map(({ label }) => label);
+
+  if (driftTerms.length === 0) {
+    return { text: originalText, removed: false, terms: [] };
+  }
+
+  const driftPattern = new RegExp(
+    driftTerms
+      .map((term) =>
+        term === "low back"
+          ? "\\b(?:low back|lower back)\\b"
+          : term === "bike"
+            ? "\\b(?:bike|biking|bicycle)\\b"
+          : `\\b${term}\\b`,
+      )
+      .join("|"),
+    "i",
+  );
+
+  const safeSentences = originalText
+    .split(/(?<=[.!?])\s+|\n{2,}/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .filter((sentence) => !driftPattern.test(sentence));
+
+  const cleanedText = safeSentences.join(" ").replace(/\n{3,}/g, "\n\n").trim();
+  if (cleanedText) {
+    return {
+      text: cleanedText,
+      removed: cleanedText !== originalText,
+      terms: driftTerms,
+    };
+  }
+
+  const fallbackParts = [
+    firstSentence(layer2State?.interpretationCorrection),
+    firstSentence(layer2State?.hypothesis),
+    firstSentence(layer2State?.failurePrediction),
+    normalizePreviewValue(layer2State?.singleLever ?? layer2State?.activeLever),
+    normalizePreviewValue(layer2State?.currentTest ?? layer2State?.activeTest),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .filter((value) => !driftPattern.test(value));
+
+  return {
+    text:
+      fallbackParts.join("\n\n").trim() ||
+      "Try it a few times during the same motion and tell me what changes.",
+    removed: true,
+    terms: driftTerms,
   };
 }
 
@@ -6962,6 +7061,7 @@ function finalLayer2SurfaceCleanup(text: string): {
   replaceAndTrack(/\buse\s+adjusting\b/gi, "adjust", "use_verb_ing");
   replaceAndTrack(/\buse\s+focusing\s+on\b/gi, "focus on", "use_verb_ing");
   replaceAndTrack(/\buse\s+focusing\b/gi, "focus", "use_verb_ing");
+  replaceAndTrack(/\buse\s+engaging\b/gi, "engage", "use_verb_ing");
   replaceAndTrack(/\buse\s+keeping\b/gi, "keep", "use_verb_ing");
   replaceAndTrack(/\buse\s+moving\b/gi, "move", "use_verb_ing");
   replaceAndTrack(/\buse\s+activating\b/gi, "activate", "use_verb_ing");
@@ -10628,14 +10728,37 @@ ${ACTIVE_PROMPT}
         });
       }
 
+      const beforeActiveTestSoftening = finalText;
       const softenedActiveTest = softenDisplayedActiveTestLanguage(finalText);
       finalText = softenedActiveTest.text;
+      console.log("LAYER2_TEST_SOFTENED", {
+        caseId: resolvedActiveCase?.id ?? null,
+        modified: softenedActiveTest.modified,
+        originalPreview: clampText(beforeActiveTestSoftening, 180),
+        finalPreview: clampText(finalText, 180),
+      });
 
       const outcomeExpression = enforceOutcomeFeedbackExpression({
         text: finalText,
         outcomeResult: hasLaneOutcomeFeedback ? internalOutcomeResult : null,
       });
       finalText = outcomeExpression.text;
+
+      const beforeContextDriftGuard = finalText;
+      const contextDriftGuard = removeLayer2ContextDrift({
+        text: finalText,
+        userText,
+        layer2State,
+        resolvedActiveCase,
+      });
+      finalText = contextDriftGuard.text;
+      console.log("LAYER2_CONTEXT_DRIFT_GUARD", {
+        caseId: resolvedActiveCase?.id ?? null,
+        removed: contextDriftGuard.removed,
+        terms: contextDriftGuard.terms,
+        originalLength: beforeContextDriftGuard.length,
+        finalLength: finalText.length,
+      });
 
       const beforeFinalSurfaceCleanup = finalText;
       const finalSurfaceCleanup = finalLayer2SurfaceCleanup(finalText);
