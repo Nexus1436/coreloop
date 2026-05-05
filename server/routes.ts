@@ -22,7 +22,7 @@ import OpenAI from "openai";
 import { ElevenLabsClient } from "elevenlabs";
 import { toFile } from "openai/uploads";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { eq, asc, desc, and, ne, isNull, sql, inArray, or } from "drizzle-orm";
+import { eq, asc, desc, and, ne, isNull, sql, inArray } from "drizzle-orm";
 
 import { db } from "./db";
 
@@ -1731,36 +1731,6 @@ async function getConversationOpenCase(
   }
 
   return conversationOpenCase;
-}
-
-async function getMostRecentOpenMechanicalCaseForUser(
-  userId: string,
-): Promise<ResolvedCaseRow | null> {
-  const [latestOpenCase] = await db
-    .select({
-      id: cases.id,
-      userId: cases.userId,
-      conversationId: cases.conversationId,
-      movementContext: cases.movementContext,
-      activityType: cases.activityType,
-      caseType: cases.caseType,
-      status: cases.status,
-    })
-    .from(cases)
-    .where(
-      and(
-        eq(cases.userId, userId),
-        or(isNull(cases.caseType), ne(cases.caseType, "non_mechanical")),
-      ),
-    )
-    .orderBy(desc(cases.updatedAt), desc(cases.id))
-    .limit(1);
-
-  if (!latestOpenCase || !isOpenCaseStatus(latestOpenCase.status)) {
-    return null;
-  }
-
-  return latestOpenCase;
 }
 
 function hasExplicitNewCaseLanguage(text: string): boolean {
@@ -4611,19 +4581,78 @@ function getOutcomeRoutingLabels(
   detectedOutcome: ReturnType<typeof detectOutcomeResult>,
 ): { logLabel: string; storedResult: string } | null {
   if (detectedOutcome === "Improved") {
-    return { logLabel: "improved", storedResult: "Improved" };
+    return { logLabel: "improved", storedResult: "improved" };
   }
 
   if (detectedOutcome === "Worse") {
-    return { logLabel: "worse", storedResult: "Worse" };
+    return { logLabel: "worse", storedResult: "worse" };
   }
 
   if (detectedOutcome === "Same") {
-    return { logLabel: "unchanged", storedResult: "Same" };
+    return { logLabel: "unchanged", storedResult: "unchanged" };
   }
 
   if (/\b(?:changed|different)\b/i.test(userText)) {
     return { logLabel: "changed_unclear", storedResult: "changed_unclear" };
+  }
+
+  return null;
+}
+
+function getCaseContextMismatchReason({
+  candidate,
+  latestSignal,
+  update,
+}: {
+  candidate: string | null | undefined;
+  latestSignal?: {
+    description?: string | null;
+    bodyRegion?: string | null;
+    movementContext?: string | null;
+    activityType?: string | null;
+  } | null;
+  update: InternalCaseUpdate;
+}): string | null {
+  const candidateText = normalizePreviewValue(candidate);
+  if (!candidateText) return null;
+
+  const contextText = [
+    latestSignal?.description,
+    latestSignal?.bodyRegion,
+    latestSignal?.movementContext,
+    latestSignal?.activityType,
+    update.signal,
+    update.bodyRegion,
+    update.movementContext,
+    update.activityType,
+  ]
+    .map((value) => normalizePreviewValue(value))
+    .filter(Boolean)
+    .join(" ");
+
+  const candidateKey = normalizeCaseKey(candidateText);
+  const contextKey = normalizeCaseKey(contextText);
+  if (!contextKey) return null;
+
+  if (
+    /\bdrive[-\s]?serve\b/i.test(candidateText) &&
+    !/\bdrive[-\s]?serve\b/i.test(contextText)
+  ) {
+    return "candidate_drive_serve_not_in_current_case_context";
+  }
+
+  if (
+    /\blob\b/i.test(contextText) &&
+    /\bdrive[-\s]?serve\b/i.test(candidateText)
+  ) {
+    return "candidate_drive_serve_conflicts_with_lob_case";
+  }
+
+  if (
+    /\bshoulder\b/.test(contextKey) &&
+    /\b(?:low back|lower back|lumbar)\b/.test(candidateKey)
+  ) {
+    return "candidate_low_back_language_conflicts_with_shoulder_case";
   }
 
   return null;
@@ -5475,7 +5504,13 @@ async function persistInternalCaseUpdate({
   };
 
   const [latestSignal] = await db
-    .select({ id: caseSignals.id, description: caseSignals.description })
+    .select({
+      id: caseSignals.id,
+      description: caseSignals.description,
+      bodyRegion: caseSignals.bodyRegion,
+      movementContext: caseSignals.movementContext,
+      activityType: caseSignals.activityType,
+    })
     .from(caseSignals)
     .where(eq(caseSignals.caseId, caseId))
     .orderBy(desc(caseSignals.id))
@@ -5508,6 +5543,13 @@ async function persistInternalCaseUpdate({
   let activeAdjustmentId =
     (await getLatestValidAdjustmentForCase(caseId))?.id ?? null;
   let activeAdjustmentText = update.currentTest ?? update.adjustment ?? null;
+  let activeTestSource = update.currentTest
+    ? "layer1_currentTest"
+    : update.adjustment
+      ? "layer1_adjustment"
+      : null;
+  let rejectedStaleActiveTest = false;
+  let rejectedStaleSourceCaseId: number | null = null;
   const hypothesisValidation = {
     hasHypothesis: Boolean(update.hypothesis),
     isStrongCandidate: update.hypothesis
@@ -5607,8 +5649,10 @@ async function persistInternalCaseUpdate({
       bodyRegion: update.bodyRegion,
       activityType: update.activityType,
     });
-    const { finalTest } = testValidationResult;
-    activeAdjustmentText = finalTest;
+    let { finalTest } = testValidationResult;
+    activeTestSource = testValidationResult.usedFallback
+      ? "current_case_fallback"
+      : activeTestSource;
     logLayer1Trace(traceId, "adjustment_test_validation_result", {
       caseId,
       hasNextTest: Boolean(nextTest),
@@ -5619,8 +5663,32 @@ async function persistInternalCaseUpdate({
       usedFallback: testValidationResult.usedFallback,
       invalidReason: testValidationResult.reason,
     });
-    const adjustmentCue = finalTest;
-    const mechanicalFocus = finalTest;
+    const testContextMismatchReason = getCaseContextMismatchReason({
+      candidate: finalTest,
+      latestSignal,
+      update,
+    });
+
+    if (testContextMismatchReason) {
+      rejectedStaleActiveTest = true;
+      rejectedStaleSourceCaseId = null;
+      activeAdjustmentText = null;
+      activeAdjustmentId = null;
+      activeTestSource = "rejected_context_mismatch";
+      console.warn("SNAPSHOT_WRITE_FIELD_ISOLATION", {
+        caseId,
+        activeTestPreview: clampText(finalTest ?? "", 180),
+        activeTestSource,
+        rejectedStaleActiveTest,
+        rejectedStaleSourceCaseId,
+        reason: testContextMismatchReason,
+      });
+    } else {
+      activeAdjustmentText = finalTest;
+    }
+
+    const adjustmentCue = activeAdjustmentText;
+    const mechanicalFocus = activeAdjustmentText;
 
     const [latestStoredAdjustment] = await db
       .select({
@@ -5634,16 +5702,14 @@ async function persistInternalCaseUpdate({
       .limit(1);
 
     const isDuplicateAdjustment =
-      areSameAdjustmentText(
-        adjustmentCue,
-        latestStoredAdjustment?.cue,
-      ) ||
-      areSameAdjustmentText(
-        mechanicalFocus,
-        latestStoredAdjustment?.mechanicalFocus,
-      );
+      Boolean(adjustmentCue) &&
+      (areSameAdjustmentText(adjustmentCue, latestStoredAdjustment?.cue) ||
+        areSameAdjustmentText(
+          mechanicalFocus,
+          latestStoredAdjustment?.mechanicalFocus,
+        ));
 
-    if (!isDuplicateAdjustment) {
+    if (activeAdjustmentText && !isDuplicateAdjustment) {
       const [insertedAdjustment] = await db
         .insert(caseAdjustments)
         .values({
@@ -5662,8 +5728,8 @@ async function persistInternalCaseUpdate({
         status: "inserted",
         adjustmentId: insertedAdjustment?.id ?? null,
         hypothesisId: activeHypothesis.id,
-        cuePreview: clampText(adjustmentCue, 180),
-        mechanicalFocusPreview: clampText(mechanicalFocus, 180),
+        cuePreview: clampText(adjustmentCue ?? "", 180),
+        mechanicalFocusPreview: clampText(mechanicalFocus ?? "", 180),
       });
       console.log("INTERNAL_CASE_WRITE_SUCCESS", {
         type: "adjustment",
@@ -5691,13 +5757,17 @@ async function persistInternalCaseUpdate({
     } else {
       console.log("INTERNAL_ADJUSTMENT_WRITE", {
         caseId,
-        status: "duplicate_skipped",
+        status: activeAdjustmentText
+          ? "duplicate_skipped"
+          : "skipped_stale_or_null_test",
         adjustmentId: latestStoredAdjustment?.id ?? null,
         hypothesisId: activeHypothesis.id,
-        cuePreview: clampText(adjustmentCue, 180),
-        mechanicalFocusPreview: clampText(mechanicalFocus, 180),
+        cuePreview: clampText(adjustmentCue ?? "", 180),
+        mechanicalFocusPreview: clampText(mechanicalFocus ?? "", 180),
       });
-      activeAdjustmentId = latestStoredAdjustment?.id ?? null;
+      activeAdjustmentId = activeAdjustmentText
+        ? latestStoredAdjustment?.id ?? null
+        : null;
     }
   } else {
     logLayer1Trace(traceId, "adjustment_test_validation_result", {
@@ -5721,6 +5791,41 @@ async function persistInternalCaseUpdate({
     });
   }
 
+  if (activeAdjustmentText && !rejectedStaleActiveTest) {
+    const snapshotTestMismatchReason = getCaseContextMismatchReason({
+      candidate: activeAdjustmentText,
+      latestSignal,
+      update,
+    });
+
+    if (snapshotTestMismatchReason) {
+      const rejectedActiveTestPreview = activeAdjustmentText;
+      rejectedStaleActiveTest = true;
+      rejectedStaleSourceCaseId = null;
+      activeAdjustmentText = null;
+      activeAdjustmentId = null;
+      activeTestSource = "rejected_context_mismatch";
+      console.warn("SNAPSHOT_WRITE_FIELD_ISOLATION", {
+        caseId,
+        activeTestPreview: clampText(rejectedActiveTestPreview ?? "", 180),
+        activeTestSource,
+        rejectedStaleActiveTest,
+        rejectedStaleSourceCaseId,
+        reason: snapshotTestMismatchReason,
+      });
+    }
+  }
+
+  if (!rejectedStaleActiveTest) {
+    console.log("SNAPSHOT_WRITE_FIELD_ISOLATION", {
+      caseId,
+      activeTestPreview: clampText(activeAdjustmentText ?? "", 180),
+      activeTestSource,
+      rejectedStaleActiveTest,
+      rejectedStaleSourceCaseId,
+    });
+  }
+
   await persistCaseReasoningSnapshot({
     caseId,
     signalId: activeSignalId,
@@ -5728,18 +5833,29 @@ async function persistInternalCaseUpdate({
     activeAdjustmentId,
     update: {
       ...update,
-      activeLever: update.singleLever,
+      movementFamily: rejectedStaleActiveTest ? null : update.movementFamily,
+      mechanicalEnvironment: rejectedStaleActiveTest
+        ? null
+        : update.mechanicalEnvironment,
+      dominantFailure: rejectedStaleActiveTest ? null : update.dominantFailure,
+      activeLever: rejectedStaleActiveTest ? null : update.singleLever,
       activeTest: activeAdjustmentText,
+      interpretationCorrection: rejectedStaleActiveTest
+        ? null
+        : update.interpretationCorrection,
+      failurePrediction: rejectedStaleActiveTest
+        ? null
+        : update.failurePrediction,
     },
   });
 
   if (update.outcomeStatus && update.outcomeStatus !== "unknown") {
     const mappedOutcome =
       update.outcomeStatus === "improved"
-        ? "Improved"
+        ? "improved"
         : update.outcomeStatus === "worse"
-          ? "Worse"
-          : "Same";
+          ? "worse"
+          : "unchanged";
     const validAdjustment = await getValidAdjustmentForOutcomeWrite({ caseId });
 
     if (validAdjustment) {
@@ -5790,7 +5906,7 @@ async function persistInternalCaseUpdate({
           outcomeId: insertedOutcome?.id ?? null,
         });
 
-        if (mappedOutcome === "Improved") {
+        if (mappedOutcome === "improved") {
           await db
             .update(cases)
             .set({ status: "resolved" })
@@ -8565,10 +8681,6 @@ Produce the response now.
         internalOutcomeResult,
       );
 
-      if (!resolvedActiveCase && hasLaneOutcomeFeedback && !isCaseReview) {
-        resolvedActiveCase = await getMostRecentOpenMechanicalCaseForUser(userId);
-      }
-
       const memory = await getMemory(userId);
       const persistedSettingsForContext = buildPersistedSettings(
         existingUser?.firstName,
@@ -9076,7 +9188,6 @@ Produce the response now.
 
         if (
           outcomeCase &&
-          validAdjustment &&
           outcomeRoutingLabels &&
           !routedOutcomePersisted
         ) {
@@ -9088,7 +9199,7 @@ Produce the response now.
               createdAt: caseOutcomes.createdAt,
             })
             .from(caseOutcomes)
-            .where(eq(caseOutcomes.adjustmentId, validAdjustment.id))
+            .where(eq(caseOutcomes.caseId, outcomeCase.id))
             .orderBy(desc(caseOutcomes.id))
             .limit(1);
           const latestCreatedAtMs = latestOutcome?.createdAt
@@ -9097,14 +9208,14 @@ Produce the response now.
           const isDuplicateRecentOutcome =
             Boolean(latestOutcome) &&
             latestOutcome?.result === outcomeRoutingLabels.storedResult &&
-            latestOutcome?.adjustmentId === validAdjustment.id &&
+            latestOutcome?.adjustmentId === (validAdjustment?.id ?? null) &&
             latestCreatedAtMs > 0 &&
             Date.now() - latestCreatedAtMs <= 1000 * 60 * 10;
 
           if (!isDuplicateRecentOutcome) {
             await db.insert(caseOutcomes).values({
               caseId: outcomeCase.id,
-              adjustmentId: validAdjustment.id,
+              adjustmentId: validAdjustment?.id ?? null,
               result: outcomeRoutingLabels.storedResult,
               userFeedback: userText,
             });
@@ -9112,15 +9223,19 @@ Produce the response now.
           }
         }
 
-        console.log("OUTCOME_FEEDBACK_ROUTED", {
-          userId,
-          conversationId: convoId,
+        console.log("OUTCOME_FEEDBACK_PERSISTENCE", {
           outcomeCaseId: outcomeCase?.id ?? null,
-          activeTestId: validAdjustment?.id ?? null,
           activeAdjustmentId: validAdjustment?.id ?? null,
           outcomeLabel: outcomeRoutingLabels?.logLabel ?? null,
-          rawOutcomePreview: clampText(userText, 180),
           persisted: routedOutcomePersisted,
+          reason: routedOutcomePersisted
+            ? "persisted"
+            : !outcomeCase
+              ? "no_current_conversation_case"
+              : !outcomeRoutingLabels
+                ? "no_supported_outcome_label"
+                : "duplicate_or_insert_skipped",
+          rawOutcomePreview: clampText(userText, 180),
         });
       }
 
