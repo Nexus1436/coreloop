@@ -4658,6 +4658,66 @@ function getCaseContextMismatchReason({
   return null;
 }
 
+function getDashboardSnapshotMismatchReason({
+  activeTest,
+  selectedCase,
+  latestSignal,
+}: {
+  activeTest: string | null | undefined;
+  selectedCase?: {
+    movementContext?: string | null;
+    activityType?: string | null;
+  } | null;
+  latestSignal?: {
+    description?: string | null;
+    bodyRegion?: string | null;
+    movementContext?: string | null;
+    activityType?: string | null;
+  } | null;
+}): string | null {
+  const candidateText = normalizePreviewValue(activeTest);
+  if (!candidateText) return null;
+
+  const contextText = [
+    latestSignal?.description,
+    latestSignal?.bodyRegion,
+    latestSignal?.movementContext,
+    latestSignal?.activityType,
+    selectedCase?.movementContext,
+    selectedCase?.activityType,
+  ]
+    .map((value) => normalizePreviewValue(value))
+    .filter(Boolean)
+    .join(" ");
+
+  const candidateKey = normalizeCaseKey(candidateText);
+  const contextKey = normalizeCaseKey(contextText);
+  if (!contextKey) return null;
+
+  if (
+    /\bdrive[-\s]?serve\b/i.test(candidateText) &&
+    !/\bdrive[-\s]?serve\b/i.test(contextText)
+  ) {
+    return "candidate_drive_serve_not_in_selected_case_context";
+  }
+
+  if (
+    /\blob\b/i.test(contextText) &&
+    /\bdrive[-\s]?serve\b/i.test(candidateText)
+  ) {
+    return "candidate_drive_serve_conflicts_with_lob_case";
+  }
+
+  if (
+    /\bshoulder\b/.test(contextKey) &&
+    /\b(?:low back|lower back|lumbar)\b/.test(candidateKey)
+  ) {
+    return "candidate_low_back_language_conflicts_with_shoulder_case";
+  }
+
+  return null;
+}
+
 // ==============================
 // OUTCOME DETECTION
 // ==============================
@@ -7566,6 +7626,7 @@ ${memoryBlock}
         | undefined;
       let latestReasoningSnapshot:
         | {
+            id: number | null;
             movementFamily: string | null;
             mechanicalEnvironment: string | null;
             dominantFailure: string | null;
@@ -7576,6 +7637,8 @@ ${memoryBlock}
             failurePrediction: string | null;
           }
         | undefined;
+      let rejectedSnapshotIds: number[] = [];
+      let rejectionReasons: string[] = [];
       let followUpContext: string[] = [];
 
       if (selectedCase) {
@@ -7664,8 +7727,9 @@ ${memoryBlock}
             .orderBy(desc(caseSignals.id))
             .limit(1);
 
-          [latestReasoningSnapshot] = await db
+          const snapshotRows = await db
             .select({
+              id: caseReasoningSnapshots.id,
               caseId: caseReasoningSnapshots.caseId,
               movementFamily: caseReasoningSnapshots.movementFamily,
               mechanicalEnvironment:
@@ -7680,7 +7744,63 @@ ${memoryBlock}
             .from(caseReasoningSnapshots)
             .where(eq(caseReasoningSnapshots.caseId, selectedCase.id))
             .orderBy(desc(caseReasoningSnapshots.id))
-            .limit(1);
+            .limit(10);
+
+          for (const snapshotRow of snapshotRows) {
+            const hasUsableArcField = [
+              snapshotRow.activeTest,
+              snapshotRow.activeLever,
+              snapshotRow.interpretationCorrection,
+              snapshotRow.failurePrediction,
+              snapshotRow.mechanicalEnvironment,
+              snapshotRow.dominantFailure,
+              snapshotRow.movementFamily,
+            ].some((value) => Boolean(normalizePreviewValue(value)));
+
+            if (!hasUsableArcField) {
+              rejectedSnapshotIds.push(snapshotRow.id);
+              rejectionReasons.push("no_usable_arc_fields");
+              continue;
+            }
+
+            const mismatchReason = getDashboardSnapshotMismatchReason({
+              activeTest: snapshotRow.activeTest,
+              selectedCase,
+              latestSignal,
+            });
+
+            if (mismatchReason) {
+              rejectedSnapshotIds.push(snapshotRow.id);
+              rejectionReasons.push(mismatchReason);
+              continue;
+            }
+
+            latestReasoningSnapshot = snapshotRow;
+            break;
+          }
+
+          console.log("DASHBOARD_SNAPSHOT_SELECTION", {
+            selectedCaseId: selectedCase?.id ?? null,
+            selectedSnapshotId: latestReasoningSnapshot?.id ?? null,
+            rejectedSnapshotIds,
+            rejectionReasons,
+            activeTestPreview: clampText(
+              latestReasoningSnapshot?.activeTest ?? "",
+              180,
+            ),
+            activeLeverPreview: clampText(
+              latestReasoningSnapshot?.activeLever ?? "",
+              180,
+            ),
+            interpretationCorrectionPreview: clampText(
+              latestReasoningSnapshot?.interpretationCorrection ?? "",
+              180,
+            ),
+            failurePredictionPreview: clampText(
+              latestReasoningSnapshot?.failurePrediction ?? "",
+              180,
+            ),
+          });
         }
 
         if (isNonMechanicalCase) {
