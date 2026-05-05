@@ -4544,6 +4544,31 @@ function formatCaseStatusLabel(status: string | null | undefined): string | null
     .join(" ");
 }
 
+function formatInvestigationStateLabel({
+  status,
+  hasOutcome,
+  hasAdjustment,
+  hasHypothesis,
+}: {
+  status: string | null | undefined;
+  hasOutcome: boolean;
+  hasAdjustment: boolean;
+  hasHypothesis: boolean;
+}): string | null {
+  if (
+    String(status ?? "")
+      .trim()
+      .toLowerCase() === "resolved"
+  ) {
+    return "Resolved";
+  }
+
+  if (hasOutcome || hasAdjustment) return "Testing";
+  if (hasHypothesis) return "Narrowing";
+
+  return formatCaseStatusLabel(status);
+}
+
 function looksLikeAdjustment(text: string): boolean {
   return /\b(i tried|i changed|i started|i switched|i adjusted|i moved to|i began|i stopped|i reduced|i increased|i focused on|i worked on|i let|i allowed)\b/i.test(
     text.trim(),
@@ -7399,8 +7424,38 @@ ${memoryBlock}
               .where(inArray(caseOutcomes.caseId, reviewCaseIds))
               .orderBy(desc(caseOutcomes.createdAt), desc(caseOutcomes.id))
           : [];
+      const reviewHypothesisRows =
+        reviewCaseIds.length > 0
+          ? await db
+              .select({
+                caseId: caseHypotheses.caseId,
+              })
+              .from(caseHypotheses)
+              .where(inArray(caseHypotheses.caseId, reviewCaseIds))
+              .orderBy(desc(caseHypotheses.createdAt), desc(caseHypotheses.id))
+          : [];
+      const reviewAdjustmentRows =
+        reviewCaseIds.length > 0
+          ? await db
+              .select({
+                caseId: caseAdjustments.caseId,
+              })
+              .from(caseAdjustments)
+              .where(inArray(caseAdjustments.caseId, reviewCaseIds))
+              .orderBy(desc(caseAdjustments.createdAt), desc(caseAdjustments.id))
+          : [];
       const reviewCaseStatusById = new Map(
         reviewCaseRows.map((row) => [row.id, row.status]),
+      );
+      const reviewCaseIdsWithHypotheses = new Set(
+        reviewHypothesisRows
+          .map((row) => row.caseId)
+          .filter((caseId): caseId is number => typeof caseId === "number"),
+      );
+      const reviewCaseIdsWithAdjustments = new Set(
+        reviewAdjustmentRows
+          .map((row) => row.caseId)
+          .filter((caseId): caseId is number => typeof caseId === "number"),
       );
       const latestReviewOutcomeByCaseId = new Map<
         number,
@@ -7426,19 +7481,29 @@ ${memoryBlock}
           review.caseId == null
             ? null
             : latestReviewOutcomeByCaseId.get(review.caseId) ?? null;
+        const outcomeLabel = latestReviewOutcome
+          ? formatStoredOutcomeLabel(
+              latestReviewOutcome.result,
+              latestReviewOutcome.userFeedback,
+            )
+          : null;
 
         return {
           ...review,
           statusLabel:
             review.caseId == null
               ? null
-              : formatCaseStatusLabel(reviewCaseStatusById.get(review.caseId)),
-          outcomeLabel: latestReviewOutcome
-            ? formatStoredOutcomeLabel(
-                latestReviewOutcome.result,
-                latestReviewOutcome.userFeedback,
-              )
-            : "No outcome yet",
+              : formatInvestigationStateLabel({
+                  status: reviewCaseStatusById.get(review.caseId),
+                  hasOutcome: Boolean(outcomeLabel),
+                  hasAdjustment: reviewCaseIdsWithAdjustments.has(
+                    review.caseId,
+                  ),
+                  hasHypothesis: reviewCaseIdsWithHypotheses.has(
+                    review.caseId,
+                  ),
+                }),
+          outcomeLabel,
         };
       });
 
