@@ -4515,6 +4515,10 @@ function formatStoredOutcomeLabel(
 ): string | null {
   const stored = normalizePreviewValue(result);
   const feedbackText = normalizePreviewValue(feedback);
+  const normalizedStored = normalizeCaseKey(stored);
+  if (normalizedStored === "mixed") return "Mixed";
+  if (normalizedStored === "unchanged") return "Unchanged";
+
   const combined = [stored, feedbackText].filter(Boolean).join(" ");
   const detected = combined ? detectOutcomeResult(combined) : null;
 
@@ -7434,20 +7438,16 @@ ${memoryBlock}
                 latestReviewOutcome.result,
                 latestReviewOutcome.userFeedback,
               )
-            : null,
+            : "No outcome yet",
         };
       });
 
       console.log("CASE_REVIEWS_LOADED", {
         count: caseReviewsList.length,
-        firstReview: caseReviewsList[0]
-          ? {
-              id: caseReviewsList[0].id,
-              createdAt: caseReviewsList[0].createdAt,
-              statusLabel: caseReviewsList[0].statusLabel,
-              outcomeLabel: caseReviewsList[0].outcomeLabel,
-            }
-          : null,
+        firstReviewId: caseReviewsList[0]?.id ?? null,
+        firstReviewDate: caseReviewsList[0]?.createdAt ?? null,
+        firstStatusLabel: caseReviewsList[0]?.statusLabel ?? null,
+        firstOutcomeLabel: caseReviewsList[0]?.outcomeLabel ?? null,
       });
 
       const isSelectedNonMechanicalCase =

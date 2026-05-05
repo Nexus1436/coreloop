@@ -68,6 +68,8 @@ type DashboardData = {
     caseId: number;
     reviewText: string;
     createdAt: string;
+    statusLabel?: string | null;
+    outcomeLabel?: string | null;
   }[];
 };
 
@@ -2110,6 +2112,8 @@ return (
                               month: "short",
                               day: "numeric",
                             });
+                            const reviewMetadata =
+                              review.outcomeLabel ?? review.statusLabel ?? null;
 
                             return (
                               <button
@@ -2125,6 +2129,7 @@ return (
                                   }}
                                 >
                                   Case Review — {date}
+                                  {reviewMetadata ? ` — ${reviewMetadata}` : ""}
                                 </div>
 
                                 <div className="mt-1 text-[13px] leading-[1.4] text-gray-400">
