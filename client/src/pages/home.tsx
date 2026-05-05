@@ -1662,6 +1662,10 @@ if (!resp.ok) {
       value: lastShiftValue,
     },
     {
+      label: "Risk If Unchanged",
+      value: dashboardData.failurePrediction,
+    },
+    {
       label: "Adjustment",
       value: adjustmentValue,
     },
