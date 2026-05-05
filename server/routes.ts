@@ -9632,9 +9632,8 @@ Produce the response now.
 
       if (!isCaseReview && resolvedActiveCase) {
         shouldRunInternalCaseEngine =
-          shouldCreateCase ||
-          hasLaneOutcomeFeedback ||
-          dependsOnPriorConversationContext(userText);
+          !hasLaneOutcomeFeedback &&
+          (shouldCreateCase || dependsOnPriorConversationContext(userText));
         logLayer1Trace(layer1TraceId, "layer1_run_decision", {
           conversationId: convoId,
           caseId: resolvedActiveCase.id,
@@ -9645,7 +9644,16 @@ Produce the response now.
           dependsOnPriorContext: dependsOnPriorConversationContext(userText),
         });
 
-        if (shouldRunInternalCaseEngine) {
+        if (hasLaneOutcomeFeedback) {
+          console.log("OUTCOME_NO_LAYER1", {
+            caseId: resolvedActiveCase?.id,
+          });
+          console.log("LAYER1_START", {
+            caseId: resolvedActiveCase.id,
+            skipped: true,
+            reason: "outcome_feedback",
+          });
+        } else if (shouldRunInternalCaseEngine) {
           try {
             console.log("LAYER1_START", {
               caseId: resolvedActiveCase.id,
