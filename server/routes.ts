@@ -6553,6 +6553,32 @@ function buildEnglishLayer2Fallback({
   return parts.join("\n\n");
 }
 
+function enforceOutcomeFeedbackExpression({
+  text,
+  outcomeResult,
+}: {
+  text: string;
+  outcomeResult: ReturnType<typeof detectOutcomeResult>;
+}): { text: string; modified: boolean } {
+  if (!outcomeResult) return { text, modified: false };
+
+  const fallbackByOutcome: Record<NonNullable<ReturnType<typeof detectOutcomeResult>>, string> = {
+    Improved:
+      "Good. That means the load is shifting in the right direction. Stay with that for now and notice how it holds up under play.",
+    Worse:
+      "Got it. That version is not the right lever for this case. Leave that cue alone for now and use the change as useful signal.",
+    Same:
+      "Good data. That cue did not change the signal, so it probably is not the main lever. Do not keep repeating that same test for now.",
+  };
+
+  const compressedText = fallbackByOutcome[outcomeResult];
+
+  return {
+    text: compressedText,
+    modified: compressedText !== text.trim(),
+  };
+}
+
 function enforceLayer2BehavioralCompleteness({
   text,
   hypothesis,
@@ -10119,12 +10145,19 @@ ${ACTIVE_PROMPT}
         });
       }
 
+      const outcomeExpression = enforceOutcomeFeedbackExpression({
+        text: finalText,
+        outcomeResult: hasLaneOutcomeFeedback ? internalOutcomeResult : null,
+      });
+      finalText = outcomeExpression.text;
+
       console.log("LAYER2_FORMAT_CLEANUP", {
         caseId: resolvedActiveCase?.id ?? null,
         strippedLabels: structuredLabelCleanup.stripped,
         coachingCleaned: coachingCleanup.cleaned,
         nonEnglishDetected,
         singleLeverForced: leverEnforced.modified,
+        outcomeFeedbackCompressed: outcomeExpression.modified,
         originalLength: assistantText.length,
         finalLength: finalText.length,
       });
