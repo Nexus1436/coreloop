@@ -6218,6 +6218,34 @@ function stripVisibleLayer1Labels(text: string): string {
     .trim();
 }
 
+function stripStructuredLayer2Labels(text: string): {
+  text: string;
+  stripped: boolean;
+} {
+  const strippedText = text
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^\s*(?:[-*•]|\d+[\.)])\s+/, "")
+        .replace(
+          /^\s*(?:\*\*)?(?:Mechanism|Correction|Lever|Failure Prediction|Active Test)(?:\*\*)?\s*:\s*/i,
+          "",
+        )
+        .replace(
+          /^\s*(?:Here's what's likely happening|Here's a refined look|To address this|Try this)\s*:\s*/i,
+          "",
+        ),
+    )
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return {
+    text: strippedText,
+    stripped: strippedText !== text.trim(),
+  };
+}
+
 function firstSentence(text: string | null | undefined): string | null {
   const normalized = normalizePreviewValue(text);
   if (!normalized) return null;
@@ -6242,7 +6270,15 @@ function containsLayer2CoachingBleed(text: string): boolean {
   if (/^\s*(?:[-*•]|\d+[\.)])\s+/m.test(normalized)) return true;
 
   if (
-    /\b(?:also|in addition|another thing|consider|make sure to|recovery routine|recovery|pacing|general fitness|monitor)\b/i.test(
+    /\b(?:also|in addition|another thing|consider|make sure|keep an eye on|recovery routine|recovery|pacing|general fitness|monitor)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /^\s*(?:[-*•]|\d+[\.)])?\s*(?:\*\*)?(?:Mechanism|Correction|Lever|Failure Prediction|Active Test)(?:\*\*)?\s*:/im.test(
       normalized,
     )
   ) {
@@ -6252,7 +6288,7 @@ function containsLayer2CoachingBleed(text: string): boolean {
   if (/\bfocus on\b.+\band\b.+/i.test(normalized)) return true;
 
   const instructionMatches = normalized.match(
-    /\b(?:try|do|start|keep|focus|monitor|work on|consider|make sure|add|avoid|pace|recover|practice)\b/gi,
+    /\b(?:try|do|start|keep|focus|monitor|work on|consider|make sure|add|avoid|pace|recover|practice|address)\b/gi,
   );
 
   return (instructionMatches?.length ?? 0) > 2;
@@ -6262,10 +6298,12 @@ function isLikelyLayer2InstructionParagraph(text: string): boolean {
   const normalized = normalizePreviewValue(text) ?? "";
   if (!normalized) return false;
 
+  const stripped = stripStructuredLayer2Labels(normalized).text;
+
   return (
     /^\s*(?:[-*•]|\d+[\.)])\s+/m.test(normalized) ||
-    /\b(?:try|do|start|keep|focus|monitor|work on|consider|make sure|add|avoid|pace|recover|practice|also|in addition|another thing|recovery|pacing)\b/i.test(
-      normalized,
+    /\b(?:try|do|start|keep|focus|monitor|work on|consider|make sure|keep an eye on|add|avoid|pace|recover|practice|also|in addition|another thing|recovery|pacing)\b/i.test(
+      stripped,
     )
   );
 }
@@ -6289,17 +6327,23 @@ function enforceSingleLever({
     return { text: originalText, modified: false };
   }
 
-  const mechanismParagraphs = originalText
+  const mechanismParagraph = originalText
     .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
+    .flatMap((paragraph) => paragraph.split("\n"))
+    .map((paragraph) => stripStructuredLayer2Labels(paragraph.trim()).text)
     .filter(Boolean)
     .filter((paragraph) => !isLikelyLayer2InstructionParagraph(paragraph))
     .filter(
       (paragraph) =>
         !areEquivalentDashboardCandidates(paragraph, normalizedActiveLever),
-    );
+    )
+    .map((paragraph) => firstSentence(paragraph) ?? paragraph)
+    .find(Boolean);
 
-  const nextParts = [...mechanismParagraphs, normalizedActiveLever];
+  const nextParts = [
+    ...(mechanismParagraph ? [mechanismParagraph] : []),
+    normalizedActiveLever,
+  ];
   const normalizedActiveTest = normalizePreviewValue(activeTest);
 
   if (
@@ -6323,6 +6367,78 @@ function enforceSingleLever({
     modified: finalText !== originalText,
     reason: "multi_instruction_detected",
   };
+}
+
+function cleanCoachingLanguage(text: string): {
+  text: string;
+  cleaned: boolean;
+} {
+  let cleanedText = text.trim();
+
+  const replacements: Array<[RegExp, string]> = [
+    [/\btry focusing on\b/gi, "start"],
+    [/\bfocus on initiating\b/gi, "start"],
+    [/\bfocus on starting\b/gi, "start"],
+    [/\bfocus on\b/gi, "use"],
+    [/\bmake sure to use your hips\b/gi, "use your hips"],
+    [/\bmake sure your hips are involved\b/gi, "use your hips first"],
+    [/\bmake sure to\b/gi, ""],
+    [/\bmake sure\b/gi, ""],
+    [/\bconsider\b/gi, ""],
+    [/\bkeep an eye on\b/gi, "notice"],
+    [/\bit might help to\b/gi, ""],
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    cleanedText = cleanedText.replace(pattern, replacement);
+  }
+
+  cleanedText = cleanedText
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\s+([,.!?])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return {
+    text: cleanedText,
+    cleaned: cleanedText !== text.trim(),
+  };
+}
+
+function detectNonEnglishOutput(text: string): boolean {
+  const normalized = normalizePreviewValue(text) ?? "";
+  if (!normalized) return false;
+
+  const nonLatinMatches = normalized.match(
+    /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g,
+  );
+  const nonLatinCount = nonLatinMatches?.length ?? 0;
+
+  return nonLatinCount >= 3 || nonLatinCount / normalized.length > 0.05;
+}
+
+function buildEnglishLayer2Fallback({
+  interpretationCorrection,
+  hypothesis,
+  activeLever,
+  activeTest,
+}: {
+  interpretationCorrection?: string | null;
+  hypothesis?: string | null;
+  activeLever?: string | null;
+  activeTest?: string | null;
+}): string {
+  const parts = [
+    firstSentence(interpretationCorrection) ??
+      firstSentence(hypothesis) ??
+      "This looks like a movement mechanics issue.",
+    normalizePreviewValue(activeLever),
+    normalizePreviewValue(activeTest),
+    "Let me know whether it feels better, worse, or the same.",
+  ].filter((value): value is string => Boolean(value));
+
+  return parts.join("\n\n");
 }
 
 function enforceLayer2BehavioralCompleteness({
@@ -9844,6 +9960,35 @@ ${ACTIVE_PROMPT}
           finalLength: finalText.length,
         });
       }
+
+      const structuredLabelCleanup = stripStructuredLayer2Labels(finalText);
+      finalText = structuredLabelCleanup.text;
+
+      const coachingCleanup = cleanCoachingLanguage(finalText);
+      finalText = coachingCleanup.text;
+
+      const userInputNonEnglish = detectNonEnglishOutput(userText);
+      const nonEnglishDetected =
+        !userInputNonEnglish && detectNonEnglishOutput(finalText);
+
+      if (nonEnglishDetected) {
+        finalText = buildEnglishLayer2Fallback({
+          interpretationCorrection: layer2State?.interpretationCorrection,
+          hypothesis: layer2State?.hypothesis,
+          activeLever: layer2ActiveLever,
+          activeTest: layer2ActiveTest,
+        });
+      }
+
+      console.log("LAYER2_FORMAT_CLEANUP", {
+        caseId: resolvedActiveCase?.id ?? null,
+        strippedLabels: structuredLabelCleanup.stripped,
+        coachingCleaned: coachingCleanup.cleaned,
+        nonEnglishDetected,
+        singleLeverForced: leverEnforced.modified,
+        originalLength: assistantText.length,
+        finalLength: finalText.length,
+      });
 
       console.log("LAYER2_ENFORCER_RESULT", {
         caseId: resolvedActiveCase?.id ?? null,
