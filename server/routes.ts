@@ -6579,6 +6579,125 @@ function enforceOutcomeFeedbackExpression({
   };
 }
 
+function evaluateLayer2TestDisplayQuality({
+  activeTest,
+  mechanism,
+  interpretationCorrection,
+  failurePrediction,
+}: {
+  activeTest?: string | null;
+  mechanism?: string | null;
+  interpretationCorrection?: string | null;
+  failurePrediction?: string | null;
+}): {
+  displayable: boolean;
+  reason: string | null;
+  probeText?: string;
+} {
+  const testText = normalizePreviewValue(activeTest);
+  if (!testText) {
+    return { displayable: true, reason: null };
+  }
+
+  const mechanismText = normalizePreviewValue(
+    interpretationCorrection ?? mechanism ?? failurePrediction,
+  );
+  const lowerTest = testText.toLowerCase();
+  const hasClearAction =
+    /\b(?:do|try|test|start|keep|change|use|move|reach|turn|step|swing|serve|spike)\b/i.test(
+      testText,
+    );
+  const hasObservation =
+    /\b(?:tell me|notice|report|see if|whether|if|what changes|where|when|during|after|before|better|worse|same)\b/i.test(
+      testText,
+    );
+  const hasMechanismVariable =
+    /\b(?:before|after|during|top|bottom|start|starts|change one thing|one thing|instead of|from the|through the|hips?|trunk|shoulder|scap|rib|pelvis|knee|waist|reach|rotation|load|transfer|timing)\b/i.test(
+      testText,
+    );
+  const exposureReductionOnly =
+    /\b(?:partial reach|go slower|less range|smaller range|stop before|avoid|back off|do less|not as far)\b/i.test(
+      lowerTest,
+    );
+
+  if (!hasClearAction) {
+    return {
+      displayable: false,
+      reason: "missing_clear_action",
+      probeText:
+        "That test needs to be tightened first. Tell me whether the signal appears during the motion, at the end range, or after you start coming back out.",
+    };
+  }
+
+  if (!hasObservation) {
+    return {
+      displayable: false,
+      reason: "missing_observable_result",
+      probeText:
+        "That test needs to be tightened first. Tell me whether the signal appears during the motion, at the end range, or after you start coming back out.",
+    };
+  }
+
+  if (exposureReductionOnly && !hasMechanismVariable) {
+    return {
+      displayable: false,
+      reason: "exposure_reduction_without_mechanism_variable",
+      probeText:
+        "That test needs to isolate the signal, not just avoid it. Does it start before you reach the top of the motion, or only once you hit the end range?",
+    };
+  }
+
+  if (exposureReductionOnly && mechanismText) {
+    return {
+      displayable: false,
+      reason: "avoidance_test_not_mechanism_test",
+      probeText:
+        "That test needs to isolate the signal, not just avoid it. Does it start before you reach the top of the motion, or only once you hit the end range?",
+    };
+  }
+
+  if (!hasMechanismVariable) {
+    return {
+      displayable: false,
+      reason: "missing_isolated_variable",
+      probeText:
+        "That test needs one variable first. Tell me whether the signal changes with timing, range, or where the load starts.",
+    };
+  }
+
+  return { displayable: true, reason: null };
+}
+
+function replaceDisplayedTestWithProbe({
+  text,
+  activeTest,
+  probeText,
+}: {
+  text: string;
+  activeTest?: string | null;
+  probeText?: string;
+}): string {
+  const normalizedActiveTest = normalizePreviewValue(activeTest);
+  const normalizedProbe = normalizePreviewValue(probeText);
+  if (!normalizedActiveTest || !normalizedProbe) return text.trim();
+
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .filter(
+      (paragraph) =>
+        !responseIncludesCurrentTest(paragraph, normalizedActiveTest) &&
+        !hasOutcomeFeedbackClosure(paragraph),
+    );
+
+  if (!paragraphs.some((paragraph) => paragraph === normalizedProbe)) {
+    paragraphs.push(normalizedProbe);
+  }
+
+  return paragraphs.join("\n\n").trim();
+}
+
 function enforceLayer2BehavioralCompleteness({
   text,
   hypothesis,
@@ -10150,6 +10269,34 @@ ${ACTIVE_PROMPT}
           hypothesis: layer2State?.hypothesis,
           activeLever: layer2ActiveLever,
           activeTest: layer2ActiveTest,
+        });
+      }
+
+      const testDisplayQuality = evaluateLayer2TestDisplayQuality({
+        activeTest: layer2ActiveTest,
+        mechanism: layer2State?.hypothesis,
+        interpretationCorrection: layer2State?.interpretationCorrection,
+        failurePrediction: layer2State?.failurePrediction,
+      });
+
+      console.log("LAYER2_TEST_DISPLAY_QUALITY", {
+        caseId: resolvedActiveCase?.id ?? null,
+        hasActiveTest: Boolean(layer2ActiveTest),
+        displayable: testDisplayQuality.displayable,
+        reason: testDisplayQuality.reason,
+        activeTestPreview: clampText(layer2ActiveTest ?? "", 180),
+      });
+
+      if (layer2ActiveTest && !testDisplayQuality.displayable) {
+        finalText = replaceDisplayedTestWithProbe({
+          text: finalText,
+          activeTest: layer2ActiveTest,
+          probeText: testDisplayQuality.probeText,
+        });
+        console.log("LAYER2_TEST_SUPPRESSED_FOR_DISPLAY", {
+          caseId: resolvedActiveCase?.id ?? null,
+          reason: testDisplayQuality.reason,
+          probePreview: clampText(testDisplayQuality.probeText ?? "", 180),
         });
       }
 
