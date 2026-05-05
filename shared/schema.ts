@@ -474,6 +474,8 @@ export const caseReasoningSnapshots = pgTable(
     ),
     activeLever: text("active_lever"),
     activeTest: text("active_test"),
+    interpretationCorrection: text("interpretation_correction"),
+    failurePrediction: text("failure_prediction"),
 
     createdAt: timestamp("created_at")
       .default(sql`CURRENT_TIMESTAMP`)

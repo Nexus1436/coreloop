@@ -22,7 +22,7 @@ import OpenAI from "openai";
 import { ElevenLabsClient } from "elevenlabs";
 import { toFile } from "openai/uploads";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { eq, asc, desc, and, ne, isNull, sql } from "drizzle-orm";
+import { eq, asc, desc, and, ne, isNull, sql, inArray } from "drizzle-orm";
 
 import { db } from "./db";
 
@@ -4509,6 +4509,37 @@ function detectOutcomeResult(
   return null;
 }
 
+function formatStoredOutcomeLabel(
+  result: string | null | undefined,
+  feedback: string | null | undefined,
+): string | null {
+  const stored = normalizePreviewValue(result);
+  const feedbackText = normalizePreviewValue(feedback);
+  const combined = [stored, feedbackText].filter(Boolean).join(" ");
+  const detected = combined ? detectOutcomeResult(combined) : null;
+
+  if (detected === "Same") return "Unchanged";
+  if (detected) return detected;
+
+  return stored ?? null;
+}
+
+function formatCaseStatusLabel(status: string | null | undefined): string | null {
+  const normalized = normalizeCaseKey(status);
+  if (!normalized) return null;
+
+  if (normalized === "open") return "Open";
+  if (normalized === "active") return "Active";
+  if (normalized === "current") return "Current";
+  if (normalized === "resolved") return "Resolved";
+
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function looksLikeAdjustment(text: string): boolean {
   return /\b(i tried|i changed|i started|i switched|i adjusted|i moved to|i began|i stopped|i reduced|i increased|i focused on|i worked on|i let|i allowed)\b/i.test(
     text.trim(),
@@ -5074,6 +5105,8 @@ async function persistCaseReasoningSnapshot({
         dominantFailureConfidence: update.dominantFailureConfidence,
         activeLever: update.activeLever,
         activeTest: update.activeTest,
+        interpretationCorrection: update.interpretationCorrection,
+        failurePrediction: update.failurePrediction,
       })
       .returning({ id: caseReasoningSnapshots.id });
 
@@ -5086,6 +5119,11 @@ async function persistCaseReasoningSnapshot({
       dominantFailureConfidence: update.dominantFailureConfidence,
       activeLeverPreview: clampText(update.activeLever ?? "", 160),
       activeTestPreview: clampText(update.activeTest ?? "", 220),
+      interpretationCorrectionPreview: clampText(
+        update.interpretationCorrection ?? "",
+        220,
+      ),
+      failurePredictionPreview: clampText(update.failurePrediction ?? "", 220),
     });
 
     return snapshot?.id ?? null;
@@ -7113,6 +7151,8 @@ ${memoryBlock}
             dominantFailure: string | null;
             activeLever: string | null;
             activeTest: string | null;
+            interpretationCorrection: string | null;
+            failurePrediction: string | null;
           }
         | undefined;
       let followUpContext: string[] = [];
@@ -7211,6 +7251,9 @@ ${memoryBlock}
               dominantFailure: caseReasoningSnapshots.dominantFailure,
               activeLever: caseReasoningSnapshots.activeLever,
               activeTest: caseReasoningSnapshots.activeTest,
+              interpretationCorrection:
+                caseReasoningSnapshots.interpretationCorrection,
+              failurePrediction: caseReasoningSnapshots.failurePrediction,
             })
             .from(caseReasoningSnapshots)
             .where(eq(caseReasoningSnapshots.caseId, selectedCase.id))
@@ -7311,7 +7354,7 @@ ${memoryBlock}
           .limit(1);
       }
 
-      const caseReviewsList = await db
+      const rawCaseReviewsList = await db
         .select({
           id: caseReviews.id,
           caseId: caseReviews.caseId,
@@ -7323,8 +7366,88 @@ ${memoryBlock}
         .orderBy(desc(caseReviews.createdAt), desc(caseReviews.id))
         .limit(5);
 
+      const reviewCaseIds = Array.from(
+        new Set(
+          rawCaseReviewsList
+            .map((review) => review.caseId)
+            .filter((caseId): caseId is number => typeof caseId === "number"),
+        ),
+      );
+      const reviewCaseRows =
+        reviewCaseIds.length > 0
+          ? await db
+              .select({
+                id: cases.id,
+                status: cases.status,
+              })
+              .from(cases)
+              .where(inArray(cases.id, reviewCaseIds))
+          : [];
+      const reviewOutcomeRows =
+        reviewCaseIds.length > 0
+          ? await db
+              .select({
+                caseId: caseOutcomes.caseId,
+                result: caseOutcomes.result,
+                userFeedback: caseOutcomes.userFeedback,
+              })
+              .from(caseOutcomes)
+              .where(inArray(caseOutcomes.caseId, reviewCaseIds))
+              .orderBy(desc(caseOutcomes.createdAt), desc(caseOutcomes.id))
+          : [];
+      const reviewCaseStatusById = new Map(
+        reviewCaseRows.map((row) => [row.id, row.status]),
+      );
+      const latestReviewOutcomeByCaseId = new Map<
+        number,
+        {
+          result: string | null;
+          userFeedback: string | null;
+        }
+      >();
+
+      for (const row of reviewOutcomeRows) {
+        if (row.caseId == null || latestReviewOutcomeByCaseId.has(row.caseId)) {
+          continue;
+        }
+
+        latestReviewOutcomeByCaseId.set(row.caseId, {
+          result: row.result,
+          userFeedback: row.userFeedback,
+        });
+      }
+
+      const caseReviewsList = rawCaseReviewsList.map((review) => {
+        const latestReviewOutcome =
+          review.caseId == null
+            ? null
+            : latestReviewOutcomeByCaseId.get(review.caseId) ?? null;
+
+        return {
+          ...review,
+          statusLabel:
+            review.caseId == null
+              ? null
+              : formatCaseStatusLabel(reviewCaseStatusById.get(review.caseId)),
+          outcomeLabel: latestReviewOutcome
+            ? formatStoredOutcomeLabel(
+                latestReviewOutcome.result,
+                latestReviewOutcome.userFeedback,
+              )
+            : null,
+        };
+      });
+
       console.log("CASE_REVIEWS_LOADED", {
         count: caseReviewsList.length,
+        firstReview: caseReviewsList[0]
+          ? {
+              id: caseReviewsList[0].id,
+              createdAt: caseReviewsList[0].createdAt,
+              statusLabel: caseReviewsList[0].statusLabel,
+              outcomeLabel: caseReviewsList[0].outcomeLabel,
+            }
+          : null,
       });
 
       const isSelectedNonMechanicalCase =
@@ -7376,8 +7499,12 @@ ${memoryBlock}
       const snapshotMovementFamily = normalizePreviewValue(
         latestReasoningSnapshot?.movementFamily,
       );
-      const snapshotInterpretationCorrection: string | null = null;
-      const snapshotFailurePrediction: string | null = null;
+      const snapshotInterpretationCorrection = normalizePreviewValue(
+        latestReasoningSnapshot?.interpretationCorrection,
+      );
+      const snapshotFailurePrediction = normalizePreviewValue(
+        latestReasoningSnapshot?.failurePrediction,
+      );
       const latestAdjustmentCue = normalizePreviewValue(latestAdjustment?.cue);
       const adjustmentFallback = pickDashboardDisplayValue([
         latestAdjustment?.cue,
