@@ -6377,6 +6377,8 @@ Response rule:
 - The visible response is the Arc. It should naturally express signal, mechanism, correction, failure prediction, lever, and test when the state supports them.
 - Do not output only the test unless the correct response type is single-test/probe.
 - Select the next useful user-facing move: breakdown, tight correction, lever, probe, or clarification.
+- When expressing a lever, make it a visible body action with timing. Answer: what exactly should the person move, and when?
+- Do not turn the lever into generic repositioning language such as "change position", "stand up briefly", "move differently", or "redistribute the load".
 `;
 }
 
@@ -11085,6 +11087,41 @@ Critical rule:
 `
         : "";
 
+      const visibleLeverGenerationBlock = !isCaseReview
+        ? `
+=== VISIBLE LEVER GENERATION RULE ===
+Explanation is allowed. Do not make the response robotic or ultra-short.
+
+But if you give a lever or adjustment, the visible lever sentence must be concrete movement language. It must answer:
+- what body target moves
+- what visible movement happens
+- what direction or sequence happens
+- when it happens
+- what signal the user should compare afterward
+
+Prefer a body-specific sentence over a compressed summary.
+
+Good visible levers:
+- "Before standing up, shift your weight forward and back in your seat a few times."
+- "Before you rotate, let your front foot land first."
+- "Move your shoulder blade first as you start the backswing."
+- "Shift your hips once before you stand up."
+- "Move your base toward the ball before you swing."
+
+Do not use these as visible levers:
+- "change your position"
+- "stand up briefly"
+- "adjust your movement"
+- "try a different position"
+- "move differently"
+- "avoid staying static"
+- "redistribute the load"
+- "manage the load"
+
+If your draft lever sounds like a summary, rewrite it as one visible movement sentence before answering.
+`
+        : "";
+
       const toneGuidanceBlock = !isCaseReview
         ? `
 === TONE GUIDANCE ===
@@ -11134,6 +11171,8 @@ ${ACTIVE_PROMPT}
         ${endingStateBlock}
 
         ${userSideClosureBlock}
+
+        ${visibleLeverGenerationBlock}
 
         ${toneGuidanceBlock}
                   `.trim(),
