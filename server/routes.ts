@@ -1990,7 +1990,7 @@ function resolveMechanicalEnvironment({
   const matches = (pattern: RegExp) => pattern.test(signal);
   const hasShoulderRegion = /\bshoulder\b|\barm\b/.test(region);
   const hasOverheadSignal =
-    matches(/\boverhead\b|\bspike\b|\breach high\b|\breaching high\b|\bhit high\b|\bswing hard\b|\barm overhead\b|\bhigh reach\b/) ||
+    matches(/\boverhead\b|\bspike\b|\breach high\b|\breaching high\b|\bhit high\b|\bswing hard(?:er)?\b|\btop of (?:the )?backswing\b|\bbackswing\b|\btop range\b|\barm overhead\b|\bhigh reach\b/) ||
     (matches(/\bserve\b/) && matches(/\bshoulder\b|\barm\b/));
   const hasCompressionSignals = matches(
     /\bpinch\b|\bpinching\b|\bfront of hip\b|\bhip pinch\b|\bat the bottom\b|\bbottom of squat\b|\bdeep\b|\bgo deep\b|\bdeep squat\b|\bcompressed\b|\bfold\b/,
@@ -2005,7 +2005,7 @@ function resolveMechanicalEnvironment({
 
   if (
     matches(
-      /\boverhead\b|\bspike\b|\breach high\b|\breaching high\b|\bhit high\b|\bswing hard\b|\bfront of shoulder\b|\bshoulder pinch\b|\bshoulder\b/,
+      /\boverhead\b|\bspike\b|\breach high\b|\breaching high\b|\bhit high\b|\bswing hard(?:er)?\b|\btop of (?:the )?backswing\b|\bbackswing\b|\btop range\b|\bfront of shoulder\b|\bshoulder pinch\b|\bshoulder\b/,
     )
   ) {
     addEvidence("overhead_loading", 3, "overhead or shoulder loading signal");
@@ -2567,16 +2567,20 @@ function resolveDominantFailurePattern({
       addEvidence("stiffness_accumulation", 2, "stillness stiffness language");
     }
   } else if (mechanicalEnvironment === "overhead_loading") {
-    if (matches(/\bfront of (?:my )?shoulder\b|\bshoulder pinch\b|\bpinch\b/)) {
+    if (matches(/\bfront of (?:my )?shoulder\b|\bshoulder pinch\b|\bpinch\b|\bpinched\b|\bpinching\b/)) {
       addEvidence("shoulder_pinch_top_range", 3, "shoulder pinch language");
     }
-    if (matches(/\boverhead\b|\breach high\b|\breaching high\b|\bhit high\b|\bspike\b/)) {
-      addEvidence("overhead_range_overreach", 2, "overhead reach language");
+    if (matches(/\btop of (?:the )?backswing\b|\btop range\b|\bend range\b|\bnear the top\b|\bfull backswing\b/)) {
+      addEvidence("shoulder_pinch_top_range", 3, "top-range shoulder pinch language");
+      addEvidence("overhead_range_overreach", 2, "top-range reach language");
+    }
+    if (matches(/\boverhead\b|\breach high\b|\breaching high\b|\bhit high\b|\bspike\b|\bbackswing\b/)) {
+      addEvidence("overhead_range_overreach", 2, "overhead or top-range reach language");
     }
     if (matches(/\bshoulder blade\b|\bscapula\b|\bscapular\b/)) {
       addEvidence("scapular_control_loss", 2, "shoulder blade control language");
     }
-    if (matches(/\bswing hard\b|\barm path\b|\bhit\b/)) {
+    if (matches(/\bswing hard(?:er)?\b|\baccelerat(?:e|ion|ing)\b|\barm path\b|\bhit\b|\bclub\b/)) {
       addEvidence("arm_path_overload", 2, "arm path or swing force language");
     }
     if (matches(/\barch\b|\barching\b|\blow back\b|\bribs?\b/)) {
@@ -4045,6 +4049,21 @@ function applyOverheadLoadingArcRepair(
     "Do 3 slow overhead spike motions at partial reach. Stop before the front of the shoulder pinches. Let me know if the pinch changes.";
 }
 
+function hasExplicitSpikeMechanicsContext({
+  userText,
+  activityType,
+  movementContext,
+}: {
+  userText: string | null | undefined;
+  activityType: string | null | undefined;
+  movementContext: string | null | undefined;
+}): boolean {
+  const context = normalizeCaseKey(`${userText ?? ""} ${activityType ?? ""} ${movementContext ?? ""}`);
+  return /\b(?:volleyball|overhead spike|spike|spiking|attack swing|jump hit|hitting overhead|overhead hit|hit overhead)\b/.test(
+    context,
+  );
+}
+
 function applyPositionalLoadArcRepair(
   arcResult: {
     hypothesis: string | null;
@@ -4230,7 +4249,10 @@ function completeArcFields({
     return arcResult;
   }
 
-  if (env === "overhead_loading") {
+  if (
+    env === "overhead_loading" &&
+    hasExplicitSpikeMechanicsContext({ userText, activityType, movementContext })
+  ) {
     applyOverheadLoadingArcRepair(arcResult);
     return arcResult;
   }
