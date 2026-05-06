@@ -7392,7 +7392,7 @@ function evaluateLayer2TestDisplayQuality({
       displayable: false,
       reason: "missing_clear_action",
       probeText:
-        "That test needs to be tightened first. Tell me whether the signal appears during the motion, at the end range, or after you start coming back out.",
+        "Tell me whether the signal appears before you reach the top of the motion, at the top, or after you start coming back out.",
     };
   }
 
@@ -7401,7 +7401,7 @@ function evaluateLayer2TestDisplayQuality({
       displayable: false,
       reason: "missing_observable_result",
       probeText:
-        "That test needs to be tightened first. Tell me whether the signal appears during the motion, at the end range, or after you start coming back out.",
+        "Tell me whether the signal appears before you reach the top of the motion, at the top, or after you start coming back out.",
     };
   }
 
@@ -7428,7 +7428,7 @@ function evaluateLayer2TestDisplayQuality({
       displayable: false,
       reason: "missing_isolated_variable",
       probeText:
-        "That test needs one variable first. Tell me whether the signal changes with timing, range, or where the load starts.",
+        "Use one contrast: repeat the motion once at normal speed and once at half speed without changing the range. Tell me whether the signal changes.",
     };
   }
 
@@ -11057,6 +11057,35 @@ Hard constraint:
 `
         : "";
 
+      const probeModeLanguageBlock = !isCaseReview
+        ? `
+=== PROBE MODE LANGUAGE RULE ===
+When the mechanism is uncertain, stay investigative. You may ask a narrowing question or give one comparison movement, but the language must still be visible and operational.
+
+A good probe locates one observable event:
+- where in the motion the signal starts
+- whether it appears before, during, or after a visible phase
+- whether speed, range, force, or sequence changes the signal
+
+Good probe examples:
+- "Does the pinch start as you reach the top of the motion, or only once you try to accelerate through it?"
+- "Repeat the motion once at normal speed and once at half speed without changing the range. Tell me whether the signal changes."
+- "Does the pinch show up before the shoulder reaches the top, or after you start coming back down?"
+- "Does the pressure show up before the plant foot lands, or after your chest starts turning?"
+
+Do not use internal probe language:
+- "Scapular stabilization"
+- "Monitor shoulder position"
+- "Monitor scapular movement"
+- "Control shoulder load"
+- "Improve mechanics"
+- "Tighten the test"
+- "That test needs to be tightened first"
+
+If your probe sounds clinical or internal, rewrite it as one visible timing or movement comparison before answering.
+`
+        : "";
+
       const userSideClosureBlock = !isCaseReview
         ? `
 === USER-SIDE CLOSURE RULE ===
@@ -11202,6 +11231,8 @@ ${ACTIVE_PROMPT}
         ${patternPriorityBlock}
 
         ${endingStateBlock}
+
+        ${probeModeLanguageBlock}
 
         ${userSideClosureBlock}
 
