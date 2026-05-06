@@ -6761,6 +6761,35 @@ function isOperationalInstructionCandidate(
   );
 }
 
+function isGenericOperationalLever(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:change position|same motion|signal builds|signal changes|try it|a few times|move around|adjust position)\b/i.test(
+    text,
+  );
+}
+
+function hasDirectionalMovementSpecificity(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:forward|back|backward|left|right|up|down|in your seat|before you stand|before standing|before your trunk|before the arm|front foot|weight)\b/i.test(
+    text,
+  );
+}
+
+function countOperationalBodyTargets(value: string | null | undefined): number {
+  const text = normalizePreviewValue(value);
+  if (!text) return 0;
+
+  const matches = text.match(
+    /\b(?:hips?|pelvis|trunk|ribs?|shoulder blade|shoulder|arm|foot|feet|knee|ankle|low back|lower back|back|belly|chest|weight|seat)\b/gi,
+  );
+
+  return new Set(matches?.map((match) => match.toLowerCase()) ?? []).size;
+}
+
 function scoreOperationalLeverCandidate({
   sentence,
   activeLever,
@@ -6794,6 +6823,12 @@ function scoreOperationalLeverCandidate({
   if (isOperationalLeverText(sentence)) score += 4;
   if (hasOperationalTiming(sentence)) score += 2;
   if (hasVisibleBodyAction(sentence)) score += 2;
+  if (hasDirectionalMovementSpecificity(sentence)) score += 4;
+  score += Math.min(countOperationalBodyTargets(sentence), 3);
+  if (/\b(?:forward and back|forward\/back|side to side|before standing|before you stand|in your seat)\b/i.test(sentence)) {
+    score += 3;
+  }
+  if (isGenericOperationalLever(sentence)) score -= 6;
   if (hasMultipleLayer2Actions(sentence)) score -= 3;
   if (hasAbstractLeverLanguage(sentence)) score -= 2;
 
@@ -6830,17 +6865,32 @@ function enforceFinalOperationalLeverCollapse({
     .filter(({ sentence }) => isOperationalInstructionCandidate(sentence));
 
   const selectedOperational =
-    authoritativeActiveLever ??
-    operationalCandidates
-      .map((candidate) => ({
-        ...candidate,
-        score: scoreOperationalLeverCandidate({
-          sentence: candidate.sentence,
-          activeLever,
-          activeTest,
-          index: candidate.index,
-        }),
-      }))
+    [
+      ...operationalCandidates,
+      ...(authoritativeActiveLever
+        ? [{ sentence: authoritativeActiveLever, index: -1 }]
+        : []),
+    ]
+      .map((candidate) => {
+        const activeLeverBonus =
+          authoritativeActiveLever &&
+          areEquivalentDashboardCandidates(candidate.sentence, authoritativeActiveLever)
+            ? isGenericOperationalLever(authoritativeActiveLever)
+              ? 2
+              : 10
+            : 0;
+
+        return {
+          ...candidate,
+          score:
+            scoreOperationalLeverCandidate({
+              sentence: candidate.sentence,
+              activeLever,
+              activeTest,
+              index: candidate.index,
+            }) + activeLeverBonus,
+        };
+      })
       .sort((a, b) => b.score - a.score)[0]?.sentence ??
     null;
 
