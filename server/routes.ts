@@ -6765,7 +6765,7 @@ function isGenericOperationalLever(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
 
-  return /\b(?:change position|same motion|signal builds|signal changes|try it|a few times|move around|adjust position)\b/i.test(
+  return /\b(?:change position|adjust movement|move differently|change the motion|same movement|same motion|shift things|modify position|signal builds|signal changes|try it|a few times|move around|adjust position)\b/i.test(
     text,
   );
 }
@@ -6810,7 +6810,7 @@ function scoreOperationalLeverCandidate({
     (areEquivalentDashboardCandidates(sentence, normalizedActiveLever) ||
       responseIncludesCurrentTest(sentence, normalizedActiveLever))
   ) {
-    score += 10;
+    score += isGenericOperationalLever(sentence) ? 1 : 10;
   }
 
   if (
@@ -6823,12 +6823,19 @@ function scoreOperationalLeverCandidate({
   if (isOperationalLeverText(sentence)) score += 4;
   if (hasOperationalTiming(sentence)) score += 2;
   if (hasVisibleBodyAction(sentence)) score += 2;
-  if (hasDirectionalMovementSpecificity(sentence)) score += 4;
-  score += Math.min(countOperationalBodyTargets(sentence), 3);
+  if (hasDirectionalMovementSpecificity(sentence)) score += 8;
+  score += Math.min(countOperationalBodyTargets(sentence), 4) * 2;
   if (/\b(?:forward and back|forward\/back|side to side|before standing|before you stand|in your seat)\b/i.test(sentence)) {
-    score += 3;
+    score += 6;
   }
-  if (isGenericOperationalLever(sentence)) score -= 6;
+  if (/\b(?:shift(?:ing)?\s+(?:your\s+)?weight|move\s+(?:your\s+)?hips|shoulder blade|front foot land|ribs? over (?:your\s+)?hips)\b/i.test(sentence)) {
+    score += 6;
+  }
+  if (isGenericOperationalLever(sentence)) {
+    score -= 14;
+    if (!hasDirectionalMovementSpecificity(sentence)) score -= 4;
+    if (countOperationalBodyTargets(sentence) === 0) score -= 4;
+  }
   if (hasMultipleLayer2Actions(sentence)) score -= 3;
   if (hasAbstractLeverLanguage(sentence)) score -= 2;
 
@@ -6876,7 +6883,7 @@ function enforceFinalOperationalLeverCollapse({
           authoritativeActiveLever &&
           areEquivalentDashboardCandidates(candidate.sentence, authoritativeActiveLever)
             ? isGenericOperationalLever(authoritativeActiveLever)
-              ? 2
+              ? 0
               : 10
             : 0;
 
