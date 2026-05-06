@@ -6566,7 +6566,7 @@ function hasVisibleBodyAction(value: string | null | undefined): boolean {
   if (!text) return false;
 
   return (
-    /\b(?:shift|move|turn|rotate|land|step|stand|sit|walk|start|stop|change|clear|lower|lift|reach|hinge|press|pull|push|brace|stack|bend|straighten)\b/i.test(
+    /\b(?:shift(?:ing)?|move|moving|turn|rotate|land|step|stand|sit|walk|start|stop|change|changing|clear|lower|lift|reach|hinge|press|pull|push|brace|stack|bend|straighten)\b/i.test(
       text,
     ) &&
     /\b(?:hips?|pelvis|trunk|ribs?|shoulder blade|shoulder|arm|foot|feet|knee|ankle|low back|lower back|back|belly|chest|weight|position)\b/i.test(
@@ -6596,7 +6596,7 @@ function hasMultipleLayer2Actions(value: string | null | undefined): boolean {
   if (!text) return false;
 
   const actionMatches = text.match(
-    /\b(?:shift|move|turn|rotate|land|step|stand|sit|walk|start|stop|change|clear|lower|lift|reach|hinge|press|pull|push|brace|stack|engage|activate|stabilize|stabilise|release|lengthen|ease|open|control)\b/gi,
+    /\b(?:shift(?:ing)?|move|moving|turn|rotate|land|step|stand|sit|walk|start|stop|change|changing|clear|lower|lift|reach|hinge|press|pull|push|brace|stack|engage|activate|stabilize|stabilise|release|lengthen|ease|open|control)\b/gi,
   );
 
   return (
@@ -6710,6 +6710,189 @@ function enforceOperationalLeverLanguage({
   ) {
     kept.push(normalizedActiveTest);
     reasons.add("preserved_active_test");
+  }
+
+  const finalText = kept
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .replace(/(^|[.!?]\s+|\n+)([a-z])/g, (_match, prefix: string, letter: string) =>
+      `${prefix}${letter.toUpperCase()}`,
+    );
+
+  return {
+    text: finalText || originalText,
+    modified: (finalText || originalText) !== originalText,
+    reasons: Array.from(reasons),
+  };
+}
+
+function isOutcomeCheckSentence(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return (
+    /^(?:let me know|tell me|report back|notice whether|see if)\b/i.test(text) ||
+    (hasOutcomeFeedbackClosure(text) &&
+      !/^(?:try|do|start|keep|use|move|shift|change|turn|rotate|brace|hold|step|stand|sit|walk)\b/i.test(
+        text,
+      ))
+  );
+}
+
+function isOperationalInstructionCandidate(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text || isOutcomeCheckSentence(text)) return false;
+
+  const hasInstructionVerb =
+    isLayer2InstructionSentence(text) ||
+    /\b(?:try|start|keep|use|move|moving|shift|shifting|change|changing|turn|rotate|brace|hold|let\s+(?:the\s+)?(?:front\s+)?foot|land|step|stand|sit|walk)\b/i.test(
+      text,
+    );
+
+  return (
+    hasInstructionVerb &&
+    (hasVisibleBodyAction(text) ||
+      hasOperationalTiming(text) ||
+      hasAbstractLeverLanguage(text) ||
+      hasMultipleLayer2Actions(text))
+  );
+}
+
+function scoreOperationalLeverCandidate({
+  sentence,
+  activeLever,
+  activeTest,
+  index,
+}: {
+  sentence: string;
+  activeLever?: string | null;
+  activeTest?: string | null;
+  index: number;
+}): number {
+  let score = 0;
+  const normalizedActiveLever = normalizePreviewValue(activeLever);
+  const normalizedActiveTest = normalizePreviewValue(activeTest);
+
+  if (
+    normalizedActiveLever &&
+    (areEquivalentDashboardCandidates(sentence, normalizedActiveLever) ||
+      responseIncludesCurrentTest(sentence, normalizedActiveLever))
+  ) {
+    score += 10;
+  }
+
+  if (
+    normalizedActiveTest &&
+    responseIncludesCurrentTest(sentence, normalizedActiveTest)
+  ) {
+    score += 4;
+  }
+
+  if (isOperationalLeverText(sentence)) score += 4;
+  if (hasOperationalTiming(sentence)) score += 2;
+  if (hasVisibleBodyAction(sentence)) score += 2;
+  if (hasMultipleLayer2Actions(sentence)) score -= 3;
+  if (hasAbstractLeverLanguage(sentence)) score -= 2;
+
+  return score - index * 0.01;
+}
+
+function enforceFinalOperationalLeverCollapse({
+  text,
+  activeLever,
+  activeTest,
+}: {
+  text: string;
+  activeLever?: string | null;
+  activeTest?: string | null;
+}): { text: string; modified: boolean; reasons: string[] } {
+  const originalText = text.trim();
+  if (!originalText) return { text: originalText, modified: false, reasons: [] };
+
+  const reasons = new Set<string>();
+  const normalizedActiveLever = normalizePreviewValue(activeLever);
+  const authoritativeActiveLever =
+    getOperationalLeverReplacement(normalizedActiveLever) ??
+    (normalizedActiveLever && isOperationalLeverText(normalizedActiveLever)
+      ? normalizedActiveLever
+      : null);
+
+  const sentences = originalText
+    .split(/(?<=[.!?])\s+|\n{2,}/)
+    .map((sentence) => stripStructuredLayer2Labels(sentence.trim()).text)
+    .filter(Boolean);
+
+  const operationalCandidates = sentences
+    .map((sentence, index) => ({ sentence, index }))
+    .filter(({ sentence }) => isOperationalInstructionCandidate(sentence));
+
+  const selectedOperational =
+    authoritativeActiveLever ??
+    operationalCandidates
+      .map((candidate) => ({
+        ...candidate,
+        score: scoreOperationalLeverCandidate({
+          sentence: candidate.sentence,
+          activeLever,
+          activeTest,
+          index: candidate.index,
+        }),
+      }))
+      .sort((a, b) => b.score - a.score)[0]?.sentence ??
+    null;
+
+  const kept: string[] = [];
+  let keptOperational = false;
+  let keptOutcomeCheck = false;
+
+  for (const sentence of sentences) {
+    if (isOutcomeCheckSentence(sentence)) {
+      if (!keptOutcomeCheck) {
+        kept.push(sentence);
+        keptOutcomeCheck = true;
+      } else {
+        reasons.add("removed_duplicate_outcome_check");
+      }
+      continue;
+    }
+
+    if (isOperationalInstructionCandidate(sentence)) {
+      if (
+        selectedOperational &&
+        !keptOperational &&
+        (areEquivalentDashboardCandidates(sentence, selectedOperational) ||
+          responseIncludesCurrentTest(sentence, selectedOperational) ||
+          responseIncludesCurrentTest(selectedOperational, sentence))
+      ) {
+        kept.push(selectedOperational);
+        keptOperational = true;
+        if (selectedOperational !== sentence) reasons.add("replaced_with_authoritative_lever");
+      } else {
+        reasons.add("removed_competing_operational_instruction");
+      }
+      continue;
+    }
+
+    kept.push(sentence);
+  }
+
+  if (selectedOperational && !keptOperational) {
+    const insertIndex = Math.max(
+      0,
+      keptOutcomeCheck ? kept.length - 1 : kept.length,
+    );
+    kept.splice(insertIndex, 0, selectedOperational);
+    keptOperational = true;
+    reasons.add("inserted_authoritative_lever");
+  }
+
+  if (selectedOperational && !keptOutcomeCheck) {
+    kept.push("Let me know if the signal changes.");
+    keptOutcomeCheck = true;
+    reasons.add("inserted_outcome_check");
   }
 
   const finalText = kept
@@ -11069,6 +11252,22 @@ ${ACTIVE_PROMPT}
         finalLength: finalText.length,
       });
 
+      const beforeFinalOperationalCollapse = finalText;
+      const finalOperationalCollapse = enforceFinalOperationalLeverCollapse({
+        text: finalText,
+        activeLever: layer2ActiveLever,
+        activeTest: layer2ActiveTest,
+      });
+      finalText = finalOperationalCollapse.text;
+
+      console.log("LAYER2_FINAL_OPERATIONAL_LEVER_COLLAPSE", {
+        caseId: resolvedActiveCase?.id ?? null,
+        modified: finalOperationalCollapse.modified,
+        reasons: finalOperationalCollapse.reasons,
+        originalLength: beforeFinalOperationalCollapse.length,
+        finalLength: finalText.length,
+      });
+
       console.log("LAYER2_FINAL_SURFACE_CLEANUP", {
         caseId: resolvedActiveCase?.id ?? null,
         modified: finalSurfaceCleanup.modified,
@@ -11084,6 +11283,7 @@ ${ACTIVE_PROMPT}
         nonEnglishDetected,
         singleLeverForced: leverEnforced.modified,
         operationalLeverEnforced: operationalLeverEnforcement.modified,
+        finalOperationalCollapsed: finalOperationalCollapse.modified,
         activeTestSoftened: softenedActiveTest.modified,
         outcomeFeedbackCompressed: outcomeExpression.modified,
         originalLength: assistantText.length,
