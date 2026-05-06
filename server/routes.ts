@@ -6400,7 +6400,7 @@ Response rule:
 - Do not output only the test unless the correct response type is single-test/probe.
 - Select the next useful user-facing move: breakdown, tight correction, lever, probe, or clarification.
 - When expressing a lever, make it a visible body action with timing. Answer: what exactly should the person move, and when?
-- Do not turn the lever into generic repositioning language such as "change position", "stand up briefly", "move differently", or "redistribute the load".
+- Do not turn the lever into generic repositioning or shoulder-load language such as "change position", "stand up briefly", "adjust shoulder rotation angle", "monitor shoulder position", "move differently", or "redistribute the load".
 `;
 }
 
@@ -11125,8 +11125,13 @@ Prefer a body-specific sentence over a compressed summary.
 
 Good visible levers:
 - "Before standing up, shift your weight forward and back in your seat a few times."
+- "Stop the backswing just before the shoulder pinches, then swing from that height without adding force."
+- "Let your shoulder finish turning before you accelerate the club."
+- "Keep the arm below the pinch point as you start the downswing."
 - "Before you rotate, let your front foot land first."
+- "Let the plant foot land before your chest turns."
 - "Move your shoulder blade first as you start the backswing."
+- "Start the turn from your hips before your trunk follows."
 - "Shift your hips once before you stand up."
 - "Move your base toward the ball before you swing."
 
@@ -11139,6 +11144,12 @@ Do not use these as visible levers:
 - "avoid staying static"
 - "redistribute the load"
 - "manage the load"
+- "adjust shoulder rotation angle"
+- "monitor shoulder position"
+- "control shoulder load"
+- "stabilize the shoulder"
+- "improve mechanics"
+- "move more efficiently"
 
 If your draft lever sounds like a summary, rewrite it as one visible movement sentence before answering.
 `
