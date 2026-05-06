@@ -3544,6 +3544,37 @@ function getAdjustmentContextRejectionReason({
   return null;
 }
 
+function isFallbackGeneratedAdjustmentText(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return (
+    /^\s*Do\s+3\b/i.test(text) ||
+    /\b3\s+slow\b/i.test(text) ||
+    /\bchange one thing\b/i.test(text) ||
+    /\bstart the motion from the hips before the trunk moves\b/i.test(text) ||
+    /\bstart the movement from the hips before the trunk moves\b/i.test(text) ||
+    /\bstart from the hips before the trunk moves\b/i.test(text) ||
+    /\bsymptom appears before\b/i.test(text) ||
+    /\bTell me if the\b/i.test(text)
+  );
+}
+
+function isFallbackGeneratedAdjustmentPair({
+  cue,
+  mechanicalFocus,
+}: {
+  cue: string | null | undefined;
+  mechanicalFocus: string | null | undefined;
+}): boolean {
+  return (
+    isFallbackGeneratedAdjustmentText(cue) ||
+    isFallbackGeneratedAdjustmentText(mechanicalFocus)
+  );
+}
+
 function buildFallbackConcreteTest({
   userText,
   hypothesis,
@@ -4401,6 +4432,7 @@ function isValidMechanicalAdjustmentPair({
   const mechanicalText = normalizePreviewValue(mechanicalFocus);
 
   if (!cueText || !mechanicalText) return false;
+  if (isFallbackGeneratedAdjustmentPair({ cue, mechanicalFocus })) return false;
   if (!isStrongAdjustmentCandidate(cueText)) return false;
   if (!hasRealMechanicalLever(mechanicalText)) return false;
   if (isGenericAdjustmentFillerText(cueText)) return false;
@@ -5050,6 +5082,10 @@ function isValidStoredAdjustment(
     Boolean(row?.id) &&
     typeof row?.hypothesisId === "number" &&
     Number.isFinite(row.hypothesisId) &&
+    !isFallbackGeneratedAdjustmentPair({
+      cue: row.cue,
+      mechanicalFocus: row.mechanicalFocus,
+    }) &&
     isValidMechanicalAdjustmentPair({
       cue: row.cue,
       mechanicalFocus: row.mechanicalFocus,
@@ -5303,13 +5339,7 @@ function completeCurrentTestField({
   if (!hypothesis) return candidate;
   if (!getConcreteTestInvalidReason(candidate)) return candidate;
 
-  return buildFallbackConcreteTest({
-    userText,
-    hypothesis,
-    movementContext,
-    bodyRegion,
-    activityType,
-  });
+  return null;
 }
 
 function completeAdjustmentField({
@@ -5547,6 +5577,9 @@ async function persistCaseReasoningSnapshot({
   update: InternalCaseUpdate;
 }): Promise<number | null> {
   try {
+    const durableActiveTest = isFallbackGeneratedAdjustmentText(update.activeTest)
+      ? null
+      : update.activeTest;
     const [snapshot] = await db
       .insert(caseReasoningSnapshots)
       .values({
@@ -5563,7 +5596,7 @@ async function persistCaseReasoningSnapshot({
         dominantFailure: update.dominantFailure,
         dominantFailureConfidence: update.dominantFailureConfidence,
         activeLever: update.activeLever,
-        activeTest: update.activeTest,
+        activeTest: durableActiveTest,
         interpretationCorrection: update.interpretationCorrection,
         failurePrediction: update.failurePrediction,
       })
@@ -5577,7 +5610,7 @@ async function persistCaseReasoningSnapshot({
       dominantFailure: update.dominantFailure,
       dominantFailureConfidence: update.dominantFailureConfidence,
       activeLeverPreview: clampText(update.activeLever ?? "", 160),
-      activeTestPreview: clampText(update.activeTest ?? "", 220),
+      activeTestPreview: clampText(durableActiveTest ?? "", 220),
       interpretationCorrectionPreview: clampText(
         update.interpretationCorrection ?? "",
         220,
@@ -5919,19 +5952,24 @@ async function persistInternalCaseUpdate({
       usedFallback: testValidationResult.usedFallback,
       invalidReason: testValidationResult.reason,
     });
+    const fallbackDurabilityRejection =
+      testValidationResult.usedFallback ||
+      isFallbackGeneratedAdjustmentText(finalTest);
     const testContextMismatchReason =
-      getAdjustmentContextRejectionReason({
-        candidate: finalTest,
-        userText,
-        movementContext: update.movementContext,
-        bodyRegion: update.bodyRegion,
-        activityType: update.activityType,
-      }) ??
-      getCaseContextMismatchReason({
-        candidate: finalTest,
-        latestSignal,
-        update,
-      });
+      fallbackDurabilityRejection
+        ? "fallback_generated_adjustment_not_durable"
+        : getAdjustmentContextRejectionReason({
+            candidate: finalTest,
+            userText,
+            movementContext: update.movementContext,
+            bodyRegion: update.bodyRegion,
+            activityType: update.activityType,
+          }) ??
+          getCaseContextMismatchReason({
+            candidate: finalTest,
+            latestSignal,
+            update,
+          });
     console.log("ADJUSTMENT_WRITE_CONTEXT_GUARD", {
       caseId,
       movementContext: update.movementContext,
@@ -6066,18 +6104,20 @@ async function persistInternalCaseUpdate({
 
   if (activeAdjustmentText && !rejectedStaleActiveTest) {
     const snapshotTestMismatchReason =
-      getAdjustmentContextRejectionReason({
-        candidate: activeAdjustmentText,
-        userText,
-        movementContext: update.movementContext,
-        bodyRegion: update.bodyRegion,
-        activityType: update.activityType,
-      }) ??
-      getCaseContextMismatchReason({
-        candidate: activeAdjustmentText,
-        latestSignal,
-        update,
-      });
+      isFallbackGeneratedAdjustmentText(activeAdjustmentText)
+        ? "fallback_generated_adjustment_not_durable"
+        : getAdjustmentContextRejectionReason({
+            candidate: activeAdjustmentText,
+            userText,
+            movementContext: update.movementContext,
+            bodyRegion: update.bodyRegion,
+            activityType: update.activityType,
+          }) ??
+          getCaseContextMismatchReason({
+            candidate: activeAdjustmentText,
+            latestSignal,
+            update,
+          });
 
     console.log("ADJUSTMENT_WRITE_CONTEXT_GUARD", {
       caseId,
@@ -6254,6 +6294,14 @@ async function buildStructuredCaseStateBlock(
   isNewCase = false,
 ): Promise<string> {
   const snapshot = await buildInternalCaseStateSnapshot(caseId);
+  const currentTurnAdjustment = [
+    internalUpdate?.currentTest,
+    internalUpdate?.adjustment,
+  ].find(
+    (value) =>
+      Boolean(normalizePreviewValue(value)) &&
+      !isFallbackGeneratedAdjustmentText(value),
+  );
   const visibleStateInput = {
     caseId,
     signal:
@@ -6270,11 +6318,7 @@ async function buildStructuredCaseStateBlock(
     interpretationCorrection: internalUpdate?.interpretationCorrection ?? null,
     failurePrediction: internalUpdate?.failurePrediction ?? null,
     singleLever: internalUpdate?.singleLever ?? null,
-    adjustment:
-      internalUpdate?.currentTest ??
-      internalUpdate?.adjustment ??
-      (isNewCase ? null : snapshot.latestAdjustment) ??
-      null,
+    adjustment: currentTurnAdjustment ?? null,
     outcome:
       internalUpdate?.outcome ??
       (isNewCase ? null : snapshot.latestOutcome) ??
@@ -8995,9 +9039,14 @@ ${memoryBlock}
       const snapshotActiveLever = normalizePreviewValue(
         snapshotCaseId ? latestReasoningSnapshot?.activeLever : null,
       );
-      const snapshotActiveTest = normalizePreviewValue(
+      const rawSnapshotActiveTest = normalizePreviewValue(
         snapshotCaseId ? latestReasoningSnapshot?.activeTest : null,
       );
+      const snapshotActiveTest =
+        rawSnapshotActiveTest &&
+        !isFallbackGeneratedAdjustmentText(rawSnapshotActiveTest)
+          ? rawSnapshotActiveTest
+          : null;
       const snapshotMechanicalEnvironment = normalizePreviewValue(
         snapshotCaseId ? latestReasoningSnapshot?.mechanicalEnvironment : null,
       );
@@ -11231,7 +11280,7 @@ ${ACTIVE_PROMPT}
                       resolvedActiveCase,
                     )
                   : null;
-              let { finalTest } = enforceConcreteTestCandidate({
+              let { finalTest, usedFallback } = enforceConcreteTestCandidate({
                 caseId: resolvedActiveCase.id,
                 candidate: candidateTest,
                 userText,
@@ -11272,6 +11321,7 @@ ${ACTIVE_PROMPT}
                   finalTest =
                     "Do 3 slow reps of the movement that triggered it and change one thing: start from the hips before the trunk moves. Tell me what changes.";
                 }
+                usedFallback = true;
                 console.log("TEST_VALIDATION_RESULT", {
                   caseId: resolvedActiveCase.id,
                   valid: false,
@@ -11307,17 +11357,19 @@ ${ACTIVE_PROMPT}
               }
 
               const adjustmentWriteRejectionReason =
-                getAdjustmentContextRejectionReason({
-                  candidate: finalTest,
-                  userText,
-                  movementContext:
-                    latestSignalSnapshot?.movementContext ??
-                    resolvedActiveCase.movementContext,
-                  bodyRegion: latestSignalSnapshot?.bodyRegion ?? null,
-                  activityType:
-                    latestSignalSnapshot?.activityType ??
-                    resolvedActiveCase.activityType,
-                });
+                usedFallback || isFallbackGeneratedAdjustmentText(finalTest)
+                  ? "fallback_generated_adjustment_not_durable"
+                  : getAdjustmentContextRejectionReason({
+                      candidate: finalTest,
+                      userText,
+                      movementContext:
+                        latestSignalSnapshot?.movementContext ??
+                        resolvedActiveCase.movementContext,
+                      bodyRegion: latestSignalSnapshot?.bodyRegion ?? null,
+                      activityType:
+                        latestSignalSnapshot?.activityType ??
+                        resolvedActiveCase.activityType,
+                    });
 
               console.log("ADJUSTMENT_WRITE_CONTEXT_GUARD", {
                 caseId: resolvedActiveCase.id,
