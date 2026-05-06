@@ -6507,6 +6507,226 @@ function appendLayer2Sentence(text: string, sentence: string): string {
   return `${trimmedText}\n\n${trimmedSentence}`;
 }
 
+function getOperationalLeverReplacement(
+  value: string | null | undefined,
+): string | null {
+  const text = normalizePreviewValue(value);
+  if (!text) return null;
+
+  const replacements: Array<[RegExp, string]> = [
+    [
+      /\b(?:engage|activate|stabilize|stabilise|support|control)\s+(?:your\s+)?core\b/i,
+      "brace your belly before you start the motion",
+    ],
+    [
+      /\b(?:engage|activate|stabilize|stabilise|support|control)\s+(?:your\s+)?(?:hips?|pelvis)\b/i,
+      "move your hips before your trunk moves",
+    ],
+    [
+      /\b(?:engage|activate|stabilize|stabilise|support|control)\s+(?:your\s+)?shoulder\s+blade\b/i,
+      "move your shoulder blade first as you start the backswing",
+    ],
+    [
+      /\b(?:release|lengthen|ease|open up|stay loose|stay connected)\b[^.!?\n]*(?:low back|lower back|back)\b/i,
+      "shift your hips once before you stand up",
+    ],
+    [
+      /\b(?:release|lengthen|ease|open up|stay loose|stay connected)\b/i,
+      "change position once before the signal builds",
+    ],
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    if (pattern.test(text)) return replacement;
+  }
+
+  return null;
+}
+
+function hasAbstractLeverLanguage(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:engage|stabilize|stabilise|activate|release|support|control|lengthen|ease|open up|stay loose|stay connected)\b/i.test(
+    text,
+  );
+}
+
+function hasOperationalTiming(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:before|after|as you|when|once|during|while|at the start|at the end|until|for \d+\s*(?:seconds?|reps?|steps?)|next time|the next)\b/i.test(
+    text,
+  );
+}
+
+function hasVisibleBodyAction(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return (
+    /\b(?:shift|move|turn|rotate|land|step|stand|sit|walk|start|stop|change|clear|lower|lift|reach|hinge|press|pull|push|brace|stack|bend|straighten)\b/i.test(
+      text,
+    ) &&
+    /\b(?:hips?|pelvis|trunk|ribs?|shoulder blade|shoulder|arm|foot|feet|knee|ankle|low back|lower back|back|belly|chest|weight|position)\b/i.test(
+      text,
+    )
+  );
+}
+
+function isOperationalLeverText(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return hasVisibleBodyAction(text) && hasOperationalTiming(text);
+}
+
+function isLayer2InstructionSentence(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /^(?:try|do|start|keep|focus|monitor|work on|consider|make sure|add|avoid|pace|recover|practice|address|use|move|shift|turn|rotate|brace|change|let|allow|release|lengthen|ease|open|stabilize|stabilise|activate|engage|control)\b/i.test(
+    text,
+  );
+}
+
+function hasMultipleLayer2Actions(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  const actionMatches = text.match(
+    /\b(?:shift|move|turn|rotate|land|step|stand|sit|walk|start|stop|change|clear|lower|lift|reach|hinge|press|pull|push|brace|stack|engage|activate|stabilize|stabilise|release|lengthen|ease|open|control)\b/gi,
+  );
+
+  return (
+    (actionMatches?.length ?? 0) > 1 &&
+    /\b(?:and|also|then|while|plus|as well as)\b/i.test(text)
+  );
+}
+
+function enforceOperationalLeverLanguage({
+  text,
+  activeLever,
+  activeTest,
+}: {
+  text: string;
+  activeLever?: string | null;
+  activeTest?: string | null;
+}): { text: string; modified: boolean; reasons: string[] } {
+  const originalText = text.trim();
+  if (!originalText) return { text: originalText, modified: false, reasons: [] };
+
+  const reasons = new Set<string>();
+  const normalizedActiveLever = normalizePreviewValue(activeLever);
+  const normalizedActiveTest = normalizePreviewValue(activeTest);
+  const leverReplacement = getOperationalLeverReplacement(normalizedActiveLever);
+  const operationalLever =
+    leverReplacement ??
+    (normalizedActiveLever && isOperationalLeverText(normalizedActiveLever)
+      ? normalizedActiveLever
+      : null);
+
+  if (leverReplacement) reasons.add("rewrote_abstract_active_lever");
+
+  const sentences = originalText
+    .split(/(?<=[.!?])\s+|\n{2,}/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  const kept: string[] = [];
+  let includedLever = false;
+  let includedTest = false;
+
+  for (const sentence of sentences) {
+    const stripped = stripStructuredLayer2Labels(sentence).text;
+    if (!stripped) continue;
+
+    const replacement = getOperationalLeverReplacement(stripped);
+    if (replacement) {
+      if (!includedLever) {
+        kept.push(replacement);
+        includedLever = true;
+      }
+      reasons.add("rewrote_abstract_instruction");
+      continue;
+    }
+
+    const isInstruction = isLayer2InstructionSentence(stripped);
+    const isActiveTest =
+      Boolean(normalizedActiveTest) &&
+      responseIncludesCurrentTest(stripped, normalizedActiveTest);
+    const isActiveLever =
+      Boolean(normalizedActiveLever) &&
+      areEquivalentDashboardCandidates(stripped, normalizedActiveLever);
+    const operationalInstruction =
+      isInstruction && isOperationalLeverText(stripped) && !hasMultipleLayer2Actions(stripped);
+
+    if (isActiveTest) {
+      if (!includedTest) {
+        kept.push(stripped);
+        includedTest = true;
+      }
+      continue;
+    }
+
+    if (isInstruction) {
+      if (isActiveLever && operationalLever && !includedLever) {
+        kept.push(operationalLever);
+        includedLever = true;
+        if (operationalLever !== stripped) reasons.add("rewrote_active_lever");
+        continue;
+      }
+
+      if (operationalInstruction && !includedLever) {
+        kept.push(stripped);
+        includedLever = true;
+        continue;
+      }
+
+      if (hasAbstractLeverLanguage(stripped) || hasMultipleLayer2Actions(stripped)) {
+        reasons.add(
+          hasMultipleLayer2Actions(stripped)
+            ? "removed_multi_action_instruction"
+            : "removed_abstract_instruction",
+        );
+        continue;
+      }
+    }
+
+    kept.push(stripped);
+  }
+
+  if (operationalLever && !includedLever) {
+    kept.push(operationalLever);
+    includedLever = true;
+    reasons.add("appended_operational_lever");
+  }
+
+  if (
+    normalizedActiveTest &&
+    !includedTest &&
+    !kept.some((part) => responseIncludesCurrentTest(part, normalizedActiveTest))
+  ) {
+    kept.push(normalizedActiveTest);
+    reasons.add("preserved_active_test");
+  }
+
+  const finalText = kept
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .replace(/(^|[.!?]\s+|\n+)([a-z])/g, (_match, prefix: string, letter: string) =>
+      `${prefix}${letter.toUpperCase()}`,
+    );
+
+  return {
+    text: finalText || originalText,
+    modified: (finalText || originalText) !== originalText,
+    reasons: Array.from(reasons),
+  };
+}
+
 function containsLayer2CoachingBleed(text: string): boolean {
   const normalized = normalizePreviewValue(text) ?? "";
   if (!normalized) return false;
@@ -6586,7 +6806,7 @@ function enforceSingleLever({
 
   const nextParts = [
     ...(mechanismParagraph ? [mechanismParagraph] : []),
-    normalizedActiveLever,
+    getOperationalLeverReplacement(normalizedActiveLever) ?? normalizedActiveLever,
   ];
   const normalizedActiveTest = normalizePreviewValue(activeTest);
 
@@ -6633,6 +6853,14 @@ function cleanCoachingLanguage(text: string): {
     [/\bconsider\b/gi, ""],
     [/\bkeep an eye on\b/gi, "notice"],
     [/\bit might help to\b/gi, ""],
+    [/\btry to engage\b/gi, "move"],
+    [/\btry engaging\b/gi, "move"],
+    [/\btry to activate\b/gi, "move"],
+    [/\btry activating\b/gi, "move"],
+    [/\bfocus on engaging\b/gi, "move"],
+    [/\bfocus on activating\b/gi, "move"],
+    [/\bfocus on stabilizing\b/gi, "hold"],
+    [/\bfocus on stabilising\b/gi, "hold"],
   ];
 
   for (const [pattern, replacement] of replacements) {
@@ -6701,6 +6929,18 @@ function enforceLeverPrecision(text: string): {
     [
       /\bcontrol\s+your\s+hips?\b/gi,
       "start with your hips",
+    ],
+    [
+      /\b(?:release|lengthen|ease|open up)\s+(?:the\s+)?(?:low back|lower back|back)\b/gi,
+      "shift your hips once before you stand up",
+    ],
+    [
+      /\bstay\s+(?:loose|connected)\b/gi,
+      "change position once before the signal builds",
+    ],
+    [
+      /\bstabilize\s+before\s+rotation\b/gi,
+      "hold your ribs over your hips before you rotate",
     ],
   ];
 
@@ -10813,6 +11053,22 @@ ${ACTIVE_PROMPT}
       const finalSurfaceCleanup = finalLayer2SurfaceCleanup(finalText);
       finalText = finalSurfaceCleanup.text;
 
+      const beforeOperationalLeverEnforcement = finalText;
+      const operationalLeverEnforcement = enforceOperationalLeverLanguage({
+        text: finalText,
+        activeLever: layer2ActiveLever,
+        activeTest: layer2ActiveTest,
+      });
+      finalText = operationalLeverEnforcement.text;
+
+      console.log("LAYER2_OPERATIONAL_LEVER_ENFORCED", {
+        caseId: resolvedActiveCase?.id ?? null,
+        modified: operationalLeverEnforcement.modified,
+        reasons: operationalLeverEnforcement.reasons,
+        originalLength: beforeOperationalLeverEnforcement.length,
+        finalLength: finalText.length,
+      });
+
       console.log("LAYER2_FINAL_SURFACE_CLEANUP", {
         caseId: resolvedActiveCase?.id ?? null,
         modified: finalSurfaceCleanup.modified,
@@ -10827,6 +11083,7 @@ ${ACTIVE_PROMPT}
         coachingCleaned: coachingCleanup.cleaned,
         nonEnglishDetected,
         singleLeverForced: leverEnforced.modified,
+        operationalLeverEnforced: operationalLeverEnforcement.modified,
         activeTestSoftened: softenedActiveTest.modified,
         outcomeFeedbackCompressed: outcomeExpression.modified,
         originalLength: assistantText.length,
