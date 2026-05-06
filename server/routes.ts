@@ -6512,6 +6512,7 @@ function getOperationalLeverReplacement(
 ): string | null {
   const text = normalizePreviewValue(value);
   if (!text) return null;
+  if (isHighSpecificityOperationalSentence(text)) return null;
 
   const replacements: Array<[RegExp, string]> = [
     [
@@ -6582,6 +6583,21 @@ function isOperationalLeverText(value: string | null | undefined): boolean {
   return hasVisibleBodyAction(text) && hasOperationalTiming(text);
 }
 
+function isHighSpecificityOperationalSentence(
+  value: string | null | undefined,
+): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return (
+    isOperationalLeverText(text) &&
+    hasDirectionalMovementSpecificity(text) &&
+    countOperationalBodyTargets(text) > 0 &&
+    !isGenericOperationalLever(text) &&
+    !hasAbstractLeverLanguage(text)
+  );
+}
+
 function isLayer2InstructionSentence(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
@@ -6601,7 +6617,7 @@ function hasMultipleLayer2Actions(value: string | null | undefined): boolean {
 
   return (
     (actionMatches?.length ?? 0) > 1 &&
-    /\b(?:and|also|then|while|plus|as well as)\b/i.test(text)
+    /\b(?:and|also|then|while|plus|as well as|or)\b/i.test(text)
   );
 }
 
@@ -6641,6 +6657,13 @@ function enforceOperationalLeverLanguage({
   for (const sentence of sentences) {
     const stripped = stripStructuredLayer2Labels(sentence).text;
     if (!stripped) continue;
+
+    if (isHighSpecificityOperationalSentence(stripped)) {
+      kept.push(stripped);
+      includedLever = true;
+      reasons.add("preserved_high_specificity_operational_sentence");
+      continue;
+    }
 
     const replacement = getOperationalLeverReplacement(stripped);
     if (replacement) {
@@ -6765,7 +6788,7 @@ function isGenericOperationalLever(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
 
-  return /\b(?:change position|adjust movement|move differently|change the motion|same movement|same motion|shift things|modify position|signal builds|signal changes|try it|a few times|move around|adjust position)\b/i.test(
+  return /\b(?:change position|changing your sitting position|adjust movement|move differently|change the motion|same movement|same motion|shift things|modify position|stand(?:ing)? up briefly|signal builds|signal changes|try it|a few times|move around|adjust position)\b/i.test(
     text,
   );
 }
@@ -6821,6 +6844,7 @@ function scoreOperationalLeverCandidate({
   }
 
   if (isOperationalLeverText(sentence)) score += 4;
+  if (isHighSpecificityOperationalSentence(sentence)) score += 12;
   if (hasOperationalTiming(sentence)) score += 2;
   if (hasVisibleBodyAction(sentence)) score += 2;
   if (hasDirectionalMovementSpecificity(sentence)) score += 8;
