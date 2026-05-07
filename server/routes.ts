@@ -6395,6 +6395,8 @@ Response rule:
 - Do not mechanically express signal, mechanism, correction, failure prediction, lever, and test all at once.
 - Select the next useful move: narrow, correct, confirm, lever, probe, or close.
 - Preserve the exact movement context and failure condition over generic mechanical narration.
+- Prefer where, when, and under what condition the signal appears over broad explanation.
+- If the current adjustment/test is the useful next move, preserve the adjustment, the visible test, and a simple outcome loop.
 - A short selective response can be correct when it advances the investigation.
 `;
 }
