@@ -6572,7 +6572,16 @@ function hasAbstractLeverLanguage(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
 
-  return /\b(?:engage|stabilize|stabilise|activate|release|support|control|lengthen|ease|open up|stay loose|stay connected)\b/i.test(
+  return /\b(?:engage|stabilize|stabilise|activate|release|support|control|lengthen|ease|open up|stay loose|stay connected|improve alignment|monitor alignment|maintain alignment|stay balanced|stay stable|protect)\b/i.test(
+    text,
+  );
+}
+
+function hasAbstractControlCue(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:stabilize\s+(?:the\s+)?knee|knee stabilization|focus on stabilization|control\s+(?:the\s+)?(?:knee|joint)|improve alignment|monitor alignment|maintain alignment|improve mechanics|stay balanced|stay stable|brace through the cut|control during direction change|support\s+(?:the\s+)?knee|protect\s+(?:the\s+)?knee|monitor shoulder position|monitor scapular movement|scapular stabilization|control shoulder load)\b/i.test(
     text,
   );
 }
@@ -6731,7 +6740,10 @@ function enforceOperationalLeverLanguage({
         continue;
       }
 
-      if (hasAbstractLeverLanguage(stripped) || hasMultipleLayer2Actions(stripped)) {
+      if (
+        (hasAbstractLeverLanguage(stripped) && !hasAbstractControlCue(stripped)) ||
+        hasMultipleLayer2Actions(stripped)
+      ) {
         reasons.add(
           hasMultipleLayer2Actions(stripped)
             ? "removed_multi_action_instruction"
@@ -6812,7 +6824,7 @@ function isGenericOperationalLever(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
 
-  return /\b(?:change position|changing your sitting position|adjust movement|move differently|change the motion|same movement|same motion|shift things|modify position|stand(?:ing)? up briefly|signal builds|signal changes|try it|a few times|move around|adjust position)\b/i.test(
+  return /\b(?:change position|changing your sitting position|adjust movement|move differently|change the motion|same movement|same motion|shift things|modify position|stand(?:ing)? up briefly|signal builds|signal changes|try it|a few times|move around|adjust position|focus on stabilization|knee stabilization|monitor alignment|maintain alignment|control during direction change)\b/i.test(
     text,
   );
 }
@@ -6886,8 +6898,119 @@ function scoreOperationalLeverCandidate({
   }
   if (hasMultipleLayer2Actions(sentence)) score -= 3;
   if (hasAbstractLeverLanguage(sentence)) score -= 2;
+  if (hasAbstractControlCue(sentence)) score -= 20;
 
   return score - index * 0.01;
+}
+
+function hasConcreteOperationalLeverSentence(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return (
+    isOperationalLeverText(text) &&
+    !hasAbstractControlCue(text) &&
+    !hasAbstractLeverLanguage(text) &&
+    !isGenericOperationalLever(text)
+  );
+}
+
+function buildConcreteProbeForAbstractControlCue({
+  userText,
+  responseText,
+}: {
+  userText?: string | null;
+  responseText?: string | null;
+}): string[] {
+  const context = normalizePreviewValue(`${userText ?? ""} ${responseText ?? ""}`) ?? "";
+  const isKneeCut =
+    /\bknee\b/i.test(context) &&
+    /\b(?:plant|planted|cut|change direction|direction change|push back out|shifts?|unstable|instability)\b/i.test(
+      context,
+    );
+  const isShoulderTopRange =
+    /\bshoulder\b/i.test(context) &&
+    /\b(?:backswing|top|pinch|accelerate|coming back down|end range)\b/i.test(
+      context,
+    );
+
+  if (isKneeCut) {
+    return [
+      "Does the knee shift before the foot fully plants, or after you start pushing back out?",
+      "Let me know when it shows up first.",
+    ];
+  }
+
+  if (isShoulderTopRange) {
+    return [
+      "Does the pinch show up before the shoulder reaches the top, or after you start coming back down?",
+      "Let me know when it shows up first.",
+    ];
+  }
+
+  return [
+    "Tell me whether the signal appears before the visible movement changes, during the change, or after you start coming back out.",
+    "Let me know when it shows up first.",
+  ];
+}
+
+function enforceAbstractControlCueProbeFallback({
+  text,
+  userText,
+}: {
+  text: string;
+  userText?: string | null;
+}): { text: string; modified: boolean; reasons: string[] } {
+  const originalText = text.trim();
+  if (!originalText) return { text: originalText, modified: false, reasons: [] };
+
+  const sentences = originalText
+    .split(/(?<=[.!?])\s+|\n{2,}/)
+    .map((sentence) => stripStructuredLayer2Labels(sentence.trim()).text)
+    .filter(Boolean);
+
+  const hasAbstractCue = sentences.some((sentence) => hasAbstractControlCue(sentence));
+  if (!hasAbstractCue) {
+    return { text: originalText, modified: false, reasons: [] };
+  }
+
+  const hasConcreteLever = sentences.some((sentence) =>
+    hasConcreteOperationalLeverSentence(sentence),
+  );
+  const reasons = new Set<string>(["abstract_control_cue_detected"]);
+
+  const kept = sentences.filter((sentence) => {
+    if (hasAbstractControlCue(sentence)) {
+      reasons.add("removed_abstract_control_cue");
+      return false;
+    }
+
+    if (!hasConcreteLever && isOutcomeCheckSentence(sentence)) {
+      reasons.add("replaced_outcome_check_with_probe_outcome");
+      return false;
+    }
+
+    return true;
+  });
+
+  if (!hasConcreteLever) {
+    kept.push(...buildConcreteProbeForAbstractControlCue({ userText, responseText: originalText }));
+    reasons.add("inserted_concrete_probe");
+  }
+
+  const finalText = kept
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .replace(/(^|[.!?]\s+|\n+)([a-z])/g, (_match, prefix: string, letter: string) =>
+      `${prefix}${letter.toUpperCase()}`,
+    );
+
+  return {
+    text: finalText || originalText,
+    modified: (finalText || originalText) !== originalText,
+    reasons: Array.from(reasons),
+  };
 }
 
 function enforceFinalOperationalLeverCollapse({
@@ -11072,12 +11195,19 @@ Good probe examples:
 - "Repeat the motion once at normal speed and once at half speed without changing the range. Tell me whether the signal changes."
 - "Does the pinch show up before the shoulder reaches the top, or after you start coming back down?"
 - "Does the pressure show up before the plant foot lands, or after your chest starts turning?"
+- "Does the knee shift before the foot fully plants, or after you start pushing back out?"
+- "Try one cut at normal speed and one slower without changing the plant distance. Tell me when the shift shows up first."
+- "Does the knee shift inward, outward, or straight forward when your foot hits the ground?"
 
 Do not use internal probe language:
 - "Scapular stabilization"
 - "Monitor shoulder position"
 - "Monitor scapular movement"
 - "Control shoulder load"
+- "Knee stabilization"
+- "Focus on knee stabilization"
+- "Control during direction change"
+- "Monitor alignment"
 - "Improve mechanics"
 - "Tighten the test"
 - "That test needs to be tightened first"
@@ -11179,6 +11309,15 @@ Do not use these as visible levers:
 - "stabilize the shoulder"
 - "improve mechanics"
 - "move more efficiently"
+- "stabilize the knee"
+- "knee stabilization"
+- "control the knee"
+- "monitor alignment"
+- "maintain alignment"
+- "stay balanced"
+- "stay stable"
+- "brace through the cut"
+- "protect the knee"
 
 If your draft lever sounds like a summary, rewrite it as one visible movement sentence before answering.
 `
@@ -11449,6 +11588,21 @@ ${ACTIVE_PROMPT}
         modified: finalOperationalCollapse.modified,
         reasons: finalOperationalCollapse.reasons,
         originalLength: beforeFinalOperationalCollapse.length,
+        finalLength: finalText.length,
+      });
+
+      const beforeAbstractControlCueProbe = finalText;
+      const abstractControlCueProbe = enforceAbstractControlCueProbeFallback({
+        text: finalText,
+        userText,
+      });
+      finalText = abstractControlCueProbe.text;
+
+      console.log("LAYER2_ABSTRACT_CONTROL_CUE_PROBE_FALLBACK", {
+        caseId: resolvedActiveCase?.id ?? null,
+        modified: abstractControlCueProbe.modified,
+        reasons: abstractControlCueProbe.reasons,
+        originalLength: beforeAbstractControlCueProbe.length,
         finalLength: finalText.length,
       });
 
