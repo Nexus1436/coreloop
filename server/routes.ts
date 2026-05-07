@@ -6597,6 +6597,15 @@ function hasPseudoScientificBiomechanicalAbstraction(
   );
 }
 
+function hasGenericCoachingCue(value: string | null | undefined): boolean {
+  const text = normalizePreviewValue(value);
+  if (!text) return false;
+
+  return /\b(?:focus on alignment|knee alignment|maintain alignment|focus on stability|stay balanced|control movement|control positioning|maintain positioning|improve positioning|proper positioning|focus on mechanics|maintain form|maintain posture|support the joint|protect the knee|maintain control|focus on knee alignment|focus on knee stability|focus on positioning|focus on form)\b/i.test(
+    text,
+  );
+}
+
 function hasFinalVisibleAbstractionWithoutMovement(
   value: string | null | undefined,
 ): boolean {
@@ -6605,6 +6614,7 @@ function hasFinalVisibleAbstractionWithoutMovement(
 
   return (
     hasAbstractControlCue(text) ||
+    (hasGenericCoachingCue(text) && !isOperationalLeverText(text)) ||
     (hasPseudoScientificBiomechanicalAbstraction(text) &&
       !isOperationalLeverText(text))
   );
@@ -6848,7 +6858,7 @@ function isGenericOperationalLever(value: string | null | undefined): boolean {
   const text = normalizePreviewValue(value);
   if (!text) return false;
 
-  return /\b(?:change position|changing your sitting position|adjust movement|move differently|change the motion|same movement|same motion|shift things|modify position|stand(?:ing)? up briefly|signal builds|signal changes|try it|a few times|move around|adjust position|focus on stabilization|knee stabilization|monitor alignment|maintain alignment|control during direction change|adjusting timing of load acceptance|monitor knee stability)\b/i.test(
+  return /\b(?:change position|changing your sitting position|adjust movement|move differently|change the motion|same movement|same motion|shift things|modify position|stand(?:ing)? up briefly|signal builds|signal changes|try it|a few times|move around|adjust position|focus on stabilization|knee stabilization|focus on alignment|knee alignment|focus on knee alignment|focus on stability|monitor alignment|maintain alignment|maintain form|maintain posture|maintain control|control movement|control positioning|proper positioning|control during direction change|adjusting timing of load acceptance|monitor knee stability)\b/i.test(
     text,
   );
 }
@@ -6923,6 +6933,7 @@ function scoreOperationalLeverCandidate({
   if (hasMultipleLayer2Actions(sentence)) score -= 3;
   if (hasAbstractLeverLanguage(sentence)) score -= 2;
   if (hasAbstractControlCue(sentence)) score -= 20;
+  if (hasGenericCoachingCue(sentence)) score -= 20;
   if (hasPseudoScientificBiomechanicalAbstraction(sentence)) score -= 20;
 
   return score - index * 0.01;
@@ -6935,6 +6946,7 @@ function hasConcreteOperationalLeverSentence(value: string | null | undefined): 
   return (
     isOperationalLeverText(text) &&
     !hasAbstractControlCue(text) &&
+    !hasGenericCoachingCue(text) &&
     !hasPseudoScientificBiomechanicalAbstraction(text) &&
     !hasAbstractLeverLanguage(text) &&
     !isGenericOperationalLever(text)
@@ -7012,6 +7024,8 @@ function enforceAbstractControlCueProbeFallback({
       reasons.add(
         hasPseudoScientificBiomechanicalAbstraction(sentence)
           ? "removed_pseudo_scientific_abstraction"
+          : hasGenericCoachingCue(sentence)
+            ? "removed_generic_coaching_cue"
           : "removed_abstract_control_cue",
       );
       return false;
@@ -11240,6 +11254,14 @@ Do not use internal probe language:
 - "Focus on knee stabilization"
 - "Control during direction change"
 - "Monitor alignment"
+- "Focus on alignment"
+- "Knee alignment"
+- "Focus on knee alignment"
+- "Focus on stability"
+- "Control movement"
+- "Maintain form"
+- "Maintain posture"
+- "Maintain control"
 - "Delayed neuromuscular response"
 - "Load acceptance"
 - "Load distribution"
@@ -11361,6 +11383,20 @@ Do not use these as visible levers:
 - "stay stable"
 - "brace through the cut"
 - "protect the knee"
+- "focus on alignment"
+- "knee alignment"
+- "focus on knee alignment"
+- "focus on stability"
+- "control movement"
+- "control positioning"
+- "maintain positioning"
+- "improve positioning"
+- "proper positioning"
+- "focus on mechanics"
+- "maintain form"
+- "maintain posture"
+- "support the joint"
+- "maintain control"
 - "delayed neuromuscular response"
 - "inadequate load distribution"
 - "adjusting timing of load acceptance"
