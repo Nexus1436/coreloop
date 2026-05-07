@@ -6371,14 +6371,10 @@ async function buildStructuredCaseStateBlock(
   return `
 === STRUCTURED CASE STATE ===
 This is the internal case engine state. Use it as source-of-truth context.
-The visible response must express the Arc when a hypothesis exists.
-
-Selective output is allowed only when no hypothesis is present.
-
-If hypothesis exists:
-- include mechanism
-- include at least one of correction or failure prediction
-- include one lever or test
+Use this state to understand the current investigation.
+Do not mechanically recite all fields.
+Expose only the minimum useful slice for the current user-facing move.
+If a hypothesis exists, do not ignore it, but you do not need to visibly express every field.
 
 Signal: ${visibleStateInput.signal ?? "none"}
 Body region: ${visibleStateInput.bodyRegion ?? "unknown"}
@@ -6396,11 +6392,10 @@ Latest outcome: ${visibleStateInput.outcome ?? "none"}
 Response rule:
 - Speak from this structured state.
 - Do not write for extraction.
-- The visible response is the Arc. It should naturally express signal, mechanism, correction, failure prediction, lever, and test when the state supports them.
-- Do not output only the test unless the correct response type is single-test/probe.
-- Select the next useful user-facing move: breakdown, tight correction, lever, probe, or clarification.
-- When expressing a lever, make it a visible body action with timing. Answer: what exactly should the person move, and when?
-- Do not turn the lever into generic repositioning or shoulder-load language such as "change position", "stand up briefly", "adjust shoulder rotation angle", "monitor shoulder position", "move differently", or "redistribute the load".
+- Do not mechanically express signal, mechanism, correction, failure prediction, lever, and test all at once.
+- Select the next useful move: narrow, correct, confirm, lever, probe, or close.
+- Preserve the exact movement context and failure condition over generic mechanical narration.
+- A short selective response can be correct when it advances the investigation.
 `;
 }
 
@@ -6786,8 +6781,8 @@ function enforceLayer2BehavioralCompleteness({
   text,
   hypothesis,
   interpretationCorrection,
-  failurePrediction: _failurePrediction,
-  activeLever: _activeLever,
+  failurePrediction,
+  activeLever,
   activeTest,
 }: {
   text: string;
@@ -6810,9 +6805,40 @@ function enforceLayer2BehavioralCompleteness({
 
   const normalizedHypothesis = normalizePreviewValue(hypothesis);
   const normalizedCorrection = normalizePreviewValue(interpretationCorrection);
+  const normalizedFailurePrediction = normalizePreviewValue(failurePrediction);
+  const normalizedActiveLever = normalizePreviewValue(activeLever);
   const normalizedActiveTest = normalizePreviewValue(activeTest);
+  const mechanismSource =
+    firstSentence(normalizedCorrection) ??
+    firstSentence(normalizedHypothesis) ??
+    firstSentence(normalizedFailurePrediction);
+
+  if (!normalizePreviewValue(finalText)) {
+    const fallbackText = [
+      mechanismSource,
+      normalizedActiveLever,
+      normalizedActiveTest,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .slice(0, 2)
+      .join("\n\n")
+      .trim();
+
+    finalText = fallbackText || "Tell me what changed in the original movement.";
+    reasons.push("repaired_empty_response");
+
+    return {
+      text: finalText,
+      repaired: true,
+      reasons,
+    };
+  }
 
   if (!normalizedHypothesis && !normalizedActiveTest) {
+    console.log("LAYER2_COMPLETENESS_REPAIR_SKIPPED_SELECTIVE_COMPRESSION", {
+      reason: "no_hypothesis_or_active_test",
+      finalTextLength: finalText.length,
+    });
     return {
       text: finalText,
       repaired: reasons.length > 0,
@@ -6820,52 +6846,36 @@ function enforceLayer2BehavioralCompleteness({
     };
   }
 
-  const mechanismSource =
-    firstSentence(normalizedCorrection) ?? firstSentence(normalizedHypothesis);
-  const hasMechanism =
-    Boolean(
-      normalizedCorrection &&
-        areEquivalentDashboardCandidates(finalText, normalizedCorrection),
-    ) ||
-    Boolean(
-      normalizedHypothesis &&
-        areEquivalentDashboardCandidates(finalText, normalizedHypothesis),
-    ) ||
-    Boolean(
-      mechanismSource &&
-        normalizeDashboardCandidate(finalText).includes(
-          normalizeDashboardCandidate(mechanismSource),
-        ),
-    );
-
   if (
-    normalizedHypothesis &&
     normalizedActiveTest &&
     mechanismSource &&
-    (!hasMechanism || isTestOnlyResponse(finalText, normalizedActiveTest))
+    isTestOnlyResponse(finalText, normalizedActiveTest)
   ) {
     finalText = `${mechanismSource}\n\n${finalText}`.trim();
-    reasons.push(
-      isTestOnlyResponse(text, normalizedActiveTest)
-        ? "prepended_mechanism_for_test_only_response"
-        : "prepended_missing_mechanism",
-    );
+    reasons.push("prepended_mechanism_for_bad_test_only_response");
   }
 
+  const responseIsTryingToGiveTest =
+    normalizedActiveTest &&
+    /\b(?:test|try this|try it|do this|check this|tell me if|let me know if|see if|notice whether)\b/i.test(
+      finalText,
+    );
+
   if (
+    responseIsTryingToGiveTest &&
     normalizedActiveTest &&
     !responseIncludesCurrentTest(finalText, normalizedActiveTest)
   ) {
     finalText = appendLayer2Sentence(finalText, normalizedActiveTest);
-    reasons.push("appended_missing_active_test");
-  }
-
-  if (normalizedActiveTest && !hasOutcomeFeedbackClosure(finalText)) {
-    finalText = appendLayer2Sentence(
-      finalText,
-      "Let me know whether it feels better, worse, or the same.",
-    );
-    reasons.push("appended_outcome_feedback_closure");
+    reasons.push("appended_omitted_active_test_for_explicit_test_response");
+  } else {
+    console.log("LAYER2_COMPLETENESS_REPAIR_SKIPPED_SELECTIVE_COMPRESSION", {
+      reason: "selective_expression_allowed",
+      hasHypothesis: Boolean(normalizedHypothesis),
+      hasActiveTest: Boolean(normalizedActiveTest),
+      responseIsTryingToGiveTest: Boolean(responseIsTryingToGiveTest),
+      finalTextLength: finalText.length,
+    });
   }
 
   return {
@@ -10059,6 +10069,10 @@ Produce the response now.
               isNewCase,
             )
           : "";
+      console.log("LAYER2_STRUCTURED_CASE_STATE_INJECTION", {
+        injected: Boolean(structuredCaseStateBlock),
+        caseId: resolvedActiveCase?.id ?? null,
+      });
       const settingsContextBlock = !isCaseReview
         ? buildSettingsContextBlock(persistedSettingsForContext)
         : "";
@@ -10103,6 +10117,17 @@ Identity authority rule:
       const ACTIVE_PROMPT = isCaseReview
         ? CASE_REVIEW_NARRATIVE
         : ACTIVE_BASE_NARRATIVE;
+
+      console.log("LAYER2_PROMPT_ARCHITECTURE_CLEANUP_ACTIVE", {
+        baseNarrative: isCaseReview ? "case_review" : "BASE_NARRATIVE_V2",
+        selectiveExpression: !isCaseReview,
+      });
+      if (!isCaseReview) {
+        console.log("LAYER2_SELECTIVE_COMPRESSION_MODE", {
+          enabled: true,
+          doctrine: "internal_arc_selective_visible_expression",
+        });
+      }
 
       const patternPriorityBlock = !isCaseReview
         ? `
